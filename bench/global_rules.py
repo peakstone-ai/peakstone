@@ -30,6 +30,16 @@ _FENCE = re.compile(r"```[^\n`]*\n.*?```", re.DOTALL)
 _THINK = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
 
 
+def strip_think(text: str) -> str:
+    """Remove <think>…</think> reasoning so a planner's monologue doesn't leak into the plan
+    the coder sees. Also drops a dangling unclosed <think> (truncated reasoning with no plan)."""
+    t = _THINK.sub("", text or "")
+    i = t.lower().find("<think>")
+    if i != -1:
+        t = t[:i]
+    return t.strip()
+
+
 def _prose(response: str) -> str:
     """Response with fenced code blocks and <think>…</think> removed (brief thinking is fine)."""
     t = _FENCE.sub("", response or "")

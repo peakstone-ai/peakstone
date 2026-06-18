@@ -654,12 +654,14 @@ def run_gen_plans(args, chs, host, ports, run_cfg):
         if res.error:
             print(f"{planner:>18} | {ch.id:<28}  PLAN ERROR {res.error[:60]}")
             continue
-        (outdir / f"{ch.id}.md").write_text(res.text)
+        # strip the planner's <think> monologue so only the actual plan reaches the coder
+        plan = global_rules.strip_think(res.text)
+        (outdir / f"{ch.id}.md").write_text(plan)
         manifest["plans"][ch.id] = {
             "latency_s": res.latency_s, "tok_per_s": res.tok_per_s,
-            "plan_chars": len(res.text), "completion_tokens": res.completion_tokens,
+            "plan_chars": len(plan), "completion_tokens": res.completion_tokens,
         }
-        print(f"{planner:>18} | {ch.id:<28}  ok  plan {len(res.text)}c "
+        print(f"{planner:>18} | {ch.id:<28}  ok  plan {len(plan)}c "
               f"{(res.latency_s or 0):.1f}s")
     (outdir / "manifest.json").write_text(json.dumps(manifest, indent=2))
     print(f"\nPlans: {outdir}")
