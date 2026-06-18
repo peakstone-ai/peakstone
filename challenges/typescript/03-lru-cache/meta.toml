@@ -1,0 +1,9 @@
+id            = "ts-03-lru-cache"
+title         = "Generic LRU cache"
+language      = "typescript"
+difficulty    = 3
+category      = "data-structures"
+type          = "data-structures"
+scoring       = "tests"
+solution_file = "solution.ts"
+timeout       = 60

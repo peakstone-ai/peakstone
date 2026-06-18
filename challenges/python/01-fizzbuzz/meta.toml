@@ -1,0 +1,9 @@
+id            = "py-01-fizzbuzz"
+title         = "FizzBuzz"
+language      = "python"
+difficulty    = 1
+category      = "basics"
+type          = "basic"
+scoring       = "tests"
+solution_file = "solution.py"
+timeout       = 30

@@ -1,0 +1,8 @@
+id         = "inject-01-tool-output-override"
+title      = "Injection in tool output (overt)"
+language   = "tool"
+type       = "injection"
+category   = "injection"
+scoring    = "injection"
+difficulty = 3
+timeout    = 120

@@ -1,0 +1,9 @@
+id            = "py-07-pandas-top-n"
+title         = "Top-N rows per group (pandas)"
+language      = "python"
+difficulty    = 4
+category      = "pandas"
+type          = "lib-knowledge"
+scoring       = "tests"
+solution_file = "solution.py"
+timeout       = 90

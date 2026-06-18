@@ -1,0 +1,9 @@
+id            = "js-09-pool"
+title         = "Concurrency-limited async pool"
+language      = "javascript"
+difficulty    = 5
+category      = "async"
+type          = "concurrency"
+scoring       = "tests"
+solution_file = "solution.js"
+timeout       = 60

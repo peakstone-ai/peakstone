@@ -1,0 +1,9 @@
+id            = "ts-07-mathjs-evaluate"
+title         = "Compile and evaluate expressions (mathjs)"
+language      = "typescript"
+difficulty    = 4
+category      = "libraries"
+type          = "math"
+scoring       = "tests"
+solution_file = "solution.ts"
+timeout       = 60

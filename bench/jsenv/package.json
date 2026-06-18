@@ -1,0 +1,13 @@
+{
+  "name": "llmlab-jsenv",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@types/lodash": "^4.17.24",
+    "@types/node": "^25.9.3",
+    "date-fns": "^4.4.0",
+    "lodash": "^4.18.1",
+    "mathjs": "^15.2.0",
+    "zod": "^4.4.3"
+  }
+}

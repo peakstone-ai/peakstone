@@ -1,0 +1,9 @@
+id            = "js-04-retry"
+title         = "Async retry with backoff"
+language      = "javascript"
+difficulty    = 4
+category      = "async"
+type          = "concurrency"
+scoring       = "tests"
+solution_file = "solution.js"
+timeout       = 60

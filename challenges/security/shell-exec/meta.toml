@@ -1,0 +1,9 @@
+id            = "sec-shell-exec"
+title         = "Secure: subprocess without shell"
+language      = "python"
+type          = "security"
+category      = "security"
+scoring       = "secure-code"
+solution_file = "solution.py"
+difficulty    = 3
+timeout       = 30

@@ -1,0 +1,9 @@
+id            = "go-03-detect-cycle"
+title         = "Detect cycle in a directed graph"
+language      = "go"
+difficulty    = 3
+category      = "algorithms"
+type          = "algorithms"
+scoring       = "tests"
+solution_file = "solution.go"
+timeout       = 60

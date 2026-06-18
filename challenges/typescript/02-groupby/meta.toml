@@ -1,0 +1,9 @@
+id            = "ts-02-groupby"
+title         = "Generic groupBy"
+language      = "typescript"
+difficulty    = 2
+category      = "generics"
+type          = "typing"
+scoring       = "tests"
+solution_file = "solution.ts"
+timeout       = 60

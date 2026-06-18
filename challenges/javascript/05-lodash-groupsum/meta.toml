@@ -1,0 +1,9 @@
+id            = "js-05-lodash-groupsum"
+title         = "Group-and-sum (lodash)"
+language      = "javascript"
+difficulty    = 3
+category      = "libraries"
+type          = "lib-knowledge"
+scoring       = "tests"
+solution_file = "solution.js"
+timeout       = 30

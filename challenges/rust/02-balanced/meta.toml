@@ -1,0 +1,9 @@
+id            = "rs-02-balanced"
+title         = "Balanced brackets"
+language      = "rust"
+difficulty    = 2
+category      = "parsing"
+type          = "algorithms"
+scoring       = "tests"
+solution_file = "src/lib.rs"
+timeout       = 120

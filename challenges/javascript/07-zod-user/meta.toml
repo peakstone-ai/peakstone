@@ -1,0 +1,9 @@
+id            = "js-07-zod-user"
+title         = "Validate user (zod)"
+language      = "javascript"
+difficulty    = 4
+category      = "validation"
+type          = "lib-knowledge"
+scoring       = "tests"
+solution_file = "solution.js"
+timeout       = 30

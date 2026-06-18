@@ -1,0 +1,9 @@
+id            = "js-03-search-insert"
+title         = "Search insert position"
+language      = "javascript"
+difficulty    = 3
+category      = "algorithms"
+type          = "algorithms"
+scoring       = "tests"
+solution_file = "solution.js"
+timeout       = 30

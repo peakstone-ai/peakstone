@@ -1,0 +1,9 @@
+id            = "rs-03-rpn"
+title         = "Evaluate RPN"
+language      = "rust"
+difficulty    = 3
+category      = "parsing"
+type          = "algorithms"
+scoring       = "tests"
+solution_file = "src/lib.rs"
+timeout       = 120

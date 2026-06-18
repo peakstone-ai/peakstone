@@ -1,0 +1,9 @@
+id            = "ts-09-typed-store"
+title         = "Typed redux-style store"
+language      = "typescript"
+difficulty    = 5
+category      = "generics"
+type          = "typing"
+scoring       = "tests"
+solution_file = "solution.ts"
+timeout       = 60

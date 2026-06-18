@@ -1,0 +1,9 @@
+id            = "ts-08-result-type"
+title         = "Typed Result type"
+language      = "typescript"
+difficulty    = 5
+category      = "generics"
+type          = "typing"
+scoring       = "tests"
+solution_file = "solution.ts"
+timeout       = 60

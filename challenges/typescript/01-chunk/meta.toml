@@ -1,0 +1,9 @@
+id            = "ts-01-chunk"
+title         = "Generic array chunk"
+language      = "typescript"
+difficulty    = 1
+category      = "basics"
+type          = "basic"
+scoring       = "tests"
+solution_file = "solution.ts"
+timeout       = 60

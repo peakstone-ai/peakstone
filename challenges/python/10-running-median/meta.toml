@@ -1,0 +1,9 @@
+id            = "py-10-running-median"
+title         = "Running median (sortedcontainers)"
+language      = "python"
+difficulty    = 4
+category      = "uncommon-libs"
+type          = "lib-knowledge"
+scoring       = "tests"
+solution_file = "solution.py"
+timeout       = 60

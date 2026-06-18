@@ -1,0 +1,9 @@
+id            = "sec-unsafe-eval"
+title         = "Secure: parse without eval"
+language      = "python"
+type          = "security"
+category      = "security"
+scoring       = "secure-code"
+solution_file = "solution.py"
+difficulty    = 3
+timeout       = 30

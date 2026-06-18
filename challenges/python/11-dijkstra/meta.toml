@@ -1,0 +1,9 @@
+id            = "py-11-dijkstra"
+title         = "Dijkstra shortest paths (heapq)"
+language      = "python"
+difficulty    = 5
+category      = "algorithms"
+type          = "algorithms"
+scoring       = "tests"
+solution_file = "solution.py"
+timeout       = 60

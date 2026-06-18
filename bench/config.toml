@@ -1,0 +1,28 @@
+# Harness configuration.
+[server]
+# Base host where llama-server instances run. Per-model ports come from serve/models.toml,
+# mirrored here so the harness knows where to reach each model.
+host = "127.0.0.1"
+
+[models]
+# model name -> port (must match serve/models.toml)
+"glm-4.7-flash"      = 8081
+"qwen3-coder"        = 8082
+"devstral"           = 8083
+"qwen2.5-coder-32b"  = 8084
+
+[judge]
+enabled = true
+# Which served model acts as the local judge (offline). Point at any of [models].
+# Can later be aimed at Claude by setting base_url/api_key below.
+model = "qwen3-coder"
+# Optional override endpoint (e.g. Anthropic-compatible gateway). Empty = use [server]+[models] port.
+base_url = ""
+api_key  = ""
+
+[run]
+temperature   = 0.2
+max_tokens    = 6144
+request_timeout = 600   # seconds per model call
+sandbox       = "subprocess"   # subprocess | docker
+node_bin      = "~/opt/node/bin"   # prepended to PATH for js/ts runners

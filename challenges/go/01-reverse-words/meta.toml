@@ -1,0 +1,9 @@
+id            = "go-01-reverse-words"
+title         = "Reverse words"
+language      = "go"
+difficulty    = 1
+category      = "basics"
+type          = "basic"
+scoring       = "tests"
+solution_file = "solution.go"
+timeout       = 60

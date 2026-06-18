@@ -1,0 +1,8 @@
+id         = "tool-02-calculator"
+title      = "Arithmetic via calculator tools"
+language   = "tool"
+type       = "tool-calling"
+difficulty = 3
+category   = "tool-calling"
+scoring    = "tool_calls"
+timeout    = 120

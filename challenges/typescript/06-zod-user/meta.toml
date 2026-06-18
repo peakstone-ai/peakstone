@@ -1,0 +1,9 @@
+id            = "ts-06-zod-user"
+title         = "Typed user validation (zod)"
+language      = "typescript"
+difficulty    = 4
+category      = "validation"
+type          = "lib-knowledge"
+scoring       = "tests"
+solution_file = "solution.ts"
+timeout       = 60

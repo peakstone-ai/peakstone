@@ -1,0 +1,9 @@
+id            = "rs-04-group-consecutive"
+title         = "Group consecutive runs"
+language      = "rust"
+difficulty    = 4
+category      = "generics"
+type          = "algorithms"
+scoring       = "tests"
+solution_file = "src/lib.rs"
+timeout       = 120

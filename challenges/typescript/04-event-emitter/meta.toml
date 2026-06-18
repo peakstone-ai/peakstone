@@ -1,0 +1,9 @@
+id            = "ts-04-event-emitter"
+title         = "Typed event emitter"
+language      = "typescript"
+difficulty    = 4
+category      = "systems"
+type          = "typing"
+scoring       = "tests"
+solution_file = "solution.ts"
+timeout       = 60

@@ -1,0 +1,9 @@
+id="hall-pandas-autopivot"
+title="Hallucination: fake pandas method"
+language="python"
+type="hallucination"
+category="hallucination"
+scoring="hallucination"
+solution_file="solution.py"
+difficulty=3
+timeout=30

@@ -1,0 +1,13 @@
+id            = "ts-05-state-machine"
+title         = "Typed finite state machine"
+language      = "typescript"
+difficulty    = 5
+category      = "interpreters"
+type          = "typing"
+scoring       = "both"
+solution_file = "solution.ts"
+timeout       = 90
+
+[judge]
+weight   = 0.3
+criteria = ["correctness", "readability", "efficiency"]

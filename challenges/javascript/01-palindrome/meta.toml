@@ -1,0 +1,9 @@
+id            = "js-01-palindrome"
+title         = "Palindrome check"
+language      = "javascript"
+difficulty    = 1
+category      = "basics"
+type          = "basic"
+scoring       = "tests"
+solution_file = "solution.js"
+timeout       = 30

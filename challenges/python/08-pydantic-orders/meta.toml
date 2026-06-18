@@ -1,0 +1,9 @@
+id            = "py-08-pydantic-orders"
+title         = "Order validation (pydantic v2)"
+language      = "python"
+difficulty    = 4
+category      = "validation"
+type          = "lib-knowledge"
+scoring       = "tests"
+solution_file = "solution.py"
+timeout       = 60

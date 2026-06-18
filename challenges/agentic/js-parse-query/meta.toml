@@ -1,0 +1,10 @@
+id            = "agentic-js-parse-query"
+title         = "Self-repair: query-string parser"
+language      = "javascript"
+type          = "agentic"
+category      = "agentic"
+scoring       = "agentic"
+solution_file = "solution.js"
+difficulty    = 4
+timeout        = 60
+max_turns     = 12

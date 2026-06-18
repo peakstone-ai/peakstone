@@ -1,0 +1,9 @@
+id            = "adhere-ts-style"
+title         = "Adherence: TypeScript conventions"
+language      = "typescript"
+type          = "instruction-following"
+category      = "adherence"
+scoring       = "adherence"
+solution_file = "solution.ts"
+difficulty    = 3
+timeout       = 30

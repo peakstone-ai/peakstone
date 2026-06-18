@@ -1,0 +1,9 @@
+id            = "rs-01-rle"
+title         = "Run-length encoding"
+language      = "rust"
+difficulty    = 1
+category      = "basics"
+type          = "basic"
+scoring       = "tests"
+solution_file = "src/lib.rs"
+timeout       = 120

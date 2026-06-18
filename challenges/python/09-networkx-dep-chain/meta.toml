@@ -1,0 +1,9 @@
+id            = "py-09-networkx-dep-chain"
+title         = "Longest dependency chain (networkx)"
+language      = "python"
+difficulty    = 4
+category      = "graphs"
+type          = "lib-knowledge"
+scoring       = "tests"
+solution_file = "solution.py"
+timeout       = 60

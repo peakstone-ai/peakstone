@@ -1,0 +1,9 @@
+id            = "go-05-lru-cache"
+title         = "Generic LRU cache"
+language      = "go"
+difficulty    = 4
+category      = "generics"
+type          = "data-structures"
+scoring       = "tests"
+solution_file = "solution.go"
+timeout       = 60

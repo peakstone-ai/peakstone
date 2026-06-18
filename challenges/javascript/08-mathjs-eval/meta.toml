@@ -1,0 +1,9 @@
+id            = "js-08-mathjs-eval"
+title         = "Evaluate expression over scopes (mathjs)"
+language      = "javascript"
+difficulty    = 4
+category      = "libraries"
+type          = "math"
+scoring       = "tests"
+solution_file = "solution.js"
+timeout       = 30

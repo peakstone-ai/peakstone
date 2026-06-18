@@ -1,0 +1,9 @@
+id            = "py-06-numpy-distances"
+title         = "Pairwise distances (numpy)"
+language      = "python"
+difficulty    = 3
+category      = "numpy"
+type          = "math"
+scoring       = "tests"
+solution_file = "solution.py"
+timeout       = 60

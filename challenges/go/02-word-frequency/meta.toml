@@ -1,0 +1,9 @@
+id            = "go-02-word-frequency"
+title         = "Word frequency"
+language      = "go"
+difficulty    = 2
+category      = "data"
+type          = "data"
+scoring       = "tests"
+solution_file = "solution.go"
+timeout       = 60

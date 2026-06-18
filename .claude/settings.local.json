@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:toolhalla.ai)",
+      "Bash(nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv)"
+    ]
+  }
+}

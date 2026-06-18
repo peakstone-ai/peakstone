@@ -1,0 +1,9 @@
+id            = "py-04-lru-ttl-cache"
+title         = "LRU Cache with TTL"
+language      = "python"
+difficulty    = 4
+category      = "systems"
+type          = "data-structures"
+scoring       = "tests"
+solution_file = "solution.py"
+timeout       = 30

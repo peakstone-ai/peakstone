@@ -1,0 +1,96 @@
+# Model registry for llama-server.
+# One model loaded at a time (24GB VRAM). serve.sh reads this.
+# ctx kept modest so KV-cache + weights fit alongside the GGUF.
+#
+# Roster trimmed to 7 distinct contestants. Tested & removed:
+#   qwen2.5-coder-7b/14b/32b  — 2024-era, zero tool-calling/agentic ability (great pure coders,
+#                               but superseded for agentic use); files deleted.
+#   qwen3-8b                  — superseded by qwen3.5-9b (same niche, newer, higher); files deleted.
+#   qwen3.5-9b-coder / -py-coder — community distills that regressed below the base; files deleted.
+# All remain reproducible via the commented lines in download_models.sh.
+
+["glm-4.7-flash"]
+repo  = "unsloth/GLM-4.7-Flash-GGUF"
+file  = "models/glm-4.7-flash/GLM-4.7-Flash-UD-Q4_K_XL.gguf"
+port  = 8081
+ctx   = 32768
+# GLM-4.7-Flash is a reasoning model whose chain-of-thought runs away and fills the whole
+# token budget (answer never finalizes). --reasoning-budget 0 ends thinking immediately so
+# it emits code directly. Drop this flag if you want its full reasoning behaviour.
+flags = "--temp 0.6 --top-p 0.95 --reasoning-budget 0"
+
+["qwen3-coder"]
+repo  = "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
+file  = "models/qwen3-coder/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf"
+port  = 8082
+ctx   = 196608
+# Max context that fits ENTIRELY in 24GB VRAM (measured): 192K with q4 KV cache -> ~22.4GB,
+# full GPU speed. (256K OOMs on-GPU. For better KV fidelity at less context, use q8 KV which
+# tops out ~96-112K. q4 KV trades a little cache precision for 6x the window.)
+flags = "--temp 0.7 --top-p 0.8 --top-k 20 --repeat-penalty 1.05 -fa on --cache-type-k q4_0 --cache-type-v q4_0"
+
+["devstral"]
+repo  = "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF"
+file  = "models/devstral/Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf"
+port  = 8083
+ctx   = 32768
+flags = "--temp 0.15"
+
+# Quality floor / "not-so-smart" baseline.
+["phi-4-mini"]
+repo  = "unsloth/Phi-4-mini-instruct-GGUF"
+file  = "models/phi-4-mini/Phi-4-mini-instruct-Q6_K.gguf"
+port  = 8085
+ctx   = 32768
+flags = "--temp 0.2"
+
+# 27B dense (2026); multimodal but run text-only. -fa + KV q8 keeps 32K ctx ~22GB.
+# For ~speedups, run speculative decoding with the same-vocab draft (kept at models/qwen3.5-4b):
+#   add  -md models/qwen3.5-4b/Qwen3.5-4B-Q4_K_M.gguf --draft-max 16 --draft-min 1  (use ctx 16384)
+["qwen3.6-27b"]
+repo  = "unsloth/Qwen3.6-27B-GGUF"
+file  = "models/qwen3.6-27b/Qwen3.6-27B-UD-Q4_K_XL.gguf"
+port  = 8089
+ctx   = 32768
+flags = "--temp 0.6 --top-p 0.95 -fa on --cache-type-k q8_0 --cache-type-v q8_0 --reasoning-budget 0"
+
+# 35B-A3B MoE (3.6B active -> ~172 tok/s). Multimodal; run text-only.
+["qwen3.6-35b-a3b"]
+repo  = "unsloth/Qwen3.6-35B-A3B-GGUF"
+file  = "models/qwen3.6-35b-a3b/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
+port  = 8091
+ctx   = 32768
+flags = "--temp 0.6 --top-p 0.95 -fa on --cache-type-k q8_0 --cache-type-v q8_0 --reasoning-budget 0"
+
+# Best small model in the lab (0.786): fully agentic out of the box.
+["qwen3.5-9b"]
+repo  = "unsloth/Qwen3.5-9B-GGUF"
+file  = "models/qwen3.5-9b/Qwen3.5-9B-UD-Q6_K_XL.gguf"
+port  = 8092
+ctx   = 32768
+flags = "--temp 0.2 --reasoning-budget 0"
+
+# VibeThinker-3B (Weibo AI): 3B dense reasoner distilled on Qwen2.5-Coder-3B, tuned for
+# competition-style math/coding with verifiable answers. Emits long <think> chains (authors
+# recommend temp 1.0 / top-p 0.95 / top-k -1 / up to ~100K output tokens). Only a Q8_0 community
+# GGUF exists (3.3GB — tiny on a 4090), so a big ctx is free; give reasoning room to finish.
+# Caveat: NOT trained on tool-calling or agentic data (authors' note), so expect ~0 on the
+# tool-calling/agentic/injection categories. The bench overrides temperature (config [run]=0.2)
+# for apples-to-apples with the roster; run with a large --max-tokens so thinking can complete.
+["vibethinker-3b"]
+repo  = "bms22/VibeThinker-3B-Q8_0-GGUF"
+file  = "models/vibethinker-3b/vibethinker-3b-q8_0.gguf"
+port  = 8094
+ctx   = 65536
+flags = "--temp 1.0 --top-p 0.95 --top-k -1 -fa on"
+
+# PLANNER: GLM-4.7-Flash with THINKING ON (note: no --reasoning-budget 0) for writing specs /
+# architecture that qwen3-coder then executes. Same weights as glm-4.7-flash (no extra download).
+# Reasoning benefits from KV fidelity -> q8 KV; 128K ctx is ample for plans and fits ~21GB with
+# headroom. (GLM fits its full ~200K native context on this card if you ever need it.)
+["glm-planner"]
+repo  = "unsloth/GLM-4.7-Flash-GGUF"
+file  = "models/glm-4.7-flash/GLM-4.7-Flash-UD-Q4_K_XL.gguf"
+port  = 8093
+ctx   = 131072
+flags = "--temp 0.6 --top-p 0.95 -fa on --cache-type-k q8_0 --cache-type-v q8_0"

@@ -1,0 +1,10 @@
+id            = "agentic-py-roman"
+title         = "Self-repair: Roman numeral parser"
+language      = "python"
+type          = "agentic"
+category      = "agentic"
+scoring       = "agentic"
+solution_file = "solution.py"
+difficulty    = 3
+timeout       = 60
+max_turns     = 12

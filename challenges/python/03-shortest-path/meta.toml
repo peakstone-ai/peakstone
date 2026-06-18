@@ -1,0 +1,9 @@
+id            = "py-03-shortest-path"
+title         = "BFS Shortest Path Length"
+language      = "python"
+difficulty    = 3
+category      = "algorithms"
+type          = "algorithms"
+scoring       = "tests"
+solution_file = "solution.py"
+timeout       = 30

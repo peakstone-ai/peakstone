@@ -1,0 +1,8 @@
+id         = "tool-03-multi-step"
+title      = "Dependent multi-step tool calls"
+language   = "tool"
+type       = "tool-calling"
+difficulty = 4
+category   = "tool-calling"
+scoring    = "tool_calls"
+timeout    = 150

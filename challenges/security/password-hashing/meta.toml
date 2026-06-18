@@ -1,0 +1,9 @@
+id            = "sec-password-hashing"
+title         = "Secure: password hashing"
+language      = "python"
+type          = "security"
+category      = "security"
+scoring       = "secure-code"
+solution_file = "solution.py"
+difficulty    = 3
+timeout       = 30

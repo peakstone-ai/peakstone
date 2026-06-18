@@ -1,0 +1,9 @@
+id            = "py-02-csv-groupby"
+title         = "CSV Group Sum"
+language      = "python"
+difficulty    = 2
+category      = "data"
+type          = "data"
+scoring       = "tests"
+solution_file = "solution.py"
+timeout       = 30

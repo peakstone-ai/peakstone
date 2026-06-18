@@ -1,0 +1,9 @@
+id            = "go-04-map-concurrent"
+title         = "Concurrent ordered map"
+language      = "go"
+difficulty    = 4
+category      = "concurrency"
+type          = "concurrency"
+scoring       = "tests"
+solution_file = "solution.go"
+timeout       = 60

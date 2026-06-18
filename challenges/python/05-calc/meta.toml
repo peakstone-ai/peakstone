@@ -1,0 +1,13 @@
+id            = "py-05-calc"
+title         = "Arithmetic Expression Evaluator"
+language      = "python"
+difficulty    = 5
+category      = "interpreters"
+type          = "algorithms"
+scoring       = "both"
+solution_file = "solution.py"
+timeout       = 30
+
+[judge]
+weight   = 0.3
+criteria = ["correctness", "readability", "efficiency"]

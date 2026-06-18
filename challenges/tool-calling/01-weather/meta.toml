@@ -1,0 +1,8 @@
+id         = "tool-01-weather"
+title      = "Single tool call (weather)"
+language   = "tool"
+type       = "tool-calling"
+difficulty = 2
+category   = "tool-calling"
+scoring    = "tool_calls"
+timeout    = 120

@@ -1,0 +1,8 @@
+id         = "tool-04-tool-selection"
+title      = "Correct tool selection"
+language   = "tool"
+type       = "tool-calling"
+difficulty = 4
+category   = "tool-calling"
+scoring    = "tool_calls"
+timeout    = 120

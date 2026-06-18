@@ -1,0 +1,9 @@
+id            = "js-06-business-days"
+title         = "Business days between (date-fns)"
+language      = "javascript"
+difficulty    = 4
+category      = "libraries"
+type          = "lib-knowledge"
+scoring       = "tests"
+solution_file = "solution.js"
+timeout       = 30

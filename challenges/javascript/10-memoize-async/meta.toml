@@ -1,0 +1,9 @@
+id            = "js-10-memoize-async"
+title         = "Async memoize with TTL and in-flight dedup"
+language      = "javascript"
+difficulty    = 5
+category      = "async"
+type          = "concurrency"
+scoring       = "tests"
+solution_file = "solution.js"
+timeout       = 60

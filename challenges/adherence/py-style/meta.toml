@@ -1,0 +1,9 @@
+id            = "adhere-py-style"
+title         = "Adherence: Python conventions"
+language      = "python"
+type          = "instruction-following"
+category      = "adherence"
+scoring       = "adherence"
+solution_file = "solution.py"
+difficulty    = 3
+timeout       = 30

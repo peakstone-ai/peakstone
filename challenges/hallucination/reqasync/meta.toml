@@ -1,0 +1,9 @@
+id="hall-requests-async"
+title="Hallucination: fake requests function"
+language="python"
+type="hallucination"
+category="hallucination"
+scoring="hallucination"
+solution_file="solution.py"
+difficulty=3
+timeout=30

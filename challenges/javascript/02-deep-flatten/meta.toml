@@ -1,0 +1,9 @@
+id            = "js-02-deep-flatten"
+title         = "Deep flatten"
+language      = "javascript"
+difficulty    = 2
+category      = "data"
+type          = "algorithms"
+scoring       = "tests"
+solution_file = "solution.js"
+timeout       = 30
