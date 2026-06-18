@@ -1,0 +1,9 @@
+id            = "py-14-regex-engine"
+title         = "Backtracking regex matcher"
+language      = "python"
+difficulty    = 5
+category      = "interpreters"
+type          = "architecture"
+scoring       = "tests"
+solution_file = "solution.py"
+timeout       = 30

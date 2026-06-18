@@ -1,0 +1,9 @@
+id            = "ts-11-mini-sql"
+title         = "In-memory SQL SELECT engine"
+language      = "typescript"
+difficulty    = 5
+category      = "interpreters"
+type          = "architecture"
+scoring       = "tests"
+solution_file = "solution.ts"
+timeout       = 60
