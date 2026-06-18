@@ -1,0 +1,9 @@
+id            = "go-06-job-scheduler"
+title         = "Dependency-aware job scheduler"
+language      = "go"
+difficulty    = 5
+category      = "algorithms"
+type          = "architecture"
+scoring       = "tests"
+solution_file = "solution.go"
+timeout       = 60

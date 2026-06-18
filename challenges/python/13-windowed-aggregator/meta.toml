@@ -1,0 +1,9 @@
+id            = "py-13-windowed-aggregator"
+title         = "Windowed streaming aggregator"
+language      = "python"
+difficulty    = 5
+category      = "systems"
+type          = "architecture"
+scoring       = "tests"
+solution_file = "solution.py"
+timeout       = 30

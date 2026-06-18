@@ -74,7 +74,11 @@ def _run(cmd: list[str], cwd: Path, timeout: int, env: dict) -> tuple[int, str, 
             err = err.decode(errors="replace")
     except FileNotFoundError as e:
         rc, out, err = 127, "", f"command not found: {e}"
-    return rc, out[-8000:], err[-8000:], round(time.time() - t0, 2), timed_out
+    # Keep enough output that per-test pass/fail counts stay accurate: a large suite's
+    # `go test -json` / TAP stream can exceed a few KB, and truncating the HEAD would drop
+    # early test events and undercount passes. (Stored stdout is re-truncated to ~4KB at the
+    # row level, so this larger cap only protects counting, not result.json size.)
+    return rc, out[-200_000:], err[-200_000:], round(time.time() - t0, 2), timed_out
 
 
 def _place_tests(workdir: Path, challenge_dir: Path, at_root: bool) -> None:

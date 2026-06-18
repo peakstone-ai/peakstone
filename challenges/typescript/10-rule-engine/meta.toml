@@ -1,0 +1,9 @@
+id            = "ts-10-rule-engine"
+title         = "Typed rule / query engine"
+language      = "typescript"
+difficulty    = 5
+category      = "interpreters"
+type          = "architecture"
+scoring       = "tests"
+solution_file = "solution.ts"
+timeout       = 60
