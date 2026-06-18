@@ -38,7 +38,8 @@ stop_srv() { kill "${SRV:-}" 2>/dev/null; wait "${SRV:-}" 2>/dev/null; sleep 3; 
 for p in "${PLANNERS[@]}"; do
   echo "=== [plan] $p ==="
   if ! serve_wait "$p"; then echo "!! $p never became ready; skipping"; stop_srv; continue; fi
-  python -m bench.runner --gen-plans "$p" --type "$TYPE" --out "$OUT/plans-$p" 2>&1 | tail -10
+  python -m bench.runner --gen-plans "$p" --type "$TYPE" --max-tokens "${MAXTOK:-16384}" \
+    --out "$OUT/plans-$p" 2>&1 | tail -10
   stop_srv
 done
 
