@@ -70,6 +70,10 @@ def load_challenges(root: Path) -> list[Challenge]:
     out: list[Challenge] = []
     for meta in sorted(root.rglob("meta.toml")):
         d = meta.parent
+        # skip disabled/archived trees: any path component starting with "_" or "." (e.g.
+        # challenges/_archived/) is excluded from the active suite.
+        if any(part[:1] in ("_", ".") for part in d.relative_to(root).parts):
+            continue
         m = tomllib.loads(meta.read_text())
         spec = (d / "spec.md").read_text() if (d / "spec.md").exists() else ""
         j = m.get("judge", {})

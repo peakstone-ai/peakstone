@@ -246,50 +246,8 @@ def _leaderboard_md(results, meta) -> str:
             lines.append(f"| {m} | {_avg([r['final_score'] for r in sub]):.2f} | {p}/{t} |")
         lines.append("")
 
-    # instruction adherence
-    adh = [r for r in results if r.get("scoring") == "adherence"]
-    if adh:
-        lines += ["## Instruction adherence (agent.md)", "",
-                  "Fraction of deterministic AGENTS.md rules the generated code obeys "
-                  "(independent of whether it's functionally correct).", "",
-                  "| Model | adherence | rules obeyed |", "|---|---|---|"]
-        for m, *_ in rows:
-            sub = [r for r in by_model[m] if r.get("scoring") == "adherence"]
-            if not sub:
-                continue
-            obeyed = sum(r["passed"] for r in sub)
-            tot = sum(r["total"] for r in sub)
-            lines.append(f"| {m} | {_avg([r['final_score'] for r in sub]):.2f} | {obeyed}/{tot} |")
-        # which rules are violated most (across all models)
-        viol = defaultdict(lambda: [0, 0])
-        for r in adh:
-            for rd in r.get("rule_detail", []):
-                viol[rd["rule"]][1] += 1
-                if not rd["ok"]:
-                    viol[rd["rule"]][0] += 1
-        worst = sorted(((v[0] / v[1], k, v[0], v[1]) for k, v in viol.items()), reverse=True)
-        worst = [(k, n, t) for rate, k, n, t in worst if n]
-        if worst:
-            lines.append("")
-            lines.append("Most-violated rules: " + ", ".join(f"`{k}` ({n}/{t})" for k, n, t in worst[:8]))
-        lines.append("")
-
-    # agentic self-repair summary
-    ag = [r for r in results if r.get("scoring") == "agentic"]
-    if ag:
-        lines += ["## Agentic self-repair", "",
-                  "| Model | solved (green) | avg turns→green | avg test-runs |",
-                  "|---|---|---|---|"]
-        for m, *_ in rows:
-            sub = [r for r in by_model[m] if r.get("scoring") == "agentic"]
-            if not sub:
-                continue
-            greens = [r for r in sub if r.get("green")]
-            ttg = _avg([r.get("turns_to_green") for r in greens]) if greens else 0
-            runs = _avg([r.get("test_runs") for r in sub])
-            lines.append(f"| {m} | {len(greens)}/{len(sub)} | "
-                         f"{ttg:.1f} | {runs:.1f} |")
-        lines.append("")
+    # (instruction-adherence and agentic self-repair are no longer dedicated challenge types:
+    # their signal is now measured suite-wide via --agents-md and --retries respectively.)
 
     # per-challenge detail
     lines += ["## Per-challenge detail", ""]
