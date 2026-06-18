@@ -37,6 +37,16 @@ SYSTEM_PROMPT = (
     "outside code unless asked."
 )
 
+# System prompt for the planner phase of the planner eval (--gen-plans). The planner writes a
+# spec/plan a coder will execute; it must NOT write the solution itself.
+PLAN_SYSTEM = (
+    "You are a senior software architect. Given a programming task, write a concise but COMPLETE "
+    "implementation plan that a developer can follow to a fully correct solution. Cover: the file "
+    "and function/type signatures to define, the core data structures, the algorithm step by step, "
+    "and the tricky edge cases and error conditions to handle. Do NOT write the final solution "
+    "code — output the plan only, as prose and bullet points."
+)
+
 
 def _csv(s):
     return [x.strip() for x in s.split(",") if x.strip()] if s else None
@@ -119,6 +129,16 @@ def main(argv=None):
     ap.add_argument("--config", default=str(ROOT / "bench" / "config.toml"))
     ap.add_argument("--challenges-dir", default=str(ROOT / "challenges"))
     ap.add_argument("--out", default=None)
+    # planner evaluation (decoupled two-phase: gen plans with planner served, then exec with
+    # the fixed coder served). See serve/planner_eval.sh for orchestration.
+    ap.add_argument("--gen-plans", metavar="PLANNER",
+                    help="phase A: with PLANNER served, write an implementation plan per selected "
+                         "challenge to --out (default results/plans-<planner>-<stamp>/).")
+    ap.add_argument("--exec-plans", metavar="PLANS_DIR",
+                    help="phase B: with the fixed --coder served, implement each plan in PLANS_DIR "
+                         "and run tests; rows are tagged mode=planner for the Planner leaderboard.")
+    ap.add_argument("--coder", default="qwen3-coder",
+                    help="fixed executor model for --exec-plans (default qwen3-coder).")
     args = ap.parse_args(argv)
 
     cfg = tomllib.loads(Path(args.config).read_text())
@@ -150,8 +170,9 @@ def main(argv=None):
     if args.judge_only:
         return run_judge_only(args, judge_model, make_judge_client())
 
-    if not args.models:
-        print("--models is required (unless using --judge-only)", file=sys.stderr)
+    if not args.models and not args.gen_plans and not args.exec_plans:
+        print("--models is required (unless using --judge-only/--gen-plans/--exec-plans)",
+              file=sys.stderr)
         return 1
 
     use_judge = jcfg.get("enabled", True) and not args.no_judge and not args.reference
@@ -166,6 +187,12 @@ def main(argv=None):
     if not chs:
         print("No challenges matched filters.", file=sys.stderr)
         return 1
+
+    if args.gen_plans:
+        return run_gen_plans(args, chs, host, ports, run_cfg)
+    if args.exec_plans:
+        return run_exec_plans(args, chs, host, ports, run_cfg,
+                              use_judge, judge_model, make_judge_client() if use_judge else None)
 
     judge_client = make_judge_client() if use_judge else None
 
@@ -591,6 +618,117 @@ def run_judge_only(args, judge_model, judge_client) -> int:
     }
     write_report(rows, outdir, meta)
     print(f"\nJudged {judged} solutions. Report: {outdir / 'leaderboard.md'}")
+    return 0
+
+
+def _model_client(host, ports, model):
+    """An LLMClient for a served model, or None (with a message) if missing/unreachable."""
+    if model not in ports:
+        print(f"!! model '{model}' not in serve/models.toml or config [models]", file=sys.stderr)
+        return None
+    client = LLMClient(f"http://{host}:{ports[model]}")
+    if not client.health():
+        print(f"!! {model} endpoint not reachable; is it served?", file=sys.stderr)
+        return None
+    return client
+
+
+def run_gen_plans(args, chs, host, ports, run_cfg):
+    """Planner-eval phase A: with the planner served, write one implementation plan per challenge."""
+    planner = args.gen_plans
+    client = _model_client(host, ports, planner)
+    if client is None:
+        return 1
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    outdir = Path(args.out) if args.out else ROOT / "results" / f"plans-{planner}-{stamp}"
+    outdir.mkdir(parents=True, exist_ok=True)
+    manifest = {"planner": planner, "stamp": stamp, "plans": {}}
+    print(f"Generating plans with '{planner}' over {len(chs)} challenge(s) -> {outdir}")
+    for ch in chs:
+        res = client.chat(planner,
+                          [{"role": "system", "content": PLAN_SYSTEM},
+                           {"role": "user", "content": ch.spec}],
+                          temperature=run_cfg.get("temperature", 0.2),
+                          max_tokens=args.max_tokens or 8192,
+                          timeout=run_cfg.get("request_timeout", 600))
+        if res.error:
+            print(f"{planner:>18} | {ch.id:<28}  PLAN ERROR {res.error[:60]}")
+            continue
+        (outdir / f"{ch.id}.md").write_text(res.text)
+        manifest["plans"][ch.id] = {
+            "latency_s": res.latency_s, "tok_per_s": res.tok_per_s,
+            "plan_chars": len(res.text), "completion_tokens": res.completion_tokens,
+        }
+        print(f"{planner:>18} | {ch.id:<28}  ok  plan {len(res.text)}c "
+              f"{(res.latency_s or 0):.1f}s")
+    (outdir / "manifest.json").write_text(json.dumps(manifest, indent=2))
+    print(f"\nPlans: {outdir}")
+    return 0
+
+
+def run_exec_plans(args, chs, host, ports, run_cfg, use_judge, judge_model, judge_client):
+    """Planner-eval phase B: with the fixed coder served, implement each stored plan and test it.
+
+    Rows are keyed by the PLANNER (so the Planner leaderboard ranks planners) and tagged
+    mode="planner" with the executor recorded in coder_model.
+    """
+    plans_dir = Path(args.exec_plans)
+    mf = plans_dir / "manifest.json"
+    manifest = json.loads(mf.read_text()) if mf.exists() else {"planner": plans_dir.name, "plans": {}}
+    planner = manifest.get("planner", plans_dir.name)
+    coder = args.coder
+    client = _model_client(host, ports, coder)
+    if client is None:
+        return 1
+    model_vram = _gpu_mem_used()
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    outdir = Path(args.out) if args.out else ROOT / "results" / f"planner-{planner}-{stamp}"
+    results = []
+    print(f"Executing '{planner}' plans with fixed coder '{coder}' -> {outdir}")
+    for ch in chs:
+        plan_file = plans_dir / f"{ch.id}.md"
+        if not plan_file.exists():
+            continue
+        plan = plan_file.read_text()
+        label = f"{planner:>16}/{coder} | {ch.id:<22}"
+        user = ch.spec + "\n\n## Implementation plan (follow this)\n\n" + plan
+        res = client.chat(coder,
+                          [{"role": "system", "content": SYSTEM_PROMPT},
+                           {"role": "user", "content": user}],
+                          temperature=run_cfg.get("temperature", 0.2),
+                          max_tokens=args.max_tokens or run_cfg.get("max_tokens", 6144),
+                          timeout=run_cfg.get("request_timeout", 600))
+        if res.error:
+            print(f"{label}  ERROR {res.error[:60]}")
+            continue
+        files = extract_files(res.text, ch.solution_file, ch.language)
+        run = run_tests(ch, files, run_cfg)
+        judge_res = None
+        if use_judge and ch.scoring in ("judge", "both"):
+            summary = f"{run.passed}/{run.total} tests passed (rc={run.returncode})"
+            sol_text = "\n\n".join(f"// {p}\n{c}" for p, c in files.items())
+            judge_res = judge_solution(judge_client, judge_model, ch, sol_text, summary)
+        sc = compute_score(ch, run, judge_res)
+        pdata = manifest.get("plans", {}).get(ch.id, {})
+        extra = {
+            "mode": "planner", "planner_model": planner, "coder_model": coder,
+            "planner_latency_s": pdata.get("latency_s"), "plan_chars": pdata.get("plan_chars"),
+            "planner_response": plan,
+        }
+        results.append(_row(planner, ch, run, sc, judge_res, response=res.text,
+                            tps=res.tok_per_s, lat=res.latency_s, ptoks=res.prompt_tokens,
+                            ctoks=res.completion_tokens, vram=model_vram, extra=extra))
+        print(f"{label}  {'ok ' if run.ok else '   '} final={sc['final_score']:.2f} "
+              f"tests={sc['passed']}/{sc['total']}")
+    meta = {
+        "timestamp": stamp, "models": [planner], "n_challenges": len(results),
+        "judge": (judge_model if use_judge else None),
+        "sandbox": run_cfg.get("sandbox", "subprocess"), "reference": False,
+        "gpu": _gpu_info(), "retries": 0, "agents_md": False,
+        "mode": "planner", "planner_model": planner, "coder_model": coder,
+    }
+    write_report(results, outdir, meta)
+    print(f"\nReport: {outdir / 'leaderboard.md'}")
     return 0
 
 
