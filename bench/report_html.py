@@ -42,8 +42,13 @@ def main(argv=None):
     ap.add_argument("--out", default=None)
     args = ap.parse_args(argv)
     bench = Path(args.bench)
-    rows = _load(bench / "combined" / "results.json")
-    gpu = json.load(open(bench / "combined" / "results.json")).get("meta", {}).get("gpu") or {}
+    all_rows = _load(bench / "combined" / "results.json")
+    _cmeta = json.load(open(bench / "combined" / "results.json")).get("meta", {})
+    gpu = _cmeta.get("gpu") or {}
+    # The HTML view covers the CODER role; planner rows (mode="planner") are reported in the
+    # markdown Planner leaderboard. Keep only coder rows so the tables below stay coherent.
+    planner_rows = [r for r in all_rows if r.get("mode") == "planner"]
+    rows = [r for r in all_rows if r.get("mode") != "planner"]
 
     judges = {}
     for d in sorted(glob.glob(str(bench / "judged-*"))):
@@ -98,12 +103,12 @@ ul{margin:6px 0}li{margin:3px 0}
     # intro
     H.append('<div class="card"><b>What this is.</b> Every model is served locally via '
              '<code>llama-server</code> and scored on automated tests (code correctness), library '
-             'usage, tool-calling, agentic self-repair, and prompt-injection resistance. Code '
+             'usage, tool-calling, self-repair (retries), and prompt-injection resistance. Code '
              'quality is additionally graded by two judges: the local <code>qwen3-coder</code> '
              '(blind) and <code>claude</code> (grounded in the real test outcomes).</div>')
 
     # overall
-    H.append("<h2>Overall ranking</h2><table><tr><th>#</th><th>Model</th><th>Score (avg over 48)</th>"
+    H.append("<h2>Coder ranking</h2><table><tr><th>#</th><th>Model</th><th>Code score</th>"
              "<th class='num'>Solved</th><th class='num'>tok/s</th><th class='num'>VRAM</th></tr>")
     for i, m in enumerate(models, 1):
         rs = by_model[m]
@@ -116,6 +121,35 @@ ul{margin:6px 0}li{margin:3px 0}
                  f"<td class='num'>{solved}/{len(rs)}</td><td class='num'>{tps:.0f}</td>"
                  f"<td class='num'>{vram/1024:.1f} GB</td></tr>")
     H.append("</table>")
+
+    # planner ranking (plan -> fixed coder -> tests), when present
+    if planner_rows:
+        pbm = defaultdict(list)
+        for r in planner_rows:
+            pbm[r["model"]].append(r)
+        coder_model = _cmeta.get("coder_model") or next(
+            (r.get("coder_model") for r in planner_rows if r.get("coder_model")), "?")
+        plan_chs = {r["challenge"] for r in planner_rows}
+        base = [r for r in rows if r["model"] == coder_model and r["challenge"] in plan_chs]
+        baseline = _avg([r["final_score"] for r in base]) if base else None
+        H.append(f"<h2>Planner ranking</h2><div class='sub'>Each planner writes a spec that the "
+                 f"fixed coder <code>{coder_model}</code> implements; ranked by downstream test "
+                 f"pass-rate"
+                 + (f" (solo baseline {baseline:.3f})" if baseline is not None else "") + ".</div>")
+        H.append("<table><tr><th>#</th><th>Planner</th><th>Downstream</th>"
+                 "<th class='num'>Solved</th><th class='num'>vs base</th>"
+                 "<th class='num'>plan s</th></tr>")
+        for i, (m, rs) in enumerate(sorted(pbm.items(),
+                                    key=lambda kv: -_avg([r["final_score"] for r in kv[1]])), 1):
+            sc = _avg([r["final_score"] for r in rs])
+            solved = sum(1 for r in rs if r["final_score"] >= 0.999)
+            lift = f"{sc - baseline:+.3f}" if baseline is not None else "—"
+            plat = _avg([r.get("planner_latency_s") for r in rs])
+            cls = ' class="rank1"' if i == 1 else ""
+            H.append(f"<tr{cls}><td class='num'>{i}</td><td><b>{m}</b></td><td>{_bar(sc)}</td>"
+                     f"<td class='num'>{solved}/{len(rs)}</td><td class='num'>{lift}</td>"
+                     f"<td class='num'>{plat:.1f}</td></tr>")
+        H.append("</table>")
 
     # by type heatmap
     H.append("<h2>Capability by type</h2><table><tr><th>Model</th>"
@@ -321,7 +355,9 @@ ul{margin:6px 0}li{margin:3px 0}
             sc = r.get("final_score", 0.0)
             lat = r.get("latency_s")
             lat_s = f"{lat:.1f}" if lat is not None else "-"
-            H.append(f"<tr><td>{r.get('challenge','')}</td><td>{r.get('type','')}</td>"
+            cid = r.get("challenge", "")
+            link = f"combined/transcripts/{m}__{cid}.md"   # report.html lives at the bench root
+            H.append(f"<tr><td><a href='{link}'>{cid}</a></td><td>{r.get('type','')}</td>"
                      f"<td>{r.get('language','')}</td><td>{r.get('difficulty','')}</td>"
                      f"<td class='heat' style='{_heat(sc)}'>{sc:.2f}</td>"
                      f"<td>{r.get('passed','-')}/{r.get('total','-')}</td>"
@@ -330,7 +366,7 @@ ul{margin:6px 0}li{margin:3px 0}
 
     H.append('<div class="foot">Generated from <code>%s</code>. Capability axes: code correctness '
              '&middot; library fluency &middot; code quality (LLM judge) &middot; tool-calling '
-             '&middot; agentic self-repair &middot; prompt-injection resistance. Models run at '
+             '&middot; self-repair (retries) &middot; prompt-injection resistance. Models run at '
              'their recommended sampling settings (some temperature&gt;0), so expect minor '
              'run-to-run variance.</div>' % str(bench))
     H.append("</div></body></html>")

@@ -40,6 +40,7 @@ def main(argv=None):
         "gpu": next((mt.get("gpu") for mt in metas if mt.get("gpu")), None),
         "retries": max((mt.get("retries", 0) or 0) for mt in metas) if metas else 0,
         "agents_md": any(mt.get("agents_md") for mt in metas),
+        "coder_model": next((mt.get("coder_model") for mt in metas if mt.get("coder_model")), None),
         "merged_from": args.inputs,
     }
     out = write_report(all_results, Path(args.out), meta)

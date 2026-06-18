@@ -42,9 +42,12 @@ for p in "${PLANNERS[@]}"; do
   stop_srv
 done
 
-# --- Phase B: one fixed coder implements every planner's plans ---
+# --- Phase B: one fixed coder implements every planner's plans (+ a solo baseline) ---
 echo "=== [exec] coder=$CODER ==="
 if ! serve_wait "$CODER"; then echo "!! coder $CODER never became ready"; stop_srv; exit 1; fi
+# solo baseline: the fixed coder doing the same tasks WITHOUT a plan -> the Planner leaderboard's
+# "vs baseline" lift is each planner's downstream score minus this.
+python -m bench.runner --models "$CODER" --type "$TYPE" --no-judge --out "$OUT/baseline-$CODER" 2>&1 | tail -6
 for p in "${PLANNERS[@]}"; do
   [ -d "$OUT/plans-$p" ] || continue
   python -m bench.runner --exec-plans "$OUT/plans-$p" --coder "$CODER" --type "$TYPE" \
@@ -53,6 +56,6 @@ done
 stop_srv
 
 echo "=== merging ==="
-python -m bench.merge "$OUT"/exec-*/results.json --out "$OUT/combined"
+python -m bench.merge "$OUT"/exec-*/results.json "$OUT"/baseline-*/results.json --out "$OUT/combined"
 echo ""
 echo "DONE. Planner leaderboard: $OUT/combined/leaderboard.md"

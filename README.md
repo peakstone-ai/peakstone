@@ -126,32 +126,63 @@ bug to every code-gen challenge.
 python -m bench.runner --models qwen3.5-9b --retries 2          # up to 3 attempts per challenge
 ```
 
+**Global output contract** (`--agents-md`): applies a sane AGENTS.md (keep reasoning concise; use
+the exact requested file name) as the system prompt on every code-gen challenge, and scores a
+deterministic **global adherence** axis (separate from correctness, shown as a Coder-leaderboard
+column). Helps reasoning models reach a complete answer; default off keeps prior runs comparable.
+See `bench/global_rules.py`.
+
+## Two roles: best **coder** and best **planner**
+
+The benchmark ranks two things. The **Coder leaderboard** is the code-generation suite above
+(model writes code directly from each task). The **Planner leaderboard** asks a different question:
+which model writes the best *spec*? Each planner writes an implementation plan for the hard
+**architecture** tasks, a **fixed coder** (`qwen3-coder`) implements every plan, and we score the
+coder's downstream test pass-rate — so planners are compared fairly by holding the executor
+constant. The lift is each planner's downstream score minus the coder's solo (no-plan) baseline.
+
+Decoupled so only one model is in VRAM at a time (plan with the planner served, then execute with
+the coder served):
+```bash
+./serve/planner_eval.sh glm-planner qwen3.6-35b-a3b vibethinker-3b   # -> Planner leaderboard
+# under the hood, per phase:
+python -m bench.runner --gen-plans glm-planner --type architecture   # plan each task
+python -m bench.runner --exec-plans results/plans-glm-planner-… --coder qwen3-coder  # execute + test
+```
+
+Both leaderboards land in one `leaderboard.md`, each with a **per-challenge detail matrix whose
+cells link to the transcript** (plan → code → test output) for that model+challenge.
+
 Scoring: `final = pass_rate` for `tests` challenges; `0.7*pass_rate + 0.3*judge` for `both`.
 The judge is a local model (config `[judge]`); disable with `--no-judge`. It can be pointed at
 Claude by setting `[judge] base_url`/`api_key` in `bench/config.toml`.
 
-## Challenge suite (62, difficulty 1→5)
+## Challenge suite (61 active, difficulty 1→5)
+
+> The dedicated **Agentic self-repair** and **Instruction adherence** challenge types are
+> **archived** (`challenges/_archived/`): their signal is now measured suite-wide via `--retries`
+> and `--agents-md` respectively. Four difficulty-5 **architecture** challenges were added —
+> multi-component tasks (transactional KV store, typed rule engine, dependency scheduler, windowed
+> aggregator) that separate the top coders and serve as the planner-eval tasks.
 
 By **language**:
-- **Python** (11): fizzbuzz · csv group-by · BFS shortest path · LRU+TTL cache · expr
+- **Python** (13): fizzbuzz · csv group-by · BFS shortest path · LRU+TTL cache · expr
   interpreter · **numpy** distances · **pandas** top-n-per-group · **pydantic** validation ·
-  **networkx** dependency chain · **sortedcontainers** running median · Dijkstra (heapq)
+  **networkx** dependency chain · **sortedcontainers** running median · Dijkstra (heapq) ·
+  **transactional KV store** (architecture) · **windowed aggregator** (architecture)
 - **JavaScript** (10): palindrome · deep flatten · binary search-insert · async retry ·
   **lodash** group-sum · **date-fns** business days · **zod** validation · **mathjs** eval ·
   bounded-concurrency pool · async memoize (TTL + in-flight dedup)
-- **TypeScript** (9): chunk · groupBy · LRU cache · typed EventEmitter · typed state machine ·
-  **zod** parse · **mathjs** eval · generic `Result<T,E>` · typed redux-style store
-- **Go** (5): reverse words · word frequency · cycle detection · concurrent worker-pool map ·
-  generic LRU cache
+- **TypeScript** (10): chunk · groupBy · LRU cache · typed EventEmitter · typed state machine ·
+  **zod** parse · **mathjs** eval · generic `Result<T,E>` · typed redux-style store ·
+  **typed rule engine** (architecture)
+- **Go** (6): reverse words · word frequency · cycle detection · concurrent worker-pool map ·
+  generic LRU cache · **dependency-aware job scheduler** (architecture)
 - **Rust** (4): run-length encoding · balanced brackets · RPN evaluator · generic run grouping
 - **Tool-calling** (4): single call · arithmetic via calculator tools · dependent multi-step ·
   correct tool selection
-- **Agentic self-repair** (2): fix a buggy Roman-numeral parser · fix a buggy query-string
-  parser (model iterates with run_tests until green)
 - **Prompt-injection resistance** (3): malicious instruction in a tool result · forged system
   block · data-exfiltration redirect (model must ignore the injection, not call the dangerous tool)
-- **Instruction adherence** (3): follow an `agent.md` of Python conventions · TypeScript
-  conventions · hard constraints + output format (scored on rule-obedience, not correctness)
 - **Refusal calibration** (4): benign/dual-use dev requests (port scanner for own lab,
   subprocess wrapper, malware *analysis*, email regex) — scored on **over-refusal** (does it
   wrongly decline legitimate work)
