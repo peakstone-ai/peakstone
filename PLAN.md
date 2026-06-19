@@ -1,0 +1,181 @@
+# PLAN.md — Open Model Capability Benchmark Platform
+
+> Working name: **OpenAgentBench** (TBD). A public, reproducible benchmark *platform* that tracks
+> the evolution of open models' real capabilities — from solving simple verifiable assignments to
+> (eventually) one-shotting complex multi-machine projects via iteration. Community-run, community-
+> authored, independently reproducible.
+
+## 1. Context & vision
+
+We already have a solid local harness (`bench/`): it serves GGUF models via llama.cpp, runs a
+progressive suite of **verifiable** coding challenges (deterministic tests), and can additionally
+grade solutions with an LLM judge. It measures coding-correctness, library fluency, self-repair
+(`--retries`), instruction adherence, tool-calling, prompt-injection resistance, and an early
+plan→code→test "planner" mode.
+
+The pivot: turn that harness into a **website + platform** where:
+- anyone runs the open CLI against their own models and **publishes scores** per capability category;
+- results are **independently reproducible** (every submission embeds everything needed to re-run it);
+- users **author new challenges** to probe where models differ;
+- the headline view is **capability-vs-time** — watching open models climb from simple assignments
+  to complex, iterated, multi-component projects.
+
+Future capability tiers (architected for, not built day one): tool-calling + recursion/iteration,
+**multi-machine projects** (server/client, p2p) via an SSH-to-machine or microVM-on-VLAN
+environment, and later vision-to-UI / game-playing for multimodal models.
+
+## 2. Decisions (locked 2026-06-20)
+
+| Decision | Choice | Why |
+|---|---|---|
+| Execution & trust | **Decentralized submit + verified tier** | Models run on users' GPUs; the site never needs compute. Trust via full repro metadata + a "verified" badge (consensus or trusted re-run). |
+| Database | **PostgreSQL + JSONB** | Leaderboards = aggregation/joins/time-series across model×category×difficulty×date (Postgres' strength); JSONB keeps per-test payloads & env metadata open-schema. |
+| First milestone | **Reproducible coding leaderboard** | Ship the credible core (existing verifiable suite) first; everything extends it. |
+| Stack | **FastAPI + Next.js + Postgres** | Python backend reuses the harness AS the engine (no rewrite); React/Next for charts. |
+
+## 3. Core principle — reproducibility is the schema
+
+You can't host every GPU, so the platform's integrity rests on the **result bundle**: a signed,
+self-contained artifact a submitter produces locally and uploads. Deterministic (test-based)
+challenges are then *independently re-runnable*; judge-based ones store the judge's identity and are
+flagged "soft". The bundle is the contract between `/engine` and `/api` and lives in `/schema`.
+
+### Result-bundle schema (v1 sketch, JSON)
+```jsonc
+{
+  "bundle_version": "1.0",
+  "submitted_at": "2026-06-20T10:00:00Z",
+  "submitter": { "handle": "psch", "pubkey": "...", "signature": "<sig over bundle hash>" },
+  "harness":   { "name": "openagentbench-engine", "version": "0.1.0", "git_commit": "..." },
+  "model": {
+    "family": "Qwen3-Coder-Next",          // for grouping in evolution charts
+    "artifact": "UD-Q4_K_XL",               // the specific quant/file identity
+    "hf_repo": "unsloth/Qwen3-Coder-Next-GGUF",
+    "hf_revision": "<commit sha>",          // EXACT weights version
+    "file_sha256": "<sha256 of gguf>",
+    "params_total": "80B", "params_active": "3B", "release_date": "2026-02-19",
+    "engine": { "name": "llama.cpp", "version": "b1-ef8268f", "build_flags": "-DGGML_CUDA=ON ..." },
+    "sampling": { "temperature": 0.2, "top_p": 0.8, "top_k": 20, "seed": 1234 },
+    "context": 262144,
+    "serve_flags": "-ngl 99 -fit off --n-cpu-moe 34 --parallel 1 -fa on"
+  },
+  "environment": { "gpu": "RTX 4090", "vram_gb": 24, "driver": "595.71.05",
+                   "cpu": "Ryzen 9 9950X", "ram_gb": 64, "os": "Ubuntu 24.04", "offload": "n-cpu-moe 34" },
+  "suite": { "id": "core-coding", "version": "2026.06", "content_hash": "<sha256 of suite>" },
+  "results": [
+    {
+      "challenge_id": "py-12-txn-kvstore", "challenge_hash": "<sha256>",
+      "category": "architecture", "verification": "deterministic-tests", "difficulty": 5,
+      "capabilities": ["code-correctness"],
+      "score": { "final": 1.0, "passed": 12, "total": 12 },
+      "attempts": 1, "passed_on_attempt": 1, "tok_per_s": 59, "latency_s": 12.1,
+      "transcript": { "prompt": "...", "raw_output": "...", "extracted_files": {"solution.py": "..."},
+                      "stdout": "...", "stderr": "" },
+      "judge": null
+    }
+  ],
+  "aggregate": { "overall": 0.41, "by_category": { "architecture": 0.93, "...": 0.0 } }
+}
+```
+The whole bundle is content-addressed (`bundle_hash = sha256(canonical_json)`); the submitter signs
+that hash. Transcripts may be stored inline (small) or as content-addressed blobs (large suites).
+
+## 4. Capability taxonomy
+
+Three orthogonal axes so the model extends to every future test type without schema churn:
+
+1. **Capability category** (what's tested): `code-correctness`, `library-fluency`, `self-repair`,
+   `tool-calling`, `multi-step-agentic`, `planning`, `distributed/multi-machine`,
+   `instruction-following`, `safety` (injection/refusal/secure-code), `vision-to-code`, `game-playing`.
+2. **Verification method** (how it's scored → drives trust): `deterministic-tests` |
+   `llm-judge` | `goal-state-env` | `human`.
+3. **Difficulty tier**: 1–5.
+
+A challenge *declares* the capabilities it requires (e.g. `tool-calling`, `multi-turn`,
+`networked-env`, `vision`). A model's per-category score is aggregated over the challenges it
+attempted in that category. The website's hero view = **per-category score vs. model release date**.
+The current `meta.toml` fields map directly: `category/type → capability category`,
+`scoring → verification method`, `difficulty → tier`.
+
+## 5. Trust / verification tiers
+- **self-reported** — any valid signed bundle. Shown, but visibly unverified.
+- **community-verified** — a *deterministic* challenge result reproduced by ≥N independent
+  submitters within tolerance (exact for pass/total; small band for tok/s). Auto-promoted.
+- **runner-verified** — re-run by a trusted runner (a maintainer or CI box) for spot-checks /
+  flagged models. Highest badge.
+Judge-based and goal-state results stay "soft" (judge identity/version recorded; not auto-verifiable).
+
+## 6. Data model (Postgres, abbreviated)
+- `model_families` (id, name, vendor, release_date, modality) — the thing the evolution chart plots.
+- `model_artifacts` (id, family_id, quant, hf_repo, hf_revision, file_sha256, params_total/active).
+- `challenges` (id, slug, category, verification, difficulty, capabilities[], content_hash, version,
+  spec, tests_ref, author_id, status: draft|review|published).
+- `suites` (id, name, version, content_hash, challenge_ids[]).
+- `submissions` (id, submitter_id, artifact_id, engine, env JSONB, suite_id, bundle_hash, signature,
+  submitted_at, trust_tier).
+- `results` (id, submission_id, challenge_id, challenge_hash, score JSONB, passed, total, tok_per_s,
+  latency_s, transcript_ref, judge JSONB) — one row per challenge per submission.
+- `verifications` (submission_id, verifier, status, reproduced_score).
+- `capability_scores` (materialized view: family_id, category, difficulty, best/median score, n) for
+  fast leaderboards & charts.
+- `users` (handle, pubkey, role).
+JSONB carries the open-schema bits (env, score breakdowns, future capability-specific fields).
+
+## 7. Monorepo layout
+```
+/engine     today's bench/ harness, refactored into a library + CLI that emits result bundles
+            (serve, run, extract, sandbox, scoring, judge — already exist). Adds: bundle writer,
+            signing, env capture, content-hashing of challenges/suites.
+/schema     the result-bundle JSON Schema + capability taxonomy enums (shared contract, versioned).
+/api        FastAPI: submission ingest + validation, leaderboard/query endpoints, verification jobs.
+/web        Next.js: leaderboards, capability-vs-time charts, model & challenge pages, submit flow.
+/challenges the public challenge set (current meta.toml/spec.md/tests/reference format, formalized).
+/db         migrations (Alembic).
+/infra      docker-compose (Postgres + api + web), sandbox runners.
+```
+The existing repo restructures in place: `bench/ → engine/`, `challenges/` stays, `serve/` stays as
+a local convenience for running your own models.
+
+## 8. Security
+- **Untrusted code runs sandboxed.** Already partly done: `sandbox.py` uses subprocess + timeout +
+  the new `RLIMIT_AS` memory cap. For the platform: run challenge tests and agent-generated code in
+  containers (cgroups: cpu/mem/pids/no-net by default). The P3 multi-machine tier uses microVMs
+  (Firecracker) on an isolated network.
+- **User-authored challenges** go through a moderation queue + automated checks (reference solution
+  must pass its own tests in the sandbox; resource limits) before `published`.
+- Submissions are signed; abuse/sybil handled by trust tiers + rate limits, not gatekeeping.
+
+## 9. Phased roadmap
+- **P1 — Reproducible coding leaderboard (MVP).**
+  1. Define `/schema` result-bundle v1 + capability taxonomy.
+  2. Refactor `bench/ → engine/`: emit & sign bundles; capture full model/env/challenge metadata;
+     content-hash challenges + suites.
+  3. Postgres schema + Alembic migrations; FastAPI submission ingest (validate schema + signature +
+     re-derive bundle hash) and leaderboard/query endpoints.
+  4. Next.js: overall + per-category leaderboards, model pages, **capability-vs-release-date charts**,
+     a "how to submit" CLI guide.
+  5. Seed with our existing results (the runs already in `results/`).
+  6. **community-verified** tier (auto-promote deterministic results reproduced ≥N times).
+- **P2 — Challenge authoring.** In-repo + web-form challenge submission, moderation queue, sandbox
+  hardening, challenge versioning & deprecation, per-challenge discussion.
+- **P3 — Agentic & multi-machine.** Tool-calling + iteration agent loop as a first-class run mode;
+  `goal-state-env` verification; environment providers (SSH-to-host, Firecracker microVM-on-VLAN)
+  for server/client & p2p projects. **Planner-agent testing folds in here as one env type.**
+- **P4 — Multimodal.** vision-to-UI (build interface from screenshot/video), game-playing, for
+  models that support it.
+
+## 10. Immediate next steps (P1, in order)
+1. Lock the project name + license (Apache-2.0?) and `/schema/result-bundle.schema.json` v1.
+2. Carve `engine/` out of `bench/` with a `produce_bundle()` path; add env capture + signing.
+3. Stand up `docker-compose` (Postgres) + Alembic baseline migration for the §6 tables.
+4. FastAPI: `POST /submissions` (validate + store), `GET /leaderboard`, `GET /models/{family}`.
+5. Next.js skeleton with the overall leaderboard reading from the API; backfill our `results/`.
+
+## 11. Open questions to resolve as we build
+- Project name & domain; license.
+- Identity: how submitters get a keypair/handle (GitHub OAuth + generated signing key?).
+- Suite governance: who blesses the "official" suite version vs. community suites; how scores from
+  different suite versions are compared on the same chart.
+- Transcript storage: inline vs. object store (S3-compatible) for large suites; retention.
+- Anti-gaming for non-deterministic/judge challenges (seed disclosure, multi-run medians).
+- "Model family" grouping rules (base model vs. fine-tunes vs. quants) for the evolution view.
