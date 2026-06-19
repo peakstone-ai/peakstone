@@ -84,6 +84,18 @@ port  = 8094
 ctx   = 65536
 flags = "--temp 1.0 --top-p 0.95 --top-k -1 -fa on"
 
+# Qwen3-Coder-Next: 80B-total / 3B-active MoE coder (256K native ctx). Q4_K_XL is ~50GB, so it does
+# NOT fit 24GB VRAM like the rest of the roster — served HYBRID: serve.sh's `-ngl 99` puts attention
+# + shared/router layers on the GPU, and `--cpu-moe` keeps all expert FFN tensors in CPU RAM (~45GB,
+# needs the box's 64GB). Only 3B params are active per token so CPU-offloaded experts stay usable, but
+# it is the slowest contestant (expect well below the fully-GPU MoEs). First non-VRAM-resident model.
+["qwen3-coder-next"]
+repo  = "unsloth/Qwen3-Coder-Next-GGUF"
+file  = "models/qwen3-coder-next/Qwen3-Coder-Next-UD-Q4_K_XL.gguf"
+port  = 8095
+ctx   = 32768
+flags = "--cpu-moe -fa on --temp 0.7 --top-p 0.8 --top-k 20 --repeat-penalty 1.05"
+
 # PLANNER: GLM-4.7-Flash with THINKING ON (note: no --reasoning-budget 0) for writing specs /
 # architecture that qwen3-coder then executes. Same weights as glm-4.7-flash (no extra download).
 # Reasoning benefits from KV fidelity -> q8 KV; 128K ctx is ample for plans and fits ~21GB with

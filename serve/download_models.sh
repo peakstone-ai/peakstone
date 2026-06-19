@@ -20,6 +20,9 @@ ENTRIES=(
   # VibeThinker-3B (Weibo AI): 3B dense reasoner on Qwen2.5-Coder-3B, competition math/coding.
   # Only a Q8_0 community GGUF exists (3.3GB; trivial for the 4090). NOT tool-call/agentic trained.
   "vibethinker-3b|bms22/VibeThinker-3B-Q8_0-GGUF|vibethinker-3b-q8_0.gguf"
+  # Qwen3-Coder-Next: 80B-total / 3B-active MoE coder, 256K ctx. Q4_K_XL is ~50GB -> does NOT fit
+  # 24GB VRAM; served hybrid (--cpu-moe keeps experts in CPU RAM, attention on GPU). ~50GB download.
+  "qwen3-coder-next|unsloth/Qwen3-Coder-Next-GGUF|Qwen3-Coder-Next-UD-Q4_K_XL.gguf"
   # --- tested & dropped (files deleted); uncomment any line to reproduce ---
   # "qwen2.5-coder-32b|bartowski/Qwen2.5-Coder-32B-Instruct-GGUF|Qwen2.5-Coder-32B-Instruct-Q4_K_M.gguf"
   # "qwen2.5-coder-14b|bartowski/Qwen2.5-Coder-14B-Instruct-GGUF|Qwen2.5-Coder-14B-Instruct-Q6_K.gguf"
