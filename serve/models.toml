@@ -13,11 +13,14 @@
 repo  = "unsloth/GLM-4.7-Flash-GGUF"
 file  = "models/glm-4.7-flash/GLM-4.7-Flash-UD-Q4_K_XL.gguf"
 port  = 8081
-ctx   = 32768
+# Was capped at 32K, but GLM-4.7-Flash's native window is ~198K and the 18GB MoE fits with room:
+# measured the FULL native 192K context all-GPU at ~180 tok/s / 22.9GB (q8 KV) — no offload, no
+# speed loss. So context bumped 32K->192K for free. (-fa on + q8 KV added vs the old config.)
+ctx   = 196608
 # GLM-4.7-Flash is a reasoning model whose chain-of-thought runs away and fills the whole
 # token budget (answer never finalizes). --reasoning-budget 0 ends thinking immediately so
 # it emits code directly. Drop this flag if you want its full reasoning behaviour.
-flags = "--temp 0.6 --top-p 0.95 --reasoning-budget 0"
+flags = "--temp 0.6 --top-p 0.95 -fa on --cache-type-k q8_0 --cache-type-v q8_0 --reasoning-budget 0"
 
 ["qwen3-coder"]
 repo  = "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
@@ -68,12 +71,14 @@ ctx   = 65536
 flags = "--temp 0.6 --top-p 0.95 -fa on --cache-type-k q8_0 --cache-type-v q8_0 --reasoning-budget 0"
 
 # Best small model in the lab (0.786): fully agentic out of the box.
+# Only 9GB (Q6), so its FULL native 256K context fits ALL-GPU at ~101 tok/s / 13.5GB (q8 KV) —
+# huge headroom, same speed as 32K. Context bumped 32K->256K for free. (-fa on + q8 KV added.)
 ["qwen3.5-9b"]
 repo  = "unsloth/Qwen3.5-9B-GGUF"
 file  = "models/qwen3.5-9b/Qwen3.5-9B-UD-Q6_K_XL.gguf"
 port  = 8092
-ctx   = 32768
-flags = "--temp 0.2 --reasoning-budget 0"
+ctx   = 262144
+flags = "--temp 0.2 -fa on --cache-type-k q8_0 --cache-type-v q8_0 --reasoning-budget 0"
 
 # VibeThinker-3B (Weibo AI): 3B dense reasoner distilled on Qwen2.5-Coder-3B, tuned for
 # competition-style math/coding with verifiable answers. Emits long <think> chains (authors
