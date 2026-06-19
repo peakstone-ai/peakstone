@@ -236,7 +236,9 @@ a local convenience for running your own models.
 5. Next.js skeleton with the overall leaderboard reading from the API; backfill our `results/`.
 
 ## 11. Open questions to resolve as we build
-- Project name & domain; license.
+- Project name & domain (license **decided**: Apache-2.0 for all code + challenges via DCO;
+  CC-BY-4.0 for submitted result data; name reserved as trademark — `NOTICE` + `TRADEMARK.md` land
+  once the name is picked). Copyright holder for headers/NOTICE TBD (personal name vs. an org/entity).
 - Identity: how submitters get a keypair/handle (GitHub OAuth + generated signing key?).
 - Transcript storage: inline vs. object store (S3-compatible) for large suites; retention.
 - Anti-gaming for non-deterministic/judge challenges (seed disclosure, multi-run medians).
