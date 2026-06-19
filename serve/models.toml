@@ -84,11 +84,12 @@ port  = 8094
 ctx   = 65536
 flags = "--temp 1.0 --top-p 0.95 --top-k -1 -fa on"
 
-# Qwen3-Coder-Next: 80B-total / 3B-active MoE coder (256K native ctx). Q4_K_XL is ~50GB, so it does
+# Qwen3-Coder-Next: 80B-total / 3B-active MoE coder (256K native ctx). Q4_K_XL is ~47GB, so it does
 # NOT fit 24GB VRAM like the rest of the roster — served HYBRID: serve.sh's `-ngl 99` puts attention
-# + shared/router layers on the GPU, and `--cpu-moe` keeps all expert FFN tensors in CPU RAM (~45GB,
-# needs the box's 64GB). Only 3B params are active per token so CPU-offloaded experts stay usable, but
-# it is the slowest contestant (expect well below the fully-GPU MoEs). First non-VRAM-resident model.
+# + shared/router layers on the GPU (~4.6GB), and `--cpu-moe` keeps all expert FFN tensors on CPU.
+# With mmap the experts live in the OS page cache (so `free` shows low "used" but they're RAM-resident
+# on this 64GB box) — no --no-mmap needed. Measured ~47 tok/s gen on the Ryzen 9 9950X (AVX-512) +
+# NVMe: only 3B active per token, so it's comparable to the mid VRAM MoEs, NOT the slow tail.
 ["qwen3-coder-next"]
 repo  = "unsloth/Qwen3-Coder-Next-GGUF"
 file  = "models/qwen3-coder-next/Qwen3-Coder-Next-UD-Q4_K_XL.gguf"
