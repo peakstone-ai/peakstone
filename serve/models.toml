@@ -94,8 +94,14 @@ flags = "--temp 1.0 --top-p 0.95 --top-k -1 -fa on"
 repo  = "unsloth/Qwen3-Coder-Next-GGUF"
 file  = "models/qwen3-coder-next/Qwen3-Coder-Next-UD-Q4_K_XL.gguf"
 port  = 8095
-ctx   = 32768
-flags = "--cpu-moe -fa on --temp 0.7 --top-p 0.8 --top-k 20 --repeat-penalty 1.05"
+ctx   = 262144
+# Tuned hybrid offload (measured on the 4090): `--n-cpu-moe 34` keeps 14 of ~48 expert layers on
+# the GPU (rest in CPU RAM), filling VRAM to ~23GB and giving ~59 tok/s at the FULL 256K context
+# (vs 47 tok/s / 32K with all experts on CPU). KV is tiny (hybrid attention) so 256K is ~free;
+# q8 KV-cache CRASHES this arch, so f16 only. `-fit off` is required because serve.sh sets -ngl 99
+# and the auto-fitter aborts otherwise. `--parallel 1` = one slot (no wasted KV for single-user/bench;
+# raise for concurrency at the cost of VRAM). Drop to --n-cpu-moe 36 if long-prompt processing OOMs.
+flags = "-fit off --n-cpu-moe 34 --parallel 1 -fa on --temp 0.7 --top-p 0.8 --top-k 20 --repeat-penalty 1.05"
 
 # Qwen3-Coder-Next at Q6 (vs the Q4_K_XL above) to test how much the Q4 quant costs on this
 # 80B-A3B — esp. whether the prompt-injection *compliance* (Q4 scored 0/3) is quant-driven.
