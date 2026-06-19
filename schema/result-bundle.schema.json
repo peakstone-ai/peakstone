@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://peakstone.ai/schema/result-bundle/v1.json",
+  "title": "Peakstone Result Bundle",
+  "description": "A signed, self-contained record of one model configuration ('run') scored on a suite. Embeds everything needed to independently reproduce deterministic results: exact model identity (repo + revision + file hash + quant + engine + sampling + serve flags), environment, content-hashed challenges, full transcripts, and scores. This file is the contract between the engine and the API; it is content-addressed (bundle_hash = sha256 of the canonical JSON with `submitter.signature` omitted) and the submitter signs that hash.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["bundle_version", "submitted_at", "harness", "model", "environment", "suite", "results"],
+  "properties": {
+    "bundle_version": { "type": "string", "const": "1.0" },
+    "submitted_at": { "type": "string", "format": "date-time" },
+    "submitter": {
+      "type": "object",
+      "description": "Optional for local/anonymous runs; required to claim a submission on the platform.",
+      "additionalProperties": false,
+      "properties": {
+        "handle": { "type": "string" },
+        "pubkey": { "type": "string", "description": "ed25519 public key (base64)." },
+        "signature": { "type": "string", "description": "ed25519 signature over bundle_hash (base64). Excluded from the hash itself." }
+      }
+    },
+    "harness": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "type": "string", "const": "peakstone-engine" },
+        "version": { "type": "string" },
+        "git_commit": { "type": "string" }
+      }
+    },
+    "model": { "$ref": "#/$defs/model" },
+    "environment": { "$ref": "#/$defs/environment" },
+    "suite": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "content_hash"],
+      "properties": {
+        "id": { "type": "string", "description": "e.g. 'core-coding' or 'corpus-subset'." },
+        "version": { "type": "string", "description": "Suite version, e.g. '2026.06'. Leaderboards are scoped per (suite, version)." },
+        "content_hash": { "type": "string", "description": "sha256 over the concatenated challenge content-hashes in the suite — pins the exact challenge set scored." }
+      }
+    },
+    "results": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/result" }
+    },
+    "aggregate": {
+      "type": "object",
+      "description": "Convenience rollups; authoritative scores are recomputed server-side from `results`.",
+      "additionalProperties": true,
+      "properties": {
+        "overall": { "type": "number" },
+        "by_category": { "type": "object", "additionalProperties": { "type": "number" } }
+      }
+    },
+    "bundle_hash": { "type": "string", "description": "sha256 of the canonical JSON (signature omitted). Self-reported; the server recomputes and verifies it." }
+  },
+  "$defs": {
+    "model": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Identity of the EXACT weights + how they were run — the reproducibility core. (artifact + quant + serve config define a distinct 'run'; runs are never collapsed.)",
+      "required": ["family", "artifact", "hf_repo", "file_sha256", "engine", "sampling"],
+      "properties": {
+        "family": { "type": "string", "description": "Base model family, for grouping in evolution charts (e.g. 'Qwen3-Coder-Next')." },
+        "artifact": { "type": "string", "description": "The specific quant/build identity (e.g. 'UD-Q4_K_XL')." },
+        "hf_repo": { "type": "string" },
+        "hf_revision": { "type": "string", "description": "Git revision/commit of the HF repo — pins the exact weights version." },
+        "file_sha256": { "type": "string", "description": "SHA-256 of the model file(s). For split GGUFs, hash of each part." },
+        "params_total": { "type": "string", "description": "e.g. '80B'." },
+        "params_active": { "type": "string", "description": "Active params/token for MoE, e.g. '3B'." },
+        "release_date": { "type": "string", "format": "date", "description": "Model release date — the x-axis of the evolution chart." },
+        "engine": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["name", "version"],
+          "properties": {
+            "name": { "type": "string", "description": "e.g. 'llama.cpp', 'vllm'." },
+            "version": { "type": "string" },
+            "build_flags": { "type": "string" }
+          }
+        },
+        "sampling": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "temperature": { "type": "number" },
+            "top_p": { "type": "number" },
+            "top_k": { "type": "integer" },
+            "seed": { "type": "integer", "description": "Required to be reproducible when temperature > 0." }
+          }
+        },
+        "context": { "type": "integer", "description": "Served context length (n_ctx)." },
+        "serve_flags": { "type": "string", "description": "Full serve command flags (offload, KV type, etc.) — part of the run identity." }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["gpu"],
+      "properties": {
+        "gpu": { "type": "string" },
+        "vram_gb": { "type": "number" },
+        "driver": { "type": "string" },
+        "cpu": { "type": "string" },
+        "ram_gb": { "type": "number" },
+        "os": { "type": "string" },
+        "offload": { "type": "string", "description": "Expert/layer offload config, e.g. '--n-cpu-moe 34'." }
+      }
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "One challenge's outcome. additionalProperties allowed for capability-specific fields (JSONB-style extensibility).",
+      "required": ["challenge_id", "challenge_hash", "verification", "score"],
+      "properties": {
+        "challenge_id": { "type": "string" },
+        "challenge_hash": { "type": "string", "description": "sha256 of the challenge's content (spec + tests + meta) — pins the exact challenge version scored." },
+        "category": { "type": "string", "description": "Declared capability category (e.g. 'architecture', 'tool-calling'). See taxonomy.json." },
+        "capabilities": { "type": "array", "items": { "type": "string" }, "description": "Coarse capability axis required by the challenge." },
+        "verification": { "$ref": "#/$defs/verification_method" },
+        "difficulty": { "type": "integer", "minimum": 1, "maximum": 5, "description": "Author SEED difficulty; the platform calibrates the real tier (T0-T4) from submission data." },
+        "score": {
+          "type": "object",
+          "additionalProperties": true,
+          "required": ["final"],
+          "properties": {
+            "final": { "type": "number", "minimum": 0, "maximum": 1 },
+            "passed": { "type": "integer" },
+            "total": { "type": "integer" },
+            "breakdown": { "type": "object", "additionalProperties": true }
+          }
+        },
+        "attempts": { "type": "integer", "description": "Number of generations (>1 = a --retries self-repair loop ran)." },
+        "passed_on_attempt": { "type": ["integer", "null"] },
+        "tok_per_s": { "type": ["number", "null"] },
+        "latency_s": { "type": ["number", "null"] },
+        "transcript": {
+          "type": "object",
+          "description": "Inline for small suites; for large ones, a content-addressed reference (transcript_ref) may replace this.",
+          "additionalProperties": true,
+          "properties": {
+            "prompt": { "type": "string" },
+            "raw_output": { "type": "string" },
+            "extracted_files": { "type": "object", "additionalProperties": { "type": "string" } },
+            "plan": { "type": "string", "description": "For planner runs: the spec/plan the coder executed." },
+            "stdout": { "type": "string" },
+            "stderr": { "type": "string" }
+          }
+        },
+        "transcript_ref": { "type": "string", "description": "Content-addressed blob id, if the transcript is stored out-of-band." },
+        "judge": {
+          "type": ["object", "null"],
+          "description": "Present only for verification=llm-judge; makes the score 'soft' (not auto-verifiable).",
+          "additionalProperties": true,
+          "properties": {
+            "model": { "type": "string" },
+            "version": { "type": "string" },
+            "scores": { "type": "object", "additionalProperties": true }
+          }
+        }
+      }
+    },
+    "verification_method": {
+      "type": "string",
+      "enum": ["deterministic-tests", "llm-judge", "goal-state-env", "human"],
+      "description": "How the result was scored — drives the trust tier. deterministic-tests are independently re-runnable; llm-judge/goal-state/human are 'soft'."
+    }
+  }
+}

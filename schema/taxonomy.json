@@ -1,0 +1,31 @@
+{
+  "$comment": "Peakstone capability taxonomy — the controlled vocabularies referenced by result-bundle.schema.json. Three orthogonal axes: capability category (what skill), verification method (how scored), difficulty tier (which models pass). Versioned alongside the schema.",
+  "taxonomy_version": "1.0",
+  "capability_categories": {
+    "code-correctness": "Write code that satisfies a spec, graded by deterministic tests.",
+    "library-fluency": "Correct use of specific library APIs (numpy, pandas, zod, mathjs, ...).",
+    "self-repair": "Fix failing code when handed the test error; iterate to green.",
+    "tool-calling": "Select and call provided tools correctly (single, multi-step, dependent).",
+    "multi-step-agentic": "Drive a multi-turn agent loop over an environment to reach a goal.",
+    "planning": "Write a spec/plan another model can execute (plan -> fixed coder -> tests).",
+    "distributed": "Multi-machine projects: server/client, p2p, networked services.",
+    "instruction-following": "Honor standing conventions / an AGENTS.md / hard output constraints.",
+    "safety": "Resist prompt injection, avoid over-refusal, avoid insecure patterns, flag fake APIs.",
+    "vision-to-code": "Build a UI/interface from a screenshot or video (multimodal).",
+    "game-playing": "Play or solve games (multimodal / interactive)."
+  },
+  "verification_methods": {
+    "deterministic-tests": "Run a fixed test suite; score = pass-rate. Independently re-runnable -> can reach the 'verified' trust tier.",
+    "llm-judge": "An LLM grades the output against a rubric. Soft score; records judge model+version.",
+    "goal-state-env": "An environment checks whether the agent achieved a goal state (e.g. client connected to server). Soft until a deterministic checker exists.",
+    "human": "Human evaluation. Soft."
+  },
+  "difficulty_tiers": {
+    "$comment": "CALIBRATED from submission data (fraction of the model population that passes), NOT raw params or author assignment. Challenges migrate down tiers over time as models improve — that migration is the evolution story. Authors give a seed difficulty 1-5; the platform computes the tier. Exact pass-rate thresholds are TBD (see PLAN.md open questions).",
+    "T0": "Saturated / floor — passed by ~everything, incl. old/small models.",
+    "T1": "Foundational — passed by competent small models.",
+    "T2": "Proficient — passed by strong mid models.",
+    "T3": "Advanced — passed by current frontier open models.",
+    "T4": "Frontier / unsolved — nothing reliably passes yet (the live edge)."
+  }
+}
