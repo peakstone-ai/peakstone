@@ -165,6 +165,26 @@ Judge-based and goal-state results stay "soft" (judge identity/version recorded;
 - `users` (handle, pubkey, role).
 JSONB carries the open-schema bits (env, score breakdowns, future capability-specific fields).
 
+### 6a. Runs are faceted, never collapsed — "fits-my-hardware" leaderboards
+A **run** = a `submission` = one *fully-specified config* `(artifact + quant + ctx + serve/offload
+flags + hardware + driver + engine version)` scored on a suite. **We never pre-collapse runs** — a
+Q4@24GB run and a Q8@48GB run of the same model are distinct points. The leaderboard is therefore a
+**query with filters**, not a fixed table:
+- **Filter dimensions:** VRAM budget, quant, context length, min tok/s, hardware class, driver,
+  engine version, trust tier. Under an active filter, each family collapses to its **best
+  *qualifying* run**.
+- **Hero use case:** filter `≤24GB VRAM` → runs needing more (bigger quant / longer ctx) drop out,
+  surfacing the realistic ranking for that card. "Best coder that fits my 3090" = one query. Few
+  leaderboards answer this; for local models it's *the* question.
+- **VRAM filter semantics:** filter by a config's **minimum VRAM to run** (property of the config),
+  best evidenced by the smallest-VRAM run that achieved it — another reason to keep every run and
+  want multiple submitters (they collectively pin down each config's hardware envelope). Measured
+  tok/s stays hardware-specific, shown per run.
+- **Evolution chart:** runs plot separately by default; "group by family" and "best-per-family under
+  filter X" are display toggles — enabling e.g. *"evolution of models that fit 24GB"*.
+- **Calibration uses best-qualifying-run-per-family**, so a bad quant doesn't distort a challenge's
+  difficulty tier (we measure a family's capability at its best).
+
 ## 7. Monorepo layout
 ```
 /engine     today's bench/ harness, refactored into a library + CLI that emits result bundles
@@ -220,11 +240,14 @@ a local convenience for running your own models.
 - Identity: how submitters get a keypair/handle (GitHub OAuth + generated signing key?).
 - Transcript storage: inline vs. object store (S3-compatible) for large suites; retention.
 - Anti-gaming for non-deterministic/judge challenges (seed disclosure, multi-run medians).
-- "Model family" grouping rules (base model vs. fine-tunes vs. quants) for the evolution view —
-  feeds the `challenge_calibration.smallest_passing_params/oldest_passing_release` derivations.
-- Calibration mechanics: exact pass-rate thresholds for the T0–T4 bands, and the minimum number of
-  distinct models before a challenge's `calibrated_tier` is considered stable (vs. "provisional").
+- Calibration mechanics (DEFERRED until we build it): exact pass-rate thresholds for the T0–T4
+  bands, and the minimum number of distinct models before a `calibrated_tier` is "stable" vs.
+  "provisional".
+- `model_families` still needs grouping rules for the *family* node (base vs. fine-tunes), but
+  quants/ctx/hardware are NOT collapsed — they remain distinct runs (see §6a).
 
 > Resolved this round: **suite governance** — open corpus + admin-canonized versioned suites;
 > official leaderboards are per-(suite, version). **Difficulty** — empirical/calibrated tiers from
-> submission data, not author-assigned or param-bucketed.
+> submission data, not param-bucketed. **Run granularity** — every (quant, ctx, hardware, driver,
+> engine) is a distinct, never-collapsed run; the leaderboard is a faceted query, with a
+> "fits-my-hardware" (VRAM/perf) filter as a headline feature (§6a).
