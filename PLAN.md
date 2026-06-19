@@ -95,7 +95,48 @@ A challenge *declares* the capabilities it requires (e.g. `tool-calling`, `multi
 `networked-env`, `vision`). A model's per-category score is aggregated over the challenges it
 attempted in that category. The website's hero view = **per-category score vs. model release date**.
 The current `meta.toml` fields map directly: `category/type → capability category`,
-`scoring → verification method`, `difficulty → tier`.
+`scoring → verification method`, `difficulty → seed tier` (calibrated below).
+
+> **Category is *what* skill; difficulty is *which models pass*.** These are orthogonal. The simple
+> categories are stable (models just saturate them); the evolution happens along the difficulty axis.
+
+### 4a. Calibrated difficulty tiers (data-driven, not author-assigned)
+Authors give a **seed difficulty** at creation, but the canonical difficulty is **computed from
+submissions** — *what fraction of the model population passes it* — NOT raw parameter count
+(capability ≠ params: a strong 9B beats a weak 30B, MoE active≠total, quant & training-era dominate).
+We *show* the param/release-date correlation as a derived view, but bucket by demonstrated capability:
+
+| Tier | Name | Discriminates | Example (2026) |
+|---|---|---|---|
+| **T0** | Saturated / floor | ~everything, incl. old/small | fizzbuzz, palindrome |
+| **T1** | Foundational | competent small (good ~7–9B) | csv group-by, binary search-insert |
+| **T2** | Proficient | strong mid (~30B-class / good MoE) | LRU+TTL cache, zod/pydantic validation |
+| **T3** | Advanced | current frontier open models | architecture set (txn-KV, mini-SQL, scheduler) |
+| **T4** | Frontier / unsolved | nothing reliably passes yet | the live edge — where authors aim |
+
+Challenges **migrate down tiers over time** (T4→…→T0) as models improve — *that migration IS the
+evolution story*. Each challenge also exposes a derived stat **"smallest/oldest model that passes"**
+(the 10B/30B/80B intuition, as evidence). The corpus deliberately keeps **all** tiers including T0 —
+the trivial challenges are what discriminate *old/pre-coding-agent* models and anchor the floor of
+the evolution chart. (The 14 we pruned *locally* were pruned only for run-time; they belong in the
+platform corpus tagged T0.)
+
+### 4b. Challenge lifecycle & suite governance
+The **corpus** (every published challenge) is open; the **suite** (what counts officially) is curated.
+
+```
+author writes  ──►  submitted  ──►  review (admin + community: reference must pass in sandbox,
+                                     resource limits, dedupe)  ──►  published-to-CORPUS (runnable,
+                                     uncanonized)  ──►  admin CANONIZES into a versioned SUITE
+```
+- **Corpus** = all `published` challenges (any tier, any author). Anyone may run any subset to probe
+  models — useful for discovering where models differ before a challenge is official.
+- **Suite** = a named, **versioned**, admin-blessed selection (e.g. `official-coding-2026.06`).
+  **Official leaderboards & evolution charts are per-suite**, so a score always carries the exact
+  suite version it was measured on (this is what keeps "models improving over time" from being
+  confounded by the benchmark itself changing). Community/unofficial suites are allowed and labelled.
+- New challenges accrete mostly at the **T3/T4 frontier**; as the frontier saturates, admins cut a
+  new suite version that adds the harder challenges (older versions stay queryable for back-compat).
 
 ## 5. Trust / verification tiers
 - **self-reported** — any valid signed bundle. Shown, but visibly unverified.
@@ -108,9 +149,12 @@ Judge-based and goal-state results stay "soft" (judge identity/version recorded;
 ## 6. Data model (Postgres, abbreviated)
 - `model_families` (id, name, vendor, release_date, modality) — the thing the evolution chart plots.
 - `model_artifacts` (id, family_id, quant, hf_repo, hf_revision, file_sha256, params_total/active).
-- `challenges` (id, slug, category, verification, difficulty, capabilities[], content_hash, version,
-  spec, tests_ref, author_id, status: draft|review|published).
-- `suites` (id, name, version, content_hash, challenge_ids[]).
+- `challenges` (id, slug, category, verification, **seed_difficulty**, capabilities[], content_hash,
+  version, spec, tests_ref, author_id, status: draft|submitted|review|published).
+- `challenge_calibration` (materialized: challenge_id, **calibrated_tier** T0–T4, pass_rate,
+  smallest_passing_params, oldest_passing_release — recomputed from `results` as submissions arrive).
+- `suites` (id, name, version, content_hash, challenge_ids[], **official** bool, curator_id) — an
+  admin-canonized, versioned selection; leaderboards are scoped to a (suite, version).
 - `submissions` (id, submitter_id, artifact_id, engine, env JSONB, suite_id, bundle_hash, signature,
   submitted_at, trust_tier).
 - `results` (id, submission_id, challenge_id, challenge_hash, score JSONB, passed, total, tok_per_s,
@@ -174,8 +218,13 @@ a local convenience for running your own models.
 ## 11. Open questions to resolve as we build
 - Project name & domain; license.
 - Identity: how submitters get a keypair/handle (GitHub OAuth + generated signing key?).
-- Suite governance: who blesses the "official" suite version vs. community suites; how scores from
-  different suite versions are compared on the same chart.
 - Transcript storage: inline vs. object store (S3-compatible) for large suites; retention.
 - Anti-gaming for non-deterministic/judge challenges (seed disclosure, multi-run medians).
-- "Model family" grouping rules (base model vs. fine-tunes vs. quants) for the evolution view.
+- "Model family" grouping rules (base model vs. fine-tunes vs. quants) for the evolution view —
+  feeds the `challenge_calibration.smallest_passing_params/oldest_passing_release` derivations.
+- Calibration mechanics: exact pass-rate thresholds for the T0–T4 bands, and the minimum number of
+  distinct models before a challenge's `calibrated_tier` is considered stable (vs. "provisional").
+
+> Resolved this round: **suite governance** — open corpus + admin-canonized versioned suites;
+> official leaderboards are per-(suite, version). **Difficulty** — empirical/calibrated tiers from
+> submission data, not author-assigned or param-bucketed.
