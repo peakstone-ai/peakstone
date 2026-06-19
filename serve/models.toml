@@ -54,12 +54,17 @@ port  = 8089
 ctx   = 32768
 flags = "--temp 0.6 --top-p 0.95 -fa on --cache-type-k q8_0 --cache-type-v q8_0 --reasoning-budget 0"
 
-# 35B-A3B MoE (3.6B active -> ~172 tok/s). Multimodal; run text-only.
+# 35B-A3B MoE (3.6B active -> ~176 tok/s). Multimodal; run text-only. Fits fully in VRAM (21GB),
+# so unlike qwen3-coder-next it needs NO expert offload to run. Native ctx is 256K; 64K is free
+# (still 22.3GB / 176 tok/s all-GPU). To go LONGER, use the same --n-cpu-moe lever but in reverse
+# (offload experts to free VRAM for the bigger KV cache) — measured on the 4090, q8 KV:
+#   128K: add `-fit off --n-cpu-moe 8`  -> ~19.5GB, ~132 tok/s
+#   256K: add `-fit off --n-cpu-moe 12` -> ~20GB,   ~120 tok/s   (16 also works, slower)
 ["qwen3.6-35b-a3b"]
 repo  = "unsloth/Qwen3.6-35B-A3B-GGUF"
 file  = "models/qwen3.6-35b-a3b/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
 port  = 8091
-ctx   = 32768
+ctx   = 65536
 flags = "--temp 0.6 --top-p 0.95 -fa on --cache-type-k q8_0 --cache-type-v q8_0 --reasoning-budget 0"
 
 # Best small model in the lab (0.786): fully agentic out of the box.
