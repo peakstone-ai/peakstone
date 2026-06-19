@@ -196,34 +196,51 @@ def _leaderboard_md(results, meta) -> str:
         by_model = defaultdict(list)
         for r in coder_rows:
             by_model[r["model"]].append(r)
+        # "Code score" excludes the safety/honesty challenges (injection/refusal/hallucination/
+        # secure-code): those go in the Safety column + Shared axes, not blended into coding
+        # ability. A strong agentic coder can be a weak injection-resister (e.g. qwen3-coder-next) —
+        # don't let that drag down — or inflate — the headline coding number.
+        SAFETY = {"injection", "refusal", "hallucination", "secure-code"}
+        code_rows = lambda rs: [r for r in rs if r.get("scoring") not in SAFETY]
+        safety_rows = lambda rs: [r for r in rs if r.get("scoring") in SAFETY]
         ranked = sorted(by_model.items(),
-                        key=lambda kv: _avg([r["final_score"] for r in kv[1]]), reverse=True)
+                        key=lambda kv: _avg([r["final_score"] for r in code_rows(kv[1])]),
+                        reverse=True)
         coder_models = [m for m, _ in ranked]
 
         show_repair, show_adh = bool(meta.get("retries")), bool(meta.get("agents_md"))
+        has_safety = any(r.get("scoring") in SAFETY for r in coder_rows)
         head = ["Rank", "Model", "Code score", "Solved"]
         if show_repair:
             head.append("Self-repair")
         if show_adh:
             head.append("Adherence")
+        if has_safety:
+            head.append("Safety")
         head += ["tok/s", "total(s)", "VRAM(GB)"]
         lines += ["# Coder leaderboard", "",
-                  "Ranked by avg final score over the code-generation suite (the model writes the "
-                  "solution directly from each task)."
-                  + (f"  Self-repair = challenges recovered only after a `--retries "
-                     f"{meta['retries']}` feedback loop." if show_repair else "")
+                  "Ranked by avg final score over the **code** challenges only — safety/honesty "
+                  "(injection, refusal, hallucination, secure-code) is scored separately so the "
+                  "headline number is coding ability, not safety behaviour."
+                  + (f"  Self-repair = code challenges recovered only after a `--retries "
+                     f"{meta['retries']}` loop." if show_repair else "")
                   + ("  Adherence = avg obedience to the global AGENTS.md output contract."
-                     if show_adh else ""),
+                     if show_adh else "")
+                  + ("  Safety = avg score on injection/refusal/hallucination/secure-code "
+                     "(low = a safety gap, NOT a coding gap)." if has_safety else ""),
                   "", "| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
         for i, (m, rs) in enumerate(ranked, 1):
-            score = _avg([r["final_score"] for r in rs])
-            solved = sum(1 for r in rs if r["final_score"] >= 0.999)
-            cells = [str(i), m, f"{score:.3f}", f"{solved}/{len(rs)}"]
+            cr, sr = code_rows(rs), safety_rows(rs)
+            score = _avg([r["final_score"] for r in cr])
+            solved = sum(1 for r in cr if r["final_score"] >= 0.999)
+            cells = [str(i), m, f"{score:.3f}", f"{solved}/{len(cr)}"]
             if show_repair:
-                cells.append(f"+{sum(1 for r in rs if (r.get('passed_on_attempt') or 0) > 1)}")
+                cells.append(f"+{sum(1 for r in cr if (r.get('passed_on_attempt') or 0) > 1)}")
             if show_adh:
-                adh = _avg([r["global_adherence"] for r in rs if r.get("global_adherence") is not None])
+                adh = _avg([r["global_adherence"] for r in cr if r.get("global_adherence") is not None])
                 cells.append(f"{adh:.2f}")
+            if has_safety:
+                cells.append(f"{_avg([r['final_score'] for r in sr]):.2f}" if sr else "-")
             vram = max((r.get("vram_mib") or 0) for r in rs)
             cells += [f"{_avg([r.get('tok_per_s') for r in rs]):.0f}",
                       f"{sum((r.get('latency_s') or 0) for r in rs):.0f}",
