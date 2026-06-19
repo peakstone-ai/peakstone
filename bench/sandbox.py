@@ -57,13 +57,29 @@ def _node_env(node_bin: str | None) -> dict:
     return env
 
 
+# Cap address space per test subprocess so a runaway generated solution (e.g. an unbounded
+# allocation or infinite slice growth) fails its OWN test instead of OOM-ing the whole machine.
+# A model-written Go solution once made `go test` allocate 44GB and the global OOM-killer took
+# down the session. 12 GiB is far above any legitimate test's needs but well below catastrophe.
+_MEM_LIMIT_BYTES = int(os.environ.get("LLMLAB_TEST_MEM_LIMIT_GB", "12")) * 1024 ** 3
+
+
+def _apply_limits():  # runs in the forked child before exec; inherited by its children
+    import resource
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (_MEM_LIMIT_BYTES, _MEM_LIMIT_BYTES))
+    except (ValueError, OSError):
+        pass
+
+
 def _run(cmd: list[str], cwd: Path, timeout: int, env: dict) -> tuple[int, str, str, float, bool]:
     import time
     t0 = time.time()
     timed_out = False
     try:
         p = subprocess.run(
-            cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout
+            cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout,
+            preexec_fn=_apply_limits,
         )
         rc, out, err = p.returncode, p.stdout, p.stderr
     except subprocess.TimeoutExpired as e:
