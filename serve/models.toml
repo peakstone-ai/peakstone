@@ -103,19 +103,9 @@ ctx   = 262144
 # raise for concurrency at the cost of VRAM). Drop to --n-cpu-moe 36 if long-prompt processing OOMs.
 flags = "-fit off --n-cpu-moe 34 --parallel 1 -fa on --temp 0.7 --top-p 0.8 --top-k 20 --repeat-penalty 1.05"
 
-# Qwen3-Coder-Next at Q6 (vs the Q4_K_XL above) to test how much the Q4 quant costs on this
-# 80B-A3B — esp. whether the prompt-injection *compliance* (Q4 scored 0/3) is quant-driven.
-# UD-Q6_K is a 3-part split (~66GB total); point llama.cpp at part 00001 and it loads the rest.
-# 66GB > the 60GB free RAM, so pure --cpu-moe would page cold experts from NVMe; start there and
-# switch to partial GPU offload (`--n-cpu-moe N`, ~35) if it thrashes. Downloaded via:
-#   HF_HUB_ENABLE_HF_TRANSFER=0 hf download unsloth/Qwen3-Coder-Next-GGUF --include "UD-Q6_K/*" \
-#     --local-dir models/qwen3-coder-next-q6
-["qwen3-coder-next-q6"]
-repo  = "unsloth/Qwen3-Coder-Next-GGUF"
-file  = "models/qwen3-coder-next-q6/UD-Q6_K/Qwen3-Coder-Next-UD-Q6_K-00001-of-00003.gguf"
-port  = 8096
-ctx   = 32768
-flags = "--cpu-moe -fa on --temp 0.7 --top-p 0.8 --top-k 20 --repeat-penalty 1.05"
+# (Removed qwen3-coder-next-q6: A/B'd vs Q4_K_XL — Q6 wasn't better on code, didn't fix the
+# injection compliance, and was slower; the tuned Q4 above wins. Re-add by downloading
+# `--include "UD-Q6_K/*"` from unsloth/Qwen3-Coder-Next-GGUF if ever needed.)
 
 # PLANNER: GLM-4.7-Flash with THINKING ON (note: no --reasoning-budget 0) for writing specs /
 # architecture that qwen3-coder then executes. Same weights as glm-4.7-flash (no extra download).
