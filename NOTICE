@@ -1,0 +1,15 @@
+Peakstone
+Copyright 2026 The Peakstone Authors
+
+This product includes software developed by the Peakstone project and its contributors,
+licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Peakstone — a public, reproducible benchmark platform that tracks the evolution of open-model
+capabilities, from simple verifiable assignments to complex iterated projects.
+https://peakstone.ai
+
+Submitted benchmark result data is published under CC-BY-4.0 (see DATA-LICENSE.md), separate from
+the Apache-2.0 software license above.
+
+Portions of this repository originated as a local coding-LLM benchmarking harness; see the git
+history for provenance.

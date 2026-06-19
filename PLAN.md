@@ -1,9 +1,13 @@
-# PLAN.md — Open Model Capability Benchmark Platform
+# PLAN.md — Peakstone
 
-> Working name: **OpenAgentBench** (TBD). A public, reproducible benchmark *platform* that tracks
-> the evolution of open models' real capabilities — from solving simple verifiable assignments to
+> **Peakstone** (peakstone.ai) — a public, reproducible benchmark *platform* that tracks the
+> evolution of open models' real capabilities — from solving simple verifiable assignments to
 > (eventually) one-shotting complex multi-machine projects via iteration. Community-run, community-
 > authored, independently reproducible.
+>
+> The name: tsunami "high-water-mark" stones record how far the wave reached; Peakstone records how
+> far the capability *frontier* has reached — permanent, reproducible markers ("set in stone") of a
+> moving peak.
 
 ## 1. Context & vision
 
@@ -236,9 +240,10 @@ a local convenience for running your own models.
 5. Next.js skeleton with the overall leaderboard reading from the API; backfill our `results/`.
 
 ## 11. Open questions to resolve as we build
-- Project name & domain (license **decided**: Apache-2.0 for all code + challenges via DCO;
-  CC-BY-4.0 for submitted result data; name reserved as trademark — `NOTICE` + `TRADEMARK.md` land
-  once the name is picked). Copyright holder for headers/NOTICE TBD (personal name vs. an org/entity).
+- ~~Project name & domain~~ **DECIDED: Peakstone / peakstone.ai.** License: Apache-2.0 (code +
+  challenges, via DCO) + CC-BY-4.0 (result data); name reserved as trademark (`NOTICE`,
+  `TRADEMARK.md` in place). Copyright holder = **The Peakstone Authors** (swap to a personal name or
+  formed entity later if desired). Still TODO: grab GitHub org `peakstone` + PyPI `peakstone`.
 - Identity: how submitters get a keypair/handle (GitHub OAuth + generated signing key?).
 - Transcript storage: inline vs. object store (S3-compatible) for large suites; retention.
 - Anti-gaming for non-deterministic/judge challenges (seed disclosure, multi-run medians).

@@ -10,7 +10,7 @@ leaderboard / evolution datasets produced by the platform — is licensed under 
 <https://creativecommons.org/licenses/by/4.0/>
 
 You are free to share and adapt this data, including for commercial use, provided you give
-appropriate attribution (e.g. "Source: ⟨PROJECT NAME⟩, <url>"), link to the license, and indicate
+appropriate attribution (e.g. "Source: Peakstone, https://peakstone.ai"), link to the license, and indicate
 if changes were made.
 
 By submitting a result bundle to the platform you agree that its scores and metadata may be
