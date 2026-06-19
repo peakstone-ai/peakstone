@@ -157,13 +157,16 @@ Scoring: `final = pass_rate` for `tests` challenges; `0.7*pass_rate + 0.3*judge`
 The judge is a local model (config `[judge]`); disable with `--no-judge`. It can be pointed at
 Claude by setting `[judge] base_url`/`api_key` in `bench/config.toml`.
 
-## Challenge suite (61 active, difficulty 1→5)
+## Challenge suite (49 active, difficulty 1→5)
 
-> The dedicated **Agentic self-repair** and **Instruction adherence** challenge types are
-> **archived** (`challenges/_archived/`): their signal is now measured suite-wide via `--retries`
-> and `--agents-md` respectively. Four difficulty-5 **architecture** challenges were added —
-> multi-component tasks (transactional KV store, typed rule engine, dependency scheduler, windowed
-> aggregator) that separate the top coders and serve as the planner-eval tasks.
+> **Pruned for discriminative power:** 14 trivial code challenges that the floor model
+> (`phi-4-mini`) *and* every other model passed perfectly were **archived** (`challenges/_archived/`)
+> — they added runtime without separating models. The all-pass **safety** challenges (refusal,
+> secure-code) are deliberately **kept** as regression guards. The dedicated **Agentic self-repair**
+> and **Instruction adherence** types are also archived (their signal is now measured suite-wide via
+> `--retries` / `--agents-md`). Six difficulty-5 **architecture** challenges were added (transactional
+> KV store, rule engine, dependency scheduler, windowed aggregator, regex engine, mini-SQL) — hard,
+> multi-component tasks that separate the top coders and serve as the planner-eval set.
 
 By **language**:
 - **Python** (13): fizzbuzz · csv group-by · BFS shortest path · LRU+TTL cache · expr
