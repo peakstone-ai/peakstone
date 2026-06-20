@@ -270,11 +270,13 @@ def authorize_url(provider: str, redirect_uri: str = Query(...), state: str = Qu
 def account_bind(body: dict = Body(...), db: Session = Depends(get_session)):
     """Bind a key to an account: requires both a signed nonce (key proof) and an OAuth code."""
     try:
-        return identity.bind(
-            db, provider=body["provider"], pubkey=body["pubkey"], nonce=body["nonce"],
-            signature=body["signature"], code=body["code"], redirect_uri=body["redirect_uri"])
+        fields = {k: body[k] for k in ("provider", "pubkey", "nonce", "signature", "code", "redirect_uri")}
     except KeyError as e:
         raise HTTPException(400, f"missing field {e}")
+    if not all(isinstance(v, str) for v in fields.values()):
+        raise HTTPException(400, "all bind fields must be strings")
+    try:
+        return identity.bind(db, **fields)
     except identity.BindError as e:
         msg = str(e)
         raise HTTPException(503 if "not configured" in msg else 400, msg)

@@ -91,9 +91,12 @@ def test_submission_trust_chain(client):
 
 def test_community_verified_promotion(client):
     ap, a = _newkey(); bp, b = _newkey()
+    # Sybil resistance: promotion needs distinct BOUND accounts, so bind the two keys first
+    assert _bind(client, ap, a, "cv-a", {"account_id": "cv-acct-a", "handle": "cva"}).status_code == 200
+    assert _bind(client, bp, b, "cv-b", {"account_id": "cv-acct-b", "handle": "cvb"}).status_code == 200
     client.post("/submissions", json=_bundle("modelX", [0.5, 0.5, 0.5], 24, ap, a, "X"))
     assert _tiers(client, "modelX") == ["self-reported"]
-    # a second, distinct identity reproduces the same deterministic result vector -> both promoted
+    # a second, distinct bound identity reproduces the same deterministic result vector -> both promoted
     client.post("/submissions", json=_bundle("modelX", [0.5, 0.5, 0.5], 16, bp, b, "X"))
     assert _tiers(client, "modelX") == ["community-verified"]
     # a divergent result (different scores) is NOT a reproduction -> stays self-reported
@@ -101,6 +104,20 @@ def test_community_verified_promotion(client):
     client.post("/submissions", json=_bundle("modelX", [0.9, 0.9, 0.9], 24, cp, c, "X"))
     divergent = [r for r in client.get("/models/modelX").json()["runs"] if r["code_score"] > 0.8][0]
     assert divergent["run"]["trust_tier"] == "self-reported"
+
+
+def test_rejects_non_finite_score(client):
+    import json
+    import math
+    ap, a = _newkey()
+    b = _bundle("nanModel", [0.5], 24, ap, a, "NF")
+    # NaN slips through the schema's min/max (all NaN comparisons are False) but must be rejected
+    b["results"][0]["score"]["final"] = math.nan
+    b["bundle_hash"] = bundle._sha256_bytes(bundle.canonical_bytes(bundle._without_sig(b)))
+    b["submitter"]["signature"] = keys.sign(ap, b["bundle_hash"].encode())
+    # post raw JSON (json.dumps emits `Infinity`; the test client's json= would refuse to serialize it)
+    r = client.post("/submissions", content=json.dumps(b), headers={"content-type": "application/json"})
+    assert r.status_code == 400 and "non-finite" in r.json()["detail"]
 
 
 def test_account_binding_and_submitter_handle(client):
@@ -236,12 +253,12 @@ def test_challenge_moderation_flow(client):
         "pubkey": admin, "signature": keys.sign(admin_p, f"approve:{chash}".encode()),
         "decision": "approve"}).status_code == 409
 
-    # deprecate (admin-signed) flips status; non-admin can't
+    # deprecate (admin-signed, version-bound) flips status; non-admin can't
     assert client.post("/challenges/py-moderate/deprecate", json={
-        "pubkey": author, "signature": keys.sign(author_p, b"deprecate:py-moderate"),
+        "pubkey": author, "signature": keys.sign(author_p, b"deprecate:py-moderate:1"),
         "decision": "x"}).status_code == 403
     dep = client.post("/challenges/py-moderate/deprecate", json={
-        "pubkey": admin, "signature": keys.sign(admin_p, b"deprecate:py-moderate")})
+        "pubkey": admin, "signature": keys.sign(admin_p, b"deprecate:py-moderate:1")})
     assert dep.status_code == 200 and dep.json()["deprecated"] is True
 
 

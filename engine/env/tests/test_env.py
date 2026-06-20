@@ -50,6 +50,15 @@ def test_local_reference_reaches_goal_state(challenge):
     assert res["provenance"]["provider"] == "local"
 
 
+def test_local_write_file_contains_path_traversal():
+    from engine.env import EnvSpec, LocalProvider, NodeSpec
+    with LocalProvider().provision(EnvSpec("trav", nodes=[NodeSpec("a")])) as env:
+        n = env.node("a")
+        assert "error" in n.write_file("../escape.txt", "x")       # sibling escape rejected
+        assert "error" in n.write_file("../../etc/pwned", "x")     # deeper traversal rejected
+        assert n.write_file("sub/ok.txt", "y").get("ok") is True   # normal nested path works
+
+
 def test_verifier_discriminates_a_broken_client(challenge):
     # a client that writes the wrong bytes must FAIL the goal-state check (the verifier has teeth)
     files = copy.deepcopy(challenge.reference_files())

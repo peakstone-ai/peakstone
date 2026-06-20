@@ -49,7 +49,7 @@ class RunResult:
 # helpers
 # --------------------------------------------------------------------------- #
 def _node_env(node_bin: str | None) -> dict:
-    env = dict(os.environ)
+    env = _sanitized_environ()
     if node_bin:
         nb = os.path.expanduser(node_bin)
         env["PATH"] = nb + os.pathsep + env.get("PATH", "")
@@ -74,6 +74,17 @@ _MEM_LIMIT_BYTES = int(os.environ.get("PEAKSTONE_TEST_MEM_LIMIT_GB", "24")) * 10
 # Largest file a test process may create (a runaway / malicious solution writing an unbounded file
 # would otherwise fill the disk). Generous for legit temp output. Override via env.
 _FSIZE_LIMIT_BYTES = int(os.environ.get("PEAKSTONE_TEST_FSIZE_LIMIT_GB", "2")) * 1024 ** 3
+# Fork-bomb cap. NOTE: RLIMIT_NPROC is per-real-UID (counts ALL the user's processes), so the limit
+# is generous; lower it via env on a dedicated runner. Combined with process-group kill on timeout.
+_NPROC_LIMIT = int(os.environ.get("PEAKSTONE_TEST_NPROC_LIMIT", "512"))
+
+# Untrusted test code must not inherit harness secrets. Strip anything that looks like a credential
+# (HF_TOKEN, *_API_KEY, AWS_SECRET_*, etc.) from the environment handed to the subprocess.
+_SECRET_RE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL", re.I)
+
+
+def _sanitized_environ() -> dict:
+    return {k: v for k, v in os.environ.items() if not _SECRET_RE.search(k)}
 
 
 def _apply_limits():  # runs in the forked child before exec; inherited by its children
@@ -81,6 +92,7 @@ def _apply_limits():  # runs in the forked child before exec; inherited by its c
     for res, soft_hard in (
         (resource.RLIMIT_AS, (_MEM_LIMIT_BYTES, _MEM_LIMIT_BYTES)),       # address space (memory)
         (resource.RLIMIT_FSIZE, (_FSIZE_LIMIT_BYTES, _FSIZE_LIMIT_BYTES)),  # max file size written
+        (resource.RLIMIT_NPROC, (_NPROC_LIMIT, _NPROC_LIMIT)),            # fork-bomb cap
         (resource.RLIMIT_CORE, (0, 0)),                                   # no core dumps
     ):
         try:
@@ -90,28 +102,34 @@ def _apply_limits():  # runs in the forked child before exec; inherited by its c
 
 
 def _run(cmd: list[str], cwd: Path, timeout: int, env: dict) -> tuple[int, str, str, float, bool]:
+    import signal
     import time
     t0 = time.time()
     timed_out = False
     try:
-        p = subprocess.run(
-            cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout,
-            preexec_fn=_apply_limits,
-        )
-        rc, out, err = p.returncode, p.stdout, p.stderr
-    except subprocess.TimeoutExpired as e:
-        rc, out, err, timed_out = 124, (e.stdout or ""), (e.stderr or "") + "\n[TIMEOUT]", True
-        if isinstance(out, bytes):
-            out = out.decode(errors="replace")
-        if isinstance(err, bytes):
-            err = err.decode(errors="replace")
+        # start_new_session puts the child in its own process group so a timeout kills the WHOLE
+        # tree (go/cargo/tsx spawn grandchildren that subprocess.run would otherwise orphan).
+        p = subprocess.Popen(cmd, cwd=cwd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                             text=True, preexec_fn=_apply_limits, start_new_session=True)
     except FileNotFoundError as e:
-        rc, out, err = 127, "", f"command not found: {e}"
-    # Keep enough output that per-test pass/fail counts stay accurate: a large suite's
-    # `go test -json` / TAP stream can exceed a few KB, and truncating the HEAD would drop
-    # early test events and undercount passes. (Stored stdout is re-truncated to ~4KB at the
-    # row level, so this larger cap only protects counting, not result.json size.)
-    return rc, out[-200_000:], err[-200_000:], round(time.time() - t0, 2), timed_out
+        return 127, "", f"command not found: {e}", round(time.time() - t0, 2), False
+    try:
+        out, err = p.communicate(timeout=timeout)
+        rc = p.returncode
+    except subprocess.TimeoutExpired:
+        timed_out, rc = True, 124
+        try:
+            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            p.kill()
+        try:
+            out, err = p.communicate(timeout=5)
+        except subprocess.TimeoutExpired:
+            out, err = "", ""
+        err = (err or "") + "\n[TIMEOUT]"
+    # Keep enough output that per-test pass/fail counts stay accurate (a large `go test -json` / TAP
+    # stream; stored stdout is re-truncated to ~4KB at the row level).
+    return rc, (out or "")[-200_000:], (err or "")[-200_000:], round(time.time() - t0, 2), timed_out
 
 
 def _run_measured(cmd: list[str], cwd: Path, timeout: int, env: dict):
@@ -177,7 +195,7 @@ def _write_solution(workdir: Path, files: dict[str, str]) -> None:
 def _run_python(workdir, ch, files, timeout, cfg):
     _write_solution(workdir, files)
     _place_tests(workdir, ch.dir, at_root=True)
-    env = dict(os.environ)
+    env = _sanitized_environ()
     env["PYTHONPATH"] = str(workdir) + os.pathsep + env.get("PYTHONPATH", "")
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     rc, out, err, dur, _, rss = _run_measured(
@@ -237,7 +255,7 @@ def _run_go(workdir, ch, files, timeout, cfg):
     _place_tests(workdir, ch.dir, at_root=True)
     if not (workdir / "go.mod").exists():
         (workdir / "go.mod").write_text("module challenge\n\ngo 1.21\n")
-    env = dict(os.environ)
+    env = _sanitized_environ()
     cache = workdir / ".gocache"
     env.update(GOCACHE=str(cache), GOPATH=str(workdir / ".gopath"),
                GOFLAGS="-count=1", GOPROXY="off", GO111MODULE="on")
@@ -269,7 +287,7 @@ def _run_rust(workdir, ch, files, timeout, cfg):
         '[package]\nname = "challenge"\nversion = "0.1.0"\nedition = "2021"\n\n'
         '[lib]\npath = "src/lib.rs"\n'
     )
-    env = dict(os.environ)
+    env = _sanitized_environ()
     env.update(CARGO_HOME=str(workdir / ".cargo"), CARGO_NET_OFFLINE="true")
     # cargo links test binaries via a C compiler; point it at the conda gcc if no `cc`.
     if not shutil.which("cc"):

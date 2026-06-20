@@ -19,6 +19,15 @@ from .base import Environment, EnvironmentProvider, EnvSpec, Node, NodeSpec, Run
 from .capabilities import PROVIDER_CAPS, Capabilities
 
 WORK = "/work"
+
+
+def _rooted(path: str) -> str:
+    """Contain an (untrusted) path under WORK, collapsing any `..` traversal. Anchoring with a
+    leading '/' before normpath makes `../etc` collapse to `/etc` → stays under WORK."""
+    norm = os.path.normpath("/" + path.lstrip("/"))
+    return WORK + norm
+
+
 # privileged sidecar image with tc (iproute2) + iptables, used to apply link conditions inside a
 # node's network namespace so the node containers themselves stay unprivileged + tool-free.
 NETSHAPE_IMAGE = os.environ.get("PEAKSTONE_NETSHAPE_IMAGE", "nicolaka/netshoot")
@@ -43,15 +52,20 @@ class DockerNode(Node):
         return _compose(self._env.project, self._env.dir, "exec", *flags, self.name,
                         "sh", "-c", sh, input=stdin, timeout=timeout)
 
+    def _exec_argv(self, argv: list[str], *, stdin: str | None = None, timeout: int = 60):
+        """Exec with no shell interpolation — the (untrusted) path travels as argv, not as a string."""
+        return _compose(self._env.project, self._env.dir, "exec", "-T", self.name, *argv,
+                        input=stdin, timeout=timeout)
+
     def write_file(self, path: str, content: str) -> dict:
-        path = path.lstrip("/")
-        r = self._exec(f"mkdir -p {WORK}/$(dirname '{path}') 2>/dev/null; cat > {WORK}/{path}",
-                       stdin=content if content is not None else "")
+        # path is untrusted (model output): contain it under WORK and pass as argv, never shell-interp
+        target = _rooted(path)
+        r = self._exec_argv(["sh", "-c", 'mkdir -p "$(dirname "$1")" 2>/dev/null; cat > "$1"', "sh", target],
+                            stdin=content if content is not None else "")
         return {"ok": True, "path": path} if r.returncode == 0 else {"error": r.stderr[-500:]}
 
     def read_file(self, path: str) -> dict:
-        path = path.lstrip("/")
-        r = self._exec(f"cat {WORK}/{path}")
+        r = self._exec_argv(["cat", _rooted(path)])
         return {"content": r.stdout} if r.returncode == 0 else {"error": f"no such file: {path}"}
 
     def run(self, cmd: str, *, background: bool = False, timeout: int = 30) -> RunResult:

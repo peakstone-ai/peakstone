@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -24,7 +25,8 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const agentPort = 1024 // fixed; the host connects to this vsock port
+const agentPort = 1024     // fixed; the host connects to this vsock port
+const maxRequest = 8 << 20 // cap one request so a never-newline client can't buffer unbounded
 
 type req struct {
 	Op         string            `json:"op"`
@@ -61,6 +63,8 @@ func main() {
 			logln("accept: %v", err)
 			continue
 		}
+		// recv timeout: a stalled/half-open client can't pin a goroutine forever
+		_ = unix.SetsockoptTimeval(nfd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &unix.Timeval{Sec: 30})
 		go handle(nfd)
 	}
 }
@@ -98,7 +102,7 @@ func reap() { // PID 1 must reap orphaned children
 func handle(fd int) {
 	f := os.NewFile(uintptr(fd), "vsock")
 	defer f.Close()
-	line, err := bufio.NewReaderSize(f, 1<<20).ReadBytes('\n')
+	line, err := bufio.NewReaderSize(io.LimitReader(f, maxRequest), 64<<10).ReadBytes('\n')
 	if err != nil && len(line) == 0 {
 		return
 	}

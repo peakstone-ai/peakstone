@@ -278,7 +278,9 @@ def produce_bundle(meta: dict, results: list[dict], *, harness_version: str = "0
     chash = challenge_hashes(ROOT / "challenges")
 
     bundle_results = [_result(r, chash, meta.get("judge")) for r in results]
-    suite_hash = _sha256_bytes("".join(sorted(r["challenge_hash"] for r in bundle_results)).encode())
+    # hash the sorted list as canonical JSON (self-delimiting) — bare concatenation is ambiguous
+    # (["ab","c"] and ["a","bc"] would collide) for a value that pins the exact challenge set.
+    suite_hash = _sha256_bytes(canonical_bytes(sorted(r["challenge_hash"] for r in bundle_results)))
 
     bundle: dict = {
         "bundle_version": BUNDLE_VERSION,

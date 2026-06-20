@@ -150,24 +150,33 @@ def vsock_request(uds_path: str, port: int, req: dict, *, timeout: float = 30.0)
     s.settimeout(timeout)
     try:
         s.connect(uds_path)
+        reader = _LineReader(s)   # buffers across reads — the ack and the JSON reply may share a recv
         s.sendall(f"CONNECT {port}\n".encode())
-        ack = _read_line(s)
+        ack = reader.readline()
         if not ack.startswith("OK"):
             return {"error": f"vsock CONNECT refused: {ack!r}"}
         s.sendall(json.dumps(req).encode() + b"\n")
-        return json.loads(_read_line(s) or "{}")
+        return json.loads(reader.readline() or "{}")
     finally:
         s.close()
 
 
-def _read_line(s: socket.socket) -> str:
-    buf = bytearray()
-    while b"\n" not in buf:
-        chunk = s.recv(65536)
-        if not chunk:
-            break
-        buf.extend(chunk)
-    return buf.split(b"\n", 1)[0].decode("utf-8", "replace")
+class _LineReader:
+    """Newline-framed reader that keeps bytes received past a line boundary, so the CONNECT ack and
+    the JSON response don't desync when they arrive in the same packet."""
+    def __init__(self, sock: socket.socket):
+        self._sock = sock
+        self._buf = bytearray()
+
+    def readline(self) -> str:
+        while b"\n" not in self._buf:
+            chunk = self._sock.recv(65536)
+            if not chunk:
+                break
+            self._buf.extend(chunk)
+        line, sep, rest = bytes(self._buf).partition(b"\n")
+        self._buf = bytearray(rest)
+        return line.decode("utf-8", "replace")
 
 
 class FirecrackerNode(Node):
@@ -217,18 +226,22 @@ class FirecrackerEnvironment(Environment):
         self._ip: dict[str, str] = {}
         self._tap: dict[str, str] = {}
         self._applied_net: dict = {}
-        if networked:
-            taps = available_taps()
-            if len(taps) < len(spec.nodes):
-                raise UnsupportedHost([f"need {len(spec.nodes)} taps, pool has {len(taps)} "
-                                       f"({FC_TAP_PREFIX}*) — grow it in fc-net-setup.sh"])
-            for i, n in enumerate(spec.nodes):
-                self._ip[n.name] = f"{FC_SUBNET}.{GUEST_IP_BASE + i}"
-                self._tap[n.name] = taps[i]
-        for n in spec.nodes:
-            self._boot(n)
-        if networked:
-            self._configure_network()
+        try:
+            if networked:
+                taps = available_taps()
+                if len(taps) < len(spec.nodes):
+                    raise UnsupportedHost([f"need {len(spec.nodes)} taps, pool has {len(taps)} "
+                                           f"({FC_TAP_PREFIX}*) — grow it in fc-net-setup.sh"])
+                for i, n in enumerate(spec.nodes):
+                    self._ip[n.name] = f"{FC_SUBNET}.{GUEST_IP_BASE + i}"
+                    self._tap[n.name] = taps[i]
+            for n in spec.nodes:
+                self._boot(n)
+            if networked:
+                self._configure_network()
+        except BaseException:
+            self.teardown()   # don't leak booted VMs / temp dir / vsock sockets on partial failure
+            raise
 
     def _node_env(self, n: NodeSpec) -> dict:
         env: dict[str, str] = {}
@@ -260,7 +273,7 @@ class FirecrackerEnvironment(Environment):
         self._procs.append(p)
         self.nodes[n.name] = FirecrackerNode(n.name, uds, ip=self._ip.get(n.name),
                                              env=self._node_env(n))
-        self._wait_agent(n.name, uds, deadline=time.monotonic() + 30)
+        self._wait_agent(n.name, uds, p, deadline=time.monotonic() + 30)
 
     def _configure_network(self) -> None:
         """Bring up each guest's eth0 with its assigned IP and a hosts file so peers resolve by name."""
@@ -293,8 +306,11 @@ class FirecrackerEnvironment(Environment):
                                            "skipped": "guest kernel lacks sch_netem (shaping routes to docker)"})
         return applied
 
-    def _wait_agent(self, name: str, uds: str, deadline: float) -> None:
+    def _wait_agent(self, name: str, uds: str, proc: subprocess.Popen, deadline: float) -> None:
         while time.monotonic() < deadline:
+            if proc.poll() is not None:   # firecracker died (kernel panic / bad config) — fail fast
+                raise RuntimeError(f"firecracker for '{name}' exited rc={proc.returncode} "
+                                   f"(see {self._dir}/{name}.console)")
             if os.path.exists(uds):
                 r = vsock_request(uds, AGENT_PORT, {"op": "ping"}, timeout=3)
                 if r.get("ok"):

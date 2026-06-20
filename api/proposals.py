@@ -41,15 +41,27 @@ def _get_or_create_key(db, pubkey: str) -> models.Key:
 
 
 def propose(db, p: dict) -> models.ChallengeProposal:
-    # 1) structure
+    # 1) structure + type/size validation (untrusted internet input: bad types must 400, not 500,
+    # and the unauthenticated endpoint must not accept unbounded payloads)
     for k in ("slug", "language", "spec", "files", "content_hash", "submitter"):
         if not p.get(k):
             raise ProposalError(f"missing required field {k!r}")
+    for k in ("slug", "language", "spec", "content_hash"):
+        if not isinstance(p[k], str):
+            raise ProposalError(f"field {k!r} must be a string")
+    if p.get("title") is not None and not isinstance(p["title"], str):
+        raise ProposalError("field 'title' must be a string")
     if p["language"] not in _SUPPORTED_LANGS:
         raise ProposalError(f"unsupported language {p['language']!r}")
+    if len(p["slug"]) > 128 or len(p["spec"]) > 200_000:
+        raise ProposalError("slug or spec too large")
     files = p["files"]
     if not isinstance(files, dict):
         raise ProposalError("files must be an object of {path: content}")
+    if len(files) > 200 or not all(isinstance(k, str) and isinstance(v, str) for k, v in files.items()):
+        raise ProposalError("files must be {string path: string content} (max 200 entries)")
+    if sum(len(k) + len(v) for k, v in files.items()) > 4_000_000:
+        raise ProposalError("proposal files too large (>4MB)")
     if not any(k.startswith("tests/") for k in files):
         raise ProposalError("proposal has no tests/ files")
     if not any(k.startswith("reference/") for k in files):
@@ -108,6 +120,11 @@ def review(db, proposal_id: int, *, pubkey: str, signature: str, decision: str,
             ch = models.Challenge(id=prop.slug)
             db.add(ch)
         else:
+            # don't let an approval silently re-author someone else's *published* challenge by
+            # reusing its slug. Lazily-created corpus rows (author_key_id None) are fine to populate.
+            if (ch.status == "published" and ch.author_key_id is not None
+                    and ch.author_key_id != prop.author_key_id):
+                raise ProposalError(f"slug {prop.slug!r} is already published by a different author")
             ch.version = (ch.version or 1) + 1  # re-approval of a slug bumps the version
         ch.title = prop.title
         ch.language = prop.language
@@ -127,7 +144,11 @@ def deprecate(db, challenge_id: str, *, pubkey: str, signature: str,
     ch = db.get(models.Challenge, challenge_id)
     if not ch:
         raise ProposalError(f"unknown challenge {challenge_id!r}")
-    if not identity.verify_admin_action(pubkey, signature, f"deprecate:{challenge_id}"):
+    if ch.deprecated:
+        raise ProposalError(f"challenge {challenge_id!r} is already deprecated")
+    # bind the version into the signed message so a captured signature can't be replayed after the
+    # challenge is later re-published (which resets version/deprecated)
+    if not identity.verify_admin_action(pubkey, signature, f"deprecate:{challenge_id}:{ch.version}"):
         raise AdminError("not authorized: action must be signed by an admin key")
     ch.deprecated = True
     ch.status = "deprecated"

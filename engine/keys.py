@@ -26,12 +26,18 @@ def _b64(b: bytes) -> str:
 def load_or_create_keypair() -> tuple[Ed25519PrivateKey, str]:
     """Return (private_key, public_key_b64), generating + persisting a key on first use."""
     if KEY_PATH.exists():
-        priv = Ed25519PrivateKey.from_private_bytes(base64.b64decode(KEY_PATH.read_text().strip()))
+        try:
+            priv = Ed25519PrivateKey.from_private_bytes(base64.b64decode(KEY_PATH.read_text().strip()))
+        except Exception as e:  # noqa: BLE001
+            raise RuntimeError(f"corrupt signing key at {KEY_PATH}; remove it to regenerate ({e})")
     else:
         priv = Ed25519PrivateKey.generate()
         KEY_DIR.mkdir(parents=True, exist_ok=True)
-        KEY_PATH.write_text(_b64(priv.private_bytes_raw()))
-        os.chmod(KEY_PATH, 0o600)
+        os.chmod(KEY_DIR, 0o700)
+        # create with 0600 atomically (O_EXCL) — never a world-readable window for the private key
+        fd = os.open(KEY_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "w") as f:
+            f.write(_b64(priv.private_bytes_raw()))
     return priv, public_key_b64(priv)
 
 

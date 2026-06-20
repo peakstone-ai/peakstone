@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 
 from sqlalchemy import select
@@ -64,7 +65,10 @@ def _recompute_trust(db, sub: models.Submission) -> None:
         models.Submission.suite_version == sub.suite_version,
         models.Submission.repro_sig == sub.repro_sig,
     )).all()
-    identities = {_identity_of(db, s) for s in group}
+    # Sybil resistance: only ACCOUNT-BOUND identities count. Unbound keys are free to mint, so
+    # counting them would let one actor self-promote with N throwaway keypairs. Community-verified
+    # therefore requires ≥N distinct bound accounts (bind a GitHub account to participate).
+    identities = {i for i in (_identity_of(db, s) for s in group) if i.startswith("user:")}
     if len(identities) < COMMUNITY_MIN_IDENTITIES:
         return
     for s in group:
@@ -98,6 +102,13 @@ def ingest_bundle(db, b: dict) -> models.Submission:
         eng_bundle._validate(b)
     except Exception as e:  # noqa: BLE001
         raise IngestError(f"schema invalid: {e}")
+
+    # 1b) reject non-finite scores: NaN/Infinity validate as JSON `number` but poison every aggregate
+    # (NaN >= 0.999 is always False; sorting on NaN is undefined) and corrupt the DB.
+    for r in b.get("results", []):
+        for v in (r.get("score", {}) or {}).values():
+            if isinstance(v, float) and not math.isfinite(v):
+                raise IngestError("non-finite score value (NaN/Infinity)")
 
     # 2) content-address: re-derive bundle_hash and require a match
     claimed = b.get("bundle_hash")

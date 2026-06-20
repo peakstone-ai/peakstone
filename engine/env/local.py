@@ -6,7 +6,9 @@ no-internet isolation. The same EnvSpec runs unchanged on both.
 from __future__ import annotations
 
 import os
+import re
 import shutil
+import signal
 import socket
 import subprocess
 import tempfile
@@ -15,6 +17,19 @@ from pathlib import Path
 
 from .base import Environment, EnvironmentProvider, EnvSpec, Node, NodeSpec, RunResult
 from .capabilities import PROVIDER_CAPS, Capabilities
+
+_SECRET_RE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL", re.I)
+
+
+def _killpg(p: subprocess.Popen) -> None:
+    """SIGKILL the whole process group (node programs spawn children)."""
+    try:
+        os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+    except (ProcessLookupError, OSError):
+        try:
+            p.kill()
+        except OSError:
+            pass
 
 
 def _free_port() -> int:
@@ -37,8 +52,10 @@ class LocalNode(Node):
         return "127.0.0.1"
 
     def _safe(self, path: str) -> Path:
+        # proper containment: a string-prefix check would let `../node1-evil/x` pass for node `node1`
+        root = self._dir.resolve()
         p = (self._dir / path.lstrip("/")).resolve()
-        if not str(p).startswith(str(self._dir.resolve())):
+        if p != root and root not in p.parents:
             raise ValueError("path escapes node workdir")
         return p
 
@@ -61,7 +78,8 @@ class LocalNode(Node):
         return {"content": p.read_text()}
 
     def _proc_env(self) -> dict:
-        env = dict(os.environ)
+        # strip harness secrets — node programs are untrusted model output
+        env = {k: v for k, v in os.environ.items() if not _SECRET_RE.search(k)}
         env.update(self._env)
         env.pop("http_proxy", None)
         env.pop("https_proxy", None)
@@ -72,16 +90,18 @@ class LocalNode(Node):
             log = self._dir / f".log-{len(self._bg)}"
             fh = open(log, "wb")
             p = subprocess.Popen(cmd, cwd=self._dir, env=self._proc_env(), shell=True,
-                                 stdout=fh, stderr=subprocess.STDOUT)
+                                 stdout=fh, stderr=subprocess.STDOUT, start_new_session=True)
             self._bg.append((p, log))
             return RunResult(0, stdout=f"[started pid {p.pid}]")
+        p = subprocess.Popen(cmd, cwd=self._dir, env=self._proc_env(), shell=True,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                             start_new_session=True)
         try:
-            r = subprocess.run(cmd, cwd=self._dir, env=self._proc_env(), shell=True,
-                               capture_output=True, text=True, timeout=timeout)
-            return RunResult(r.returncode, r.stdout[-20000:], r.stderr[-20000:])
-        except subprocess.TimeoutExpired as e:
-            return RunResult(124, (e.stdout or b"").decode("utf-8", "replace") if isinstance(e.stdout, bytes) else (e.stdout or ""),
-                             "[TIMEOUT]", timed_out=True)
+            out, err = p.communicate(timeout=timeout)
+            return RunResult(p.returncode, (out or "")[-20000:], (err or "")[-20000:])
+        except subprocess.TimeoutExpired:
+            _killpg(p)
+            return RunResult(124, "", "[TIMEOUT]", timed_out=True)
 
     def read_logs(self) -> str:
         out = []
@@ -93,11 +113,11 @@ class LocalNode(Node):
     def stop_background(self) -> None:
         for p, _ in self._bg:
             if p.poll() is None:
-                p.terminate()
+                _killpg(p)   # kill the whole group, not just the shell (it spawns the server)
                 try:
                     p.wait(timeout=3)
                 except subprocess.TimeoutExpired:
-                    p.kill()
+                    pass
         self._bg.clear()
 
 
@@ -107,14 +127,18 @@ class LocalEnvironment(Environment):
     def __init__(self, spec: EnvSpec):
         self.spec = spec
         self._root = Path(tempfile.mkdtemp(prefix=f"psenv-{spec.id}-"))
-        # assign a free localhost port per declared node-port
-        self._ports: dict[tuple[str, int], int] = {}
-        for n in spec.nodes:
-            for declared in n.ports:
-                self._ports[(n.name, declared)] = _free_port()
         self.nodes: dict[str, Node] = {}
-        for n in spec.nodes:
-            self.nodes[n.name] = LocalNode(n.name, self._root / n.name, self._node_env(n))
+        try:
+            # assign a free localhost port per declared node-port
+            self._ports: dict[tuple[str, int], int] = {}
+            for n in spec.nodes:
+                for declared in n.ports:
+                    self._ports[(n.name, declared)] = _free_port()
+            for n in spec.nodes:
+                self.nodes[n.name] = LocalNode(n.name, self._root / n.name, self._node_env(n))
+        except BaseException:
+            self.teardown()   # don't leak the temp dir on partial construction
+            raise
 
     def _first_port(self, name: str) -> int | None:
         spec = self.spec.node_map[name]
