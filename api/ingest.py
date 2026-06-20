@@ -65,7 +65,9 @@ def ingest_bundle(db, b: dict) -> models.Submission:
 
     # 5) upserts
     m, suite, env = b["model"], b["suite"], b["environment"]
-    family = _get_or_create(db, models.ModelFamily, name=m["family"])
+    family = _get_or_create(db, models.ModelFamily,
+                            defaults={"release_date": m.get("release_date"), "vendor": m.get("vendor")},
+                            name=m["family"])
     artifact = _get_artifact(db, family, m)
     key = _get_or_create(db, models.Key, pubkey=pub)
     _get_or_create(db, models.Suite, defaults={"content_hash": suite.get("content_hash")},

@@ -257,9 +257,11 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
 4. ✅ **DONE (P1.4 core)** — `api/`: `POST /submissions` (trust chain), faceted `GET /leaderboard`
    (incl. `max_vram_gb` "fits-my-hardware" filter), `GET /models/{family}`. Verified on SQLite +
    Postgres. _TODO: GitHub-OAuth identity binding (pubkey→account); community-verified tier._
-5. **← NEXT (P1.5):** Next.js web skeleton — overall + per-category leaderboards reading from the
-   API, the **capability-vs-release-date** chart, model & challenge pages, the VRAM/quant filter UI,
-   and a "how to submit" CLI guide.
+5. ✅ **DONE (P1.5)** — `web/` Next.js 16 (React 19, Tailwind 4): coder leaderboard with the
+   VRAM "fits-my-hardware" filter pills, model detail page (uncollapsed runs), capability-vs-
+   release-date evolution chart (recharts), and a "how to submit" CLI guide. `npm run build`
+   green; verified live end-to-end (seed → API → homepage renders families → VRAM ≤8GB filter
+   drops the 24GB run). _TODO: challenge pages; quant filter UI; wire identity/account binding._
 
 ## 11. Open questions to resolve as we build
 - ~~Project name & domain~~ **DECIDED: Peakstone / peakstone.ai.** License: Apache-2.0 (code +

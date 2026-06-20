@@ -99,8 +99,8 @@ def leaderboard(db: Session = Depends(get_session), suite: str | None = None,
         score = summ["code_score"] or -1.0
         cur = best.get(fam.name)
         if cur is None or score > cur["_score"]:
-            best[fam.name] = {"family": fam.name, "_score": score, **summ,
-                              "run": _run_info(db, s, art)}
+            best[fam.name] = {"family": fam.name, "release_date": fam.release_date,
+                              "_score": score, **summ, "run": _run_info(db, s, art)}
     rows = sorted(best.values(), key=lambda r: -(r["code_score"] or -1))
     for i, r in enumerate(rows, 1):
         r["rank"] = i
