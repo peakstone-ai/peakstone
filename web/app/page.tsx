@@ -14,6 +14,13 @@ const VRAM_PRESETS: [string, string][] = [
   ["≤48 GB", "48"],
 ];
 
+// compact efficiency axes shown in the leaderboard (matches engine/metrics.py)
+const METRIC_COLS: { key: string; fmt: (v: number) => string }[] = [
+  { key: "loc", fmt: (v) => `${Math.round(v)} LOC` },
+  { key: "peak_rss_mb", fmt: (v) => `${Math.round(v)} MB` },
+  { key: "test_wall_s", fmt: (v) => `${v.toFixed(1)}s` },
+];
+
 export default async function Home({
   searchParams,
 }: {
@@ -21,6 +28,7 @@ export default async function Home({
 }) {
   const sp = await searchParams;
   const vram = sp.max_vram_gb ?? "";
+  const sort = sp.sort ?? "code_score";
   const [data, facets] = await Promise.all([getLeaderboard(sp), getFacets()]);
 
   return (
@@ -37,7 +45,7 @@ export default async function Home({
         {VRAM_PRESETS.map(([label, val]) => {
           const active = vram === val;
           const params = new URLSearchParams();
-          for (const k of ["quant", "trust", "suite", "version"]) {
+          for (const k of ["quant", "trust", "suite", "version", "sort", "order"]) {
             if (sp[k]) params.set(k, sp[k] as string);
           }
           if (val) params.set("max_vram_gb", val);
@@ -58,13 +66,21 @@ export default async function Home({
         })}
       </div>
 
-      {facets && (facets.quants.length > 0 || facets.trust_tiers.length > 1) && (
+      {facets && (
         <div className="mb-5 flex flex-wrap items-center gap-4">
           {facets.quants.length > 0 && (
             <SelectFilter param="quant" label="Quant" options={facets.quants} />
           )}
           {facets.trust_tiers.length > 1 && (
             <SelectFilter param="trust" label="Trust" options={facets.trust_tiers} allLabel="Any" />
+          )}
+          {facets.sort_axes.length > 0 && (
+            <SelectFilter
+              param="sort"
+              label="Rank by"
+              allLabel="code score"
+              options={facets.sort_axes.map((a) => a.key).filter((k) => k !== "code_score")}
+            />
           )}
         </div>
       )}
@@ -89,6 +105,7 @@ export default async function Home({
                 <th className="py-2 pr-4 font-medium">Code score</th>
                 <th className="py-2 pr-4 font-medium">Safety</th>
                 <th className="py-2 pr-4 font-medium">Solved</th>
+                <th className="py-2 pr-4 font-medium">Efficiency</th>
                 <th className="py-2 pr-4 font-medium">Best run</th>
               </tr>
             </thead>
@@ -112,6 +129,18 @@ export default async function Home({
                   </td>
                   <td className="py-2 pr-4 tabular-nums text-stone-300">
                     {r.solved}/{r.n_code}
+                  </td>
+                  <td className="py-2 pr-4 text-xs tabular-nums text-stone-400">
+                    {METRIC_COLS.filter((m) => r.metrics?.[m.key] != null).length === 0
+                      ? "—"
+                      : METRIC_COLS.filter((m) => r.metrics?.[m.key] != null).map((m) => (
+                          <span
+                            key={m.key}
+                            className={`mr-2 ${sort === m.key ? "text-emerald-400" : ""}`}
+                          >
+                            {m.fmt(r.metrics[m.key])}
+                          </span>
+                        ))}
                   </td>
                   <td className="py-2 pr-4 text-stone-400">
                     <span className="text-stone-300">{r.run.artifact}</span> ·{" "}

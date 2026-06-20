@@ -39,7 +39,7 @@ export function SelectFilter({
         <option value="">{allLabel}</option>
         {options.map((o) => (
           <option key={o} value={o}>
-            {o.replace(/-/g, " ")}
+            {o.replace(/[-_]/g, " ")}
           </option>
         ))}
       </select>

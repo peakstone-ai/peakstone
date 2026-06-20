@@ -137,6 +137,11 @@
         "passed_on_attempt": { "type": ["integer", "null"] },
         "tok_per_s": { "type": ["number", "null"] },
         "latency_s": { "type": ["number", "null"] },
+        "metrics": {
+          "type": "object",
+          "description": "No-LLM efficiency axes (deterministic sub-scores, separate from the correctness score): loc, solution_bytes, peak_rss_mb, test_wall_s, ...",
+          "additionalProperties": { "type": "number" }
+        },
         "transcript": {
           "type": "object",
           "description": "Inline for small suites; for large ones, a content-addressed reference (transcript_ref) may replace this.",

@@ -39,10 +39,13 @@ def _newkey():
     return p, keys.public_key_b64(p)
 
 
-def _result(cid, typ, f):
-    return {"model": "m", "challenge": cid, "type": typ, "difficulty": 4, "scoring": "tests",
-            "final_score": f, "passed": int(f * 10), "total": 10, "tok_per_s": 50,
-            "response": "x", "stdout": "ok"}
+def _result(cid, typ, f, metrics=None):
+    r = {"model": "m", "challenge": cid, "type": typ, "difficulty": 4, "scoring": "tests",
+         "final_score": f, "passed": int(f * 10), "total": 10, "tok_per_s": 50,
+         "response": "x", "stdout": "ok"}
+    if metrics:
+        r["metrics"] = metrics
+    return r
 
 
 def _bundle(model, finals, vram, priv, pub, suite_ts):
@@ -155,3 +158,35 @@ def test_facets_and_challenges(client):
     det = client.get("/challenges/arch-0").json()
     assert det["n_families"] >= 1 and det["results"][0]["score"] >= det["results"][-1]["score"]
     assert client.get("/challenges/does-not-exist").status_code == 404
+
+
+def _metric_bundle(model, loc, rss, priv, pub):
+    b = bundle.produce_bundle(
+        {"models": [model], "judge": None, "timestamp": "EFF",
+         "gpu": {"name": "RTX 4090", "driver_version": "595"}},
+        [_result("eff-0", "architecture", 1.0, {"loc": loc, "peak_rss_mb": rss, "test_wall_s": 0.1})],
+        sign=False)
+    b["bundle_hash"] = bundle._sha256_bytes(bundle.canonical_bytes(bundle._without_sig(b)))
+    b["submitter"] = {"pubkey": pub, "signature": keys.sign(priv, b["bundle_hash"].encode())}
+    return b
+
+
+def test_efficiency_metrics_aggregation_and_sort(client):
+    lean_p, lean = _newkey()      # small, lean solution
+    bloat_p, bloat = _newkey()    # correct but bloated
+    assert client.post("/submissions", json=_metric_bundle("leanModel", 10, 30.0, lean_p, lean)).status_code == 201
+    assert client.post("/submissions", json=_metric_bundle("bloatModel", 90, 300.0, bloat_p, bloat)).status_code == 201
+
+    # both are equally correct (code_score 1.0) -> default ranking is tie-ish; sort by loc asc separates
+    lb = client.get("/leaderboard", params={"sort": "loc", "order": "asc"}).json()
+    fams = [r["family"] for r in lb["leaderboard"] if r["family"] in ("leanModel", "bloatModel")]
+    assert fams == ["leanModel", "bloatModel"], fams
+    # metrics are aggregated onto the row
+    lean_row = next(r for r in lb["leaderboard"] if r["family"] == "leanModel")
+    assert lean_row["metrics"]["loc"] == 10 and lean_row["metrics"]["peak_rss_mb"] == 30.0
+    # sorting respects order: rss desc puts the bloated one first
+    lb2 = client.get("/leaderboard", params={"sort": "peak_rss_mb", "order": "desc"}).json()
+    fams2 = [r["family"] for r in lb2["leaderboard"] if r["family"] in ("leanModel", "bloatModel")]
+    assert fams2 == ["bloatModel", "leanModel"], fams2
+    # the axes are advertised in facets
+    assert any(a["key"] == "loc" for a in client.get("/facets").json()["sort_axes"])

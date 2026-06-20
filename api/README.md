@@ -19,9 +19,9 @@ alembic upgrade head                                     # apply schema migratio
 | Method | Path | Purpose |
 |---|---|---|
 | `POST` | `/submissions` | validate (schema + content-hash + ed25519 signature) → store a run |
-| `GET` | `/leaderboard` | **faceted** — `?suite&version&max_vram_gb&quant&trust`; each family collapses to its best *qualifying* run |
+| `GET` | `/leaderboard` | **faceted** — `?suite&version&max_vram_gb&quant&trust`; best *qualifying* run per family, ranked by `?sort=<axis>&order=asc\|desc` (code_score or an efficiency axis: peak_rss_mb/loc/solution_bytes/test_wall_s) |
 | `GET` | `/models/{family}` | every run for a family, **uncollapsed** (quants/contexts/hardware) |
-| `GET` | `/facets` | distinct `quants` / `suites` / `trust_tiers` for the filter UI |
+| `GET` | `/facets` | distinct `quants` / `suites` / `trust_tiers` + sortable `sort_axes` for the filter UI |
 | `GET` | `/challenges` | the corpus with empirical pass-rate (calibrated difficulty) |
 | `GET` | `/challenges/{id}` | per-challenge mini-leaderboard (best result per family) |
 | `POST` | `/account/key-challenge` | issue a nonce the key signs to prove ownership |
@@ -43,6 +43,12 @@ its deterministic result vector). Once ≥ `PEAKSTONE_COMMUNITY_MIN_IDENTITIES` 
 identities* submit the same `(artifact, suite, repro_sig)`, all runs in that group are promoted.
 An identity is the key's bound account if linked, else the key itself — so two keys on one account
 count once (anti-self-verify). `runner-verified` is set out-of-band and never downgraded.
+
+## Efficiency metrics (no-LLM axes)
+Each result may carry a `metrics` object (`engine/metrics.py`): `loc`, `solution_bytes`,
+`peak_rss_mb`, `test_wall_s`. These are **not** part of the correctness score — they're separate
+sortable axes ("leanest correct solution"). The API averages them per run; sort with
+`/leaderboard?sort=peak_rss_mb&order=asc`.
 
 ## Identity binding (`api/identity.py`)
 The ed25519 key is the **root** identity; accounts are optional, additive bindings (no lock-in).

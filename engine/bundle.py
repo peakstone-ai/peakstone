@@ -237,6 +237,10 @@ def _result(row: dict, chash: dict, judge_model: str | None) -> dict:
     for k in ("attempts", "passed_on_attempt", "tok_per_s", "latency_s"):
         if row.get(k) is not None:
             r[k] = row[k]
+    if isinstance(row.get("metrics"), dict):
+        nums = {k: v for k, v in row["metrics"].items() if isinstance(v, (int, float))}
+        if nums:
+            r["metrics"] = nums
     if row.get("mode") == "planner":
         r["mode"] = "planner"
         r["coder_model"] = row.get("coder_model")

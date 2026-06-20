@@ -21,8 +21,10 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import metrics as _metrics
 
 _REPO = Path(__file__).resolve().parent.parent
+_TIME_BIN = "/usr/bin/time" if os.path.exists("/usr/bin/time") else None
 
 
 @dataclass
@@ -36,6 +38,7 @@ class RunResult:
     stderr: str = ""
     note: str = ""
     extra: dict = field(default_factory=dict)   # e.g. {"typecheck": True}
+    metrics: dict = field(default_factory=dict)  # no-LLM efficiency axes (engine/metrics.py)
 
     @property
     def pass_rate(self) -> float:
@@ -101,6 +104,30 @@ def _run(cmd: list[str], cwd: Path, timeout: int, env: dict) -> tuple[int, str, 
     return rc, out[-200_000:], err[-200_000:], round(time.time() - t0, 2), timed_out
 
 
+def _run_measured(cmd: list[str], cwd: Path, timeout: int, env: dict):
+    """Like _run, but also returns peak RSS (KiB) of the process tree via GNU `/usr/bin/time -v`.
+    The report goes to a dot-file so the child's own stdout/stderr (which the runners parse for
+    pass/fail) stay clean. Returns (rc, out, err, dur, timed_out, peak_rss_kb|None)."""
+    if not _TIME_BIN:
+        return (*_run(cmd, cwd, timeout, env), None)
+    report = cwd / ".timev"
+    rc, out, err, dur, timed_out = _run([_TIME_BIN, "-v", "-o", str(report), *cmd], cwd, timeout, env)
+    rss = None
+    try:
+        if report.exists():
+            rss = _metrics.parse_peak_rss_kb(report.read_text())
+            report.unlink()
+    except OSError:
+        pass
+    return rc, out, err, dur, timed_out, rss
+
+
+def _with_rss(r: RunResult, rss_kb: int | None) -> RunResult:
+    if rss_kb is not None:
+        r.metrics["peak_rss_mb"] = round(rss_kb / 1024, 1)
+    return r
+
+
 def _place_tests(workdir: Path, challenge_dir: Path, at_root: bool) -> None:
     tdir = challenge_dir / "tests"
     if not tdir.is_dir():
@@ -143,7 +170,7 @@ def _run_python(workdir, ch, files, timeout, cfg):
     env = dict(os.environ)
     env["PYTHONPATH"] = str(workdir) + os.pathsep + env.get("PYTHONPATH", "")
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    rc, out, err, dur, _ = _run(
+    rc, out, err, dur, _, rss = _run_measured(
         ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "--no-header"],
         workdir, timeout, env,
     )
@@ -151,7 +178,7 @@ def _run_python(workdir, ch, files, timeout, cfg):
     passed = int(_search(r"(\d+) passed", text, 0))
     failed = int(_search(r"(\d+) failed", text, 0)) + int(_search(r"(\d+) error", text, 0))
     total = passed + failed or (0 if rc == 5 else 1)  # rc 5 = no tests collected
-    return RunResult(rc == 0 and passed > 0, passed, total, rc, dur, out, err)
+    return _with_rss(RunResult(rc == 0 and passed > 0, passed, total, rc, dur, out, err), rss)
 
 
 def _run_node(workdir, ch, files, timeout, cfg, ts: bool):
@@ -185,14 +212,14 @@ def _run_node(workdir, ch, files, timeout, cfg, ts: bool):
     else:
         cmd = ["node", "--test", "--test-reporter=tap", *test_files]
 
-    rc, out, err, dur, _ = _run(cmd, workdir, timeout, env)
+    rc, out, err, dur, _, rss = _run_measured(cmd, workdir, timeout, env)
     text = out + "\n" + err
     passed = int(_search(r"#\s*pass\s+(\d+)", text, 0))
     failed = int(_search(r"#\s*fail\s+(\d+)", text, 0))
     total = passed + failed or 1
     r = RunResult(rc == 0 and passed > 0, passed, total, rc, dur, out, err)
     r.extra = extra
-    return r
+    return _with_rss(r, rss)
 
 
 def _run_go(workdir, ch, files, timeout, cfg):
@@ -204,7 +231,7 @@ def _run_go(workdir, ch, files, timeout, cfg):
     cache = workdir / ".gocache"
     env.update(GOCACHE=str(cache), GOPATH=str(workdir / ".gopath"),
                GOFLAGS="-count=1", GOPROXY="off", GO111MODULE="on")
-    rc, out, err, dur, _ = _run(["go", "test", "-json", "./..."], workdir, timeout, env)
+    rc, out, err, dur, _, rss = _run_measured(["go", "test", "-json", "./..."], workdir, timeout, env)
     passed = failed = 0
     for line in out.splitlines():
         line = line.strip()
@@ -222,7 +249,7 @@ def _run_go(workdir, ch, files, timeout, cfg):
         elif ev.get("Action") == "fail":
             failed += 1
     total = passed + failed or (1 if rc != 0 else 1)
-    return RunResult(rc == 0 and passed > 0, passed, total, rc, dur, out, err)
+    return _with_rss(RunResult(rc == 0 and passed > 0, passed, total, rc, dur, out, err), rss)
 
 
 def _run_rust(workdir, ch, files, timeout, cfg):
@@ -240,14 +267,14 @@ def _run_rust(workdir, ch, files, timeout, cfg):
         if linker:
             env["CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER"] = linker
             env["CC"] = linker
-    rc, out, err, dur, _ = _run(["cargo", "test", "--offline", "-q"], workdir, timeout, env)
+    rc, out, err, dur, _, rss = _run_measured(["cargo", "test", "--offline", "-q"], workdir, timeout, env)
     text = out + "\n" + err
     passed = failed = 0
     for m in re.finditer(r"test result:\s*\w+\.\s*(\d+) passed;\s*(\d+) failed", text):
         passed += int(m.group(1))
         failed += int(m.group(2))
     total = passed + failed or 1
-    return RunResult(rc == 0 and passed > 0, passed, total, rc, dur, out, err)
+    return _with_rss(RunResult(rc == 0 and passed > 0, passed, total, rc, dur, out, err), rss)
 
 
 _RUNNERS = {
@@ -274,6 +301,10 @@ def run_tests(challenge, files: dict[str, str], cfg: dict) -> RunResult:
     with tempfile.TemporaryDirectory(prefix=f"llmlab-{challenge.id}-") as tmp:
         workdir = Path(tmp)
         try:
-            return runner(workdir, challenge, files, challenge.timeout, cfg)
+            result = runner(workdir, challenge, files, challenge.timeout, cfg)
         except Exception as e:  # noqa: BLE001
             return RunResult(False, 0, 1, 1, 0.0, "", f"runner crash: {type(e).__name__}: {e}")
+        # efficiency axes: source size (static) + test-suite wall time (peak RSS set by the runner)
+        result.metrics.update(_metrics.collect_static(files))
+        result.metrics["test_wall_s"] = result.duration
+        return result

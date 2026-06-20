@@ -453,6 +453,8 @@ def main(argv=None):
                 gp, gt, gdetail = global_rules.evaluate(response or "", files, ch)
                 extra.update(global_adherence=round(gp / gt, 3) if gt else None,
                              global_rule_detail=[{"rule": n, "ok": ok} for n, ok in gdetail])
+            if getattr(run, "metrics", None):
+                extra["metrics"] = run.metrics
             extra = extra or None
             results.append(_row(model, ch, run, sc, judge_res,
                                 response=response, tps=tps, lat=lat,
@@ -735,6 +737,8 @@ def run_exec_plans(args, chs, host, ports, run_cfg, use_judge, judge_model, judg
             "planner_latency_s": pdata.get("latency_s"), "plan_chars": pdata.get("plan_chars"),
             "planner_response": plan,
         }
+        if getattr(run, "metrics", None):
+            extra["metrics"] = run.metrics
         results.append(_row(planner, ch, run, sc, judge_res, response=res.text,
                             tps=res.tok_per_s, lat=res.latency_s, ptoks=res.prompt_tokens,
                             ctoks=res.completion_tokens, vram=model_vram, extra=extra))

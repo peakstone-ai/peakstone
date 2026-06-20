@@ -23,6 +23,7 @@ export type LeaderRow = {
   n_code: number;
   by_category: Record<string, number>;
   tok_per_s: number | null;
+  metrics: Record<string, number>;
   run: Run;
 };
 
@@ -53,7 +54,7 @@ async function getJSON<T>(path: string): Promise<T | null> {
 
 export function getLeaderboard(sp: Record<string, string | undefined>) {
   const qs = new URLSearchParams();
-  for (const k of ["suite", "version", "max_vram_gb", "quant", "trust"]) {
+  for (const k of ["suite", "version", "max_vram_gb", "quant", "trust", "sort", "order"]) {
     if (sp[k]) qs.set(k, sp[k] as string);
   }
   return getJSON<Leaderboard>(`/leaderboard?${qs.toString()}`);
@@ -67,6 +68,7 @@ export type Facets = {
   quants: string[];
   suites: { name: string; version: string }[];
   trust_tiers: string[];
+  sort_axes: { key: string; order: string }[];
 };
 
 export function getFacets() {

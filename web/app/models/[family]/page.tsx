@@ -45,6 +45,7 @@ export default async function ModelPage({
               <th className="py-2 pr-4 font-medium">VRAM</th>
               <th className="py-2 pr-4 font-medium">Code score</th>
               <th className="py-2 pr-4 font-medium">Safety</th>
+              <th className="py-2 pr-4 font-medium">Efficiency</th>
               <th className="py-2 pr-4 font-medium">Engine</th>
               <th className="py-2 pr-4 font-medium">Trust</th>
               <th className="py-2 pr-4 font-medium">Suite</th>
@@ -65,6 +66,11 @@ export default async function ModelPage({
                 </td>
                 <td className="py-2 pr-4 tabular-nums text-stone-300">
                   {r.safety_score == null ? "—" : r.safety_score.toFixed(2)}
+                </td>
+                <td className="py-2 pr-4 text-xs tabular-nums text-stone-400">
+                  {r.metrics?.loc != null ? `${Math.round(r.metrics.loc)} LOC` : ""}
+                  {r.metrics?.peak_rss_mb != null ? ` · ${Math.round(r.metrics.peak_rss_mb)} MB` : ""}
+                  {r.metrics?.loc == null && r.metrics?.peak_rss_mb == null ? "—" : ""}
                 </td>
                 <td className="py-2 pr-4 text-stone-400">
                   {r.run.engine?.name ?? "?"} {r.run.engine?.version ?? ""}

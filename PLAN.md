@@ -224,15 +224,16 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
      a "how to submit" CLI guide.
   5. Seed by re-running the engine on a handful of models to produce the first real bundles.
   6. **community-verified** tier (auto-promote deterministic results reproduced ≥N times).
-- **P2 — Challenge authoring + efficiency metrics.** (a) In-repo + web-form challenge submission,
-  moderation queue, sandbox hardening, challenge versioning & deprecation, per-challenge discussion.
-  (b) **No-LLM automated metrics** — deterministic, judge-free sub-scores measured on a *passing*
-  solution: binary/artifact size (Go/Rust), runtime perf (exec time, ops/sec, peak RSS) via a timed
-  perf harness, compile time, time-to-green (latency + attempts, already captured), LOC / cyclomatic
-  complexity / lint / dep count. These become additional **sortable leaderboard axes** ("fastest
-  correct", "smallest binary") — a model can be correct-but-slow vs correct-and-tiny. Needs no env
-  infra, extends the existing Go/Rust/Python challenges. Schema: a `metrics` object per result
-  (the bundle already allows it via `score.breakdown` / additionalProperties).
+- **P2 — Challenge authoring + efficiency metrics.** (a) _TODO:_ In-repo + web-form challenge
+  submission, moderation queue, sandbox hardening, challenge versioning & deprecation, per-challenge
+  discussion. (b) ✅ **DONE — No-LLM automated metrics.** `engine/metrics.py` records deterministic,
+  judge-free axes per result — `loc`, `solution_bytes`, `peak_rss_mb` (GNU `/usr/bin/time -v` over
+  the test run, all 5 languages), `test_wall_s` — carried in the bundle's `metrics` object (schema
+  `$defs.result.metrics`). The API aggregates them per run and the leaderboard is sortable by any
+  axis (`?sort=loc&order=asc`, advertised in `/facets.sort_axes`); the web shows an **Efficiency**
+  column + a "Rank by" control, so a model can be correct-but-bloated vs correct-and-lean.
+  _Deferred to a later slice:_ binary/artifact size + compile time (the corpus is library+tests, no
+  `main` to build) and a dedicated runtime perf harness (ops/sec); cyclomatic/lint/dep-count.
 - **P3 — Agentic & multi-machine.** Tool-calling + iteration agent loop as a first-class run mode;
   `goal-state-env` verification. **`EnvironmentProvider` abstraction** (provision N isolated,
   no-internet nodes → node handles + `write_file`/`run`/`read_logs`/`ssh` tools → teardown):

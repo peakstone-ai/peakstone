@@ -51,6 +51,24 @@ def _avg(xs):
     return round(sum(xs) / len(xs), 3) if xs else None
 
 
+# No-LLM efficiency axes (engine/metrics.py). "asc" = smaller-is-better. Sortable on the leaderboard
+# alongside code_score; a model can be correct-but-bloated vs correct-and-lean.
+METRIC_AXES = {"peak_rss_mb": "asc", "loc": "asc", "solution_bytes": "asc", "test_wall_s": "asc"}
+# All sortable leaderboard keys → default order.
+SORT_ORDER = {"code_score": "desc", "safety_score": "desc", "solved": "desc",
+              "tok_per_s": "desc", **METRIC_AXES}
+
+
+def _agg_metrics(rs) -> dict:
+    """Average each efficiency metric over the results that recorded it (the run's leanness)."""
+    buckets: dict[str, list] = defaultdict(list)
+    for r in rs:
+        for k, v in (r.metrics or {}).items():
+            if isinstance(v, (int, float)):
+                buckets[k].append(v)
+    return {k: round(sum(v) / len(v), 2) for k, v in buckets.items() if v}
+
+
 def _summarize(sub: models.Submission) -> dict:
     rs = sub.results
     code = [r.final for r in rs if (r.category or "") not in SAFETY]
@@ -65,6 +83,7 @@ def _summarize(sub: models.Submission) -> dict:
         "n_code": len(code),
         "by_category": {k: round(sum(v) / len(v), 3) for k, v in sorted(by_cat.items())},
         "tok_per_s": _avg([r.tok_per_s for r in rs]),
+        "metrics": _agg_metrics(rs),
     }
 
 
@@ -82,11 +101,23 @@ def _run_info(db, sub: models.Submission, art: models.ModelArtifact) -> dict:
             "submitter": _submitter_handle(db, sub), "bundle_hash": sub.bundle_hash}
 
 
+def _sort_value(row: dict, key: str):
+    if key in row:
+        return row.get(key)
+    return (row.get("metrics") or {}).get(key)
+
+
 @app.get("/leaderboard")
 def leaderboard(db: Session = Depends(get_session), suite: str | None = None,
                 version: str | None = None, max_vram_gb: float | None = None,
-                quant: str | None = None, trust: str | None = None):
-    """Faceted: under the active filters, each family collapses to its best-qualifying run (§6a)."""
+                quant: str | None = None, trust: str | None = None,
+                sort: str = "code_score", order: str | None = None):
+    """Faceted: under the active filters, each family collapses to its best-qualifying run (§6a),
+    then rows are ranked by `sort` (code_score, or an efficiency axis like peak_rss_mb/loc)."""
+    if sort not in SORT_ORDER:
+        sort = "code_score"
+    if order not in ("asc", "desc"):
+        order = SORT_ORDER[sort]
     q = select(models.Submission)
     if suite:
         q = q.where(models.Submission.suite_name == suite)
@@ -109,12 +140,18 @@ def leaderboard(db: Session = Depends(get_session), suite: str | None = None,
         if cur is None or score > cur["_score"]:
             best[fam.name] = {"family": fam.name, "release_date": fam.release_date,
                               "_score": score, **summ, "run": _run_info(db, s, art)}
-    rows = sorted(best.values(), key=lambda r: -(r["code_score"] or -1))
+    # rank by the chosen axis; runs missing that metric sink to the bottom regardless of order
+    all_rows = list(best.values())
+    present = [r for r in all_rows if _sort_value(r, sort) is not None]
+    missing = [r for r in all_rows if _sort_value(r, sort) is None]
+    present.sort(key=lambda r: _sort_value(r, sort), reverse=(order == "desc"))
+    rows = present + missing
     for i, r in enumerate(rows, 1):
         r["rank"] = i
         r.pop("_score", None)
     return {"filters": {"suite": suite, "version": version, "max_vram_gb": max_vram_gb,
-                        "quant": quant, "trust": trust}, "count": len(rows), "leaderboard": rows}
+                        "quant": quant, "trust": trust, "sort": sort, "order": order},
+            "count": len(rows), "leaderboard": rows}
 
 
 @app.get("/models/{family}")
@@ -147,7 +184,8 @@ def facets(db: Session = Depends(get_session)):
     _placeholder = {"(unknown)", "(unregistered)"}
     return {"quants": [q for q in quants if q and q not in _placeholder],
             "suites": [{"name": n, "version": v} for n, v in suites],
-            "trust_tiers": sorted(trusts, key=lambda t: ingest.TRUST_ORDER.get(t, 0))}
+            "trust_tiers": sorted(trusts, key=lambda t: ingest.TRUST_ORDER.get(t, 0)),
+            "sort_axes": [{"key": k, "order": o} for k, o in SORT_ORDER.items()]}
 
 
 @app.get("/challenges")
