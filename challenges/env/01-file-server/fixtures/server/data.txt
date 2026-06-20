@@ -1,0 +1,3 @@
+peakstone file-server fixture
+line two: 1234567890
+line three: the quick brown fox jumps over the lazy dog

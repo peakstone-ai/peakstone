@@ -1,0 +1,7 @@
+id = "env-01-file-server"
+title = "HTTP file server + client"
+type = "goal-state-env"
+category = "multi-machine"
+difficulty = 3
+max_turns = 10
+timeout = 20

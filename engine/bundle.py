@@ -214,6 +214,8 @@ def model_identity(model_name: str, run_cfg: dict) -> dict:
 # result mapping + assembly
 # --------------------------------------------------------------------------- #
 def _verification(row: dict) -> str:
+    if row.get("verification"):                  # explicit (e.g. goal-state-env from the env harness)
+        return row["verification"]
     if row.get("scoring") == "judge" or (row.get("judge_detail", {}) or {}).get("scores"):
         return "llm-judge"
     return "deterministic-tests"
@@ -241,6 +243,8 @@ def _result(row: dict, chash: dict, judge_model: str | None) -> dict:
         nums = {k: v for k, v in row["metrics"].items() if isinstance(v, (int, float))}
         if nums:
             r["metrics"] = nums
+    if isinstance(row.get("env"), dict) and row["env"]:
+        r["env"] = row["env"]   # goal-state-env provenance: provider, image digests, checks, turns
     if row.get("mode") == "planner":
         r["mode"] = "planner"
         r["coder_model"] = row.get("coder_model")

@@ -142,6 +142,11 @@
           "description": "No-LLM efficiency axes (deterministic sub-scores, separate from the correctness score): loc, solution_bytes, peak_rss_mb, test_wall_s, ...",
           "additionalProperties": { "type": "number" }
         },
+        "env": {
+          "type": "object",
+          "description": "goal-state-env provenance: provider, image digests, verifier checks, turns-to-green.",
+          "additionalProperties": true
+        },
         "transcript": {
           "type": "object",
           "description": "Inline for small suites; for large ones, a content-addressed reference (transcript_ref) may replace this.",

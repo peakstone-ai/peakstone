@@ -241,16 +241,23 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
   column + a "Rank by" control, so a model can be correct-but-bloated vs correct-and-lean.
   _Deferred to a later slice:_ binary/artifact size + compile time (the corpus is library+tests, no
   `main` to build) and a dedicated runtime perf harness (ops/sec); cyclomatic/lint/dep-count.
-- **P3 — Agentic & multi-machine.** Tool-calling + iteration agent loop as a first-class run mode;
-  `goal-state-env` verification. **`EnvironmentProvider` abstraction** (provision N isolated,
-  no-internet nodes → node handles + `write_file`/`run`/`read_logs`/`ssh` tools → teardown):
-  impl #1 **docker-compose** (cheap, reproducible, images pinned by digest); impl #2 **Firecracker
-  microVM-on-VLAN** (stronger isolation for untrusted agent code); impl #3 **ssh-to-real-hosts**.
-  The challenge ships an env spec + a deterministic **goal-state verifier** ("client got the right
-  bytes", "all peers converged", "file replicated") for server/client & p2p projects; the agent
-  iterates write→deploy→run→observe→fix until green. Env spec + image digests + full tool-call
-  transcript + verifier go in the bundle → deterministic verifiers can reach the *verified* tier.
-  **Planner-agent testing folds in here as one env type.**
+- **P3 — Agentic & multi-machine.** ✅ **DONE (foundation).** `engine/env/`: the
+  **`EnvironmentProvider` abstraction** (`base.py`) — provision N isolated nodes → `write_file` /
+  `run` / `read_logs` + peer discovery (`PORT`, `PEER_<NAME>_HOST/PORT`) → teardown. Two impls
+  behind one interface: **local multi-process** (`local.py`, tests/CI) and **docker-compose**
+  (`docker.py`, `internal: true` no-internet network, images pinned by digest). Goal-state-env
+  challenges ship a topology (`env.toml`) + a deterministic `verify(env)` verifier + `fixtures/` +
+  `reference/`; `harness.run_once` seeds → launches servers (waits ready) → runs clients → verifies.
+  First example `challenges/env/01-file-server` (server/client byte transport) passes on **both
+  providers**. `agent.py` is the live-LLM run mode (write→run→verify loop). Bundle carries
+  `result.env` (provider + image digests + verifier checks + turns-to-green); `verification=
+  goal-state-env`; deterministic verifier → can reach runner-verified. 5 tests (incl. a docker
+  container run). _Deferred:_ Firecracker microVM + ssh-to-hosts providers; wiring the agent mode
+  into the main runner CLI + API/web surfacing; p2p/convergence example challenges; planner-agent as
+  an env type.
+- **P3-orig spec (for reference).** impl #2 **Firecracker microVM-on-VLAN** (stronger isolation for
+  untrusted agent code); impl #3 **ssh-to-real-hosts**. p2p "all peers converged" / "file replicated"
+  verifiers. **Planner-agent testing folds in here as one env type.**
 - **P4 — Multimodal.** vision-to-UI (build interface from screenshot/video), game-playing, for
   models that support it.
 
