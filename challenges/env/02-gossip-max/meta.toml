@@ -1,0 +1,7 @@
+id = "env-02-gossip-max"
+title = "Gossip convergence (global max)"
+type = "goal-state-env"
+category = "multi-machine"
+difficulty = 4
+max_turns = 12
+timeout = 30

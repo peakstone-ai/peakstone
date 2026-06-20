@@ -16,9 +16,30 @@ from engine.env.docker import DockerComposeProvider
 CH_DIR = Path(__file__).resolve().parents[3] / "challenges" / "env" / "01-file-server"
 
 
+GOSSIP_DIR = Path(__file__).resolve().parents[3] / "challenges" / "env" / "02-gossip-max"
+
+
 @pytest.fixture(scope="module")
 def challenge():
     return load_env_challenge(CH_DIR)
+
+
+@pytest.fixture(scope="module")
+def gossip():
+    return load_env_challenge(GOSSIP_DIR)
+
+
+def test_gossip_convergence_reference_local(gossip):
+    # 3 peers, fully connected, must converge on the global max (12) from seeds 5/12/3
+    res = run_reference(gossip, LocalProvider())
+    assert res["passed"] is True
+    assert len(res["checks"]) == 3 and all(c["ok"] for c in res["checks"])
+
+
+@pytest.mark.skipif(not DockerComposeProvider().available(), reason="docker daemon not available")
+def test_gossip_convergence_reference_docker(gossip):
+    res = run_reference(gossip, DockerComposeProvider())
+    assert res["passed"] is True
 
 
 def test_local_reference_reaches_goal_state(challenge):
