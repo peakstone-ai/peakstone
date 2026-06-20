@@ -117,6 +117,34 @@ def test_agent_loop_drives_env_to_goal_state(challenge):
     assert row["verification"] == "goal-state-env" and row["final_score"] == 1.0
 
 
+class _ChatStub:
+    """Fake chat() client. `reply` is either a fixed string or a callable(messages)->string."""
+    def __init__(self, reply):
+        self.reply = reply
+
+    def chat(self, model, messages, **kw):
+        from engine.provider import ChatResult
+        text = self.reply(messages) if callable(self.reply) else self.reply
+        return ChatResult(text=text, completion_tokens=len(text.split()), latency_s=0.1)
+
+
+def test_planner_pipeline_plan_then_coder_then_tests():
+    # planner emits a (dummy) plan; the fixed coder returns the challenge's reference solution;
+    # tests verify -> the plan→code→test pipeline scores as a passing planner run.
+    from engine.challenges import load_challenges
+    from engine.env.planner import planner_result_row, run_planner_task
+    ch = next(c for c in load_challenges(Path(CH_DIR).parents[2]) if c.id == "py-02-csv-groupby")
+    planner = _ChatStub("PLAN: read csv, group by key, sum values, handle empty input.")
+    ref = ch.reference_files()
+    sol = ref.get(ch.solution_file) or next(iter(ref.values()))
+    coder = _ChatStub(f"```python\n{sol}\n```")
+    res = run_planner_task(planner, "planner-stub", coder, "coder-stub", ch, {})
+    assert res["passed"] is True and res["final_score"] == 1.0
+    assert res["plan_chars"] > 0 and res["coder_model"] == "coder-stub"
+    row = planner_result_row(ch, res, "planner-stub")
+    assert row["category"] == "planner" and row["env"]["coder_model"] == "coder-stub"
+
+
 @pytest.mark.skipif(not DockerComposeProvider().available(), reason="docker daemon not available")
 def test_docker_reference_reaches_goal_state(challenge):
     res = run_reference(challenge, DockerComposeProvider())

@@ -279,10 +279,15 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
   agent tool-loop (auto-selecting the cheapest satisfying provider) and emits goal-state-env bundle
   rows. The API scores them as a **separate `agent_score` axis** (not folded into code/safety) and
   the leaderboard faces on it (`?sort=agent_score` → "Agentic leaderboard"); the web shows an Agentic
-  column + dynamic heading. Agent loop tested without a live model via a stub client. _Deferred:_
-  microvm `[[links]]` shaping/firewall (host-side tc/iptables on taps needs CAP_NET_ADMIN — those
-  conditions route to docker); per-source multi-link shaping; p2p/convergence challenges;
-  planner-agent as an env type.
+  column + dynamic heading. Agent loop tested without a live model via a stub client. **p2p/convergence
+  example** (`challenges/env/02-gossip-max`): 3 fully-connected peers gossip until all converge on
+  the global max; deterministic verifier polls for convergence; passes on local + docker. **Planner
+  env type** (`engine/env/planner.py`, runner `--planner <m> --coder <c>`): planner writes a plan →
+  fixed coder executes → tests verify; scored on a separate **planner_score** axis (the same coder
+  isolates planning from coding); web shows a Planner column + "Planner leaderboard". Stub-tested
+  (plan→reference-code→tests). _Deferred:_ microvm `[[links]]` shaping/firewall (host-side
+  tc/iptables on taps needs CAP_NET_ADMIN — those conditions route to docker); per-source multi-link
+  shaping.
 - **P4 — Multimodal.** vision-to-UI (build interface from screenshot/video), game-playing, for
   models that support it.
 

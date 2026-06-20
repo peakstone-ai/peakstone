@@ -141,7 +141,10 @@ def main(argv=None):
                     help="phase B: with the fixed --coder served, implement each plan in PLANS_DIR "
                          "and run tests; rows are tagged mode=planner for the Planner leaderboard.")
     ap.add_argument("--coder", default="qwen3-coder",
-                    help="fixed executor model for --exec-plans (default qwen3-coder).")
+                    help="fixed executor model for --exec-plans / --planner (default qwen3-coder).")
+    ap.add_argument("--planner", metavar="PLANNER_MODEL",
+                    help="planner env type: PLANNER plans each challenge, the fixed --coder executes, "
+                         "tests verify. Scored on the planner_score axis. (Single-pass; both served.)")
     ap.add_argument("--env", action="store_true",
                     help="agentic mode: run goal-state-env (multi-machine) challenges with --models "
                          "driving the tool loop until the verifier passes.")
@@ -205,6 +208,8 @@ def main(argv=None):
     if args.exec_plans:
         return run_exec_plans(args, chs, host, ports, run_cfg,
                               use_judge, judge_model, make_judge_client() if use_judge else None)
+    if args.planner:
+        return run_planner(args, chs, host, ports, run_cfg)
 
     judge_client = make_judge_client() if use_judge else None
 
@@ -491,6 +496,43 @@ def main(argv=None):
     write_report(results, outdir, meta)
     print(f"\nReport: {outdir / 'leaderboard.md'}")
     if args.bundle and not args.reference:
+        _emit_bundle(meta, results, outdir)
+    return 0
+
+
+def run_planner(args, chs, host, ports, run_cfg):
+    """Planner env type: PLANNER plans each challenge, the fixed --coder executes, tests verify.
+    Emits planner-category rows scored on the planner_score axis (the same coder isolates the plan)."""
+    from .env.planner import planner_result_row, run_planner_task
+    planner = args.planner
+    coder = args.coder
+    planner_client = _model_client(host, ports, planner)
+    coder_client = _model_client(host, ports, coder)
+    if planner_client is None or coder_client is None:
+        return 1
+    results = []
+    print(f"Planner eval: {planner} plans, {coder} executes, over {len(chs)} challenge(s).")
+    for ch in chs:
+        if ch.scoring not in ("tests", "both"):   # need executable tests to score the plan
+            continue
+        res = run_planner_task(planner_client, planner, coder_client, coder, ch, run_cfg)
+        results.append(planner_result_row(ch, res, planner))
+        flag = "ok " if res["passed"] else "   "
+        print(f"  {planner}  {flag} {ch.id}  downstream={res['final_score']:.2f} "
+              f"({res['passed_n']}/{res['total']})  plan={res['plan_chars']}ch")
+    if not results:
+        print("No planner results produced.", file=sys.stderr)
+        return 1
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    outdir = Path(args.out) if args.out else ROOT / "results" / f"planner-{planner}-{stamp}"
+    outdir.mkdir(parents=True, exist_ok=True)
+    avg = sum(r["final_score"] for r in results) / len(results)
+    meta = {"timestamp": stamp, "models": [planner], "n_challenges": len(results), "judge": None,
+            "sandbox": run_cfg.get("sandbox", "subprocess"), "reference": False,
+            "gpu": _gpu_info(), "coder_model": coder}
+    print(f"\nPlanner {planner} (coder {coder}): mean downstream {avg:.3f} over {len(results)} tasks. "
+          f"-> {outdir}")
+    if args.bundle:
         _emit_bundle(meta, results, outdir)
     return 0
 

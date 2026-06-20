@@ -55,8 +55,8 @@ def _avg(xs):
 # alongside code_score; a model can be correct-but-bloated vs correct-and-lean.
 METRIC_AXES = {"peak_rss_mb": "asc", "loc": "asc", "solution_bytes": "asc", "test_wall_s": "asc"}
 # All sortable leaderboard keys → default order.
-SORT_ORDER = {"code_score": "desc", "agent_score": "desc", "safety_score": "desc",
-              "solved": "desc", "tok_per_s": "desc", **METRIC_AXES}
+SORT_ORDER = {"code_score": "desc", "agent_score": "desc", "planner_score": "desc",
+              "safety_score": "desc", "solved": "desc", "tok_per_s": "desc", **METRIC_AXES}
 
 
 def _agg_metrics(rs) -> dict:
@@ -71,11 +71,13 @@ def _agg_metrics(rs) -> dict:
 
 def _summarize(sub: models.Submission) -> dict:
     rs = sub.results
-    # three capability axes, kept separate: coding ability, safety/honesty, and agentic (goal-state-
-    # env, multi-machine). An agentic run isn't a "coder" and vice-versa.
+    # capability axes, kept separate: coding ability, safety/honesty, agentic (goal-state-env,
+    # multi-machine), and planning (planner plans → fixed coder executes → tests). A planner/agent
+    # isn't a "coder" and vice-versa.
     agent = [r.final for r in rs if (r.verification or "") == "goal-state-env"]
-    code = [r.final for r in rs
-            if (r.category or "") not in SAFETY and (r.verification or "") != "goal-state-env"]
+    planner = [r.final for r in rs if (r.category or "") == "planner"]
+    code = [r.final for r in rs if (r.category or "") not in SAFETY
+            and (r.category or "") != "planner" and (r.verification or "") != "goal-state-env"]
     safety = [r.final for r in rs if (r.category or "") in SAFETY]
     by_cat = defaultdict(list)
     for r in rs:
@@ -84,9 +86,11 @@ def _summarize(sub: models.Submission) -> dict:
         "code_score": _avg(code),
         "safety_score": _avg(safety),
         "agent_score": _avg(agent),
+        "planner_score": _avg(planner),
         "solved": sum(1 for x in code if x >= 0.999),
         "n_code": len(code),
         "n_agent": len(agent),
+        "n_planner": len(planner),
         "by_category": {k: round(sum(v) / len(v), 3) for k, v in sorted(by_cat.items())},
         "tok_per_s": _avg([r.tok_per_s for r in rs]),
         "metrics": _agg_metrics(rs),

@@ -115,6 +115,17 @@ picks the cheapest provider that satisfies each challenge's network requirements
 goal-state-env rows: the API scores them as a separate **`agent_score`** axis (not blended into
 coding), and the leaderboard faces on it (`?sort=agent_score`).
 
+## Planner env type
+A planner challenge scores *planning*, not coding: the planner model writes an implementation plan,
+a **fixed** coder model executes it, and the task's tests verify. The same coder for every planner
+isolates the plan's contribution.
+```bash
+python -m engine.runner --planner <planner-model> --coder <coder-model> --bundle
+```
+Runs over the regular coding challenges; emits `category=planner` rows scored on the **`planner_score`**
+axis (`?sort=planner_score` → "Planner leaderboard"). `engine/env/planner.py` exposes
+`generate_plan` / `execute_plan` / `run_planner_task` with pluggable clients.
+
 ## Authoring a goal-state-env challenge
 ```
 challenges/env/<slug>/

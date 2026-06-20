@@ -295,6 +295,30 @@ def test_agentic_axis_is_separate_from_coding(client):
     assert chs["env-0"]["verification"] == "goal-state-env"
 
 
+def _planner_bundle(model, score, priv, pub):
+    rows = [{"model": "m", "challenge": f"plan-{i}", "type": "planner", "category": "planner",
+             "verification": "deterministic-tests", "scoring": "tests", "difficulty": 4,
+             "final_score": score, "passed": int(score * 10), "total": 10, "response": "x",
+             "stdout": "ok", "env": {"role": "planner", "coder_model": "qwen3-coder"}}
+            for i in range(2)]
+    b = bundle.produce_bundle({"models": [model], "judge": None, "timestamp": "PL",
+                              "gpu": {"name": "RTX 4090", "driver_version": "595"}}, rows, sign=False)
+    b["bundle_hash"] = bundle._sha256_bytes(bundle.canonical_bytes(bundle._without_sig(b)))
+    b["submitter"] = {"pubkey": pub, "signature": keys.sign(priv, b["bundle_hash"].encode())}
+    return b
+
+
+def test_planner_axis_is_separate_from_coding(client):
+    pp, p = _newkey()
+    assert client.post("/submissions", json=_planner_bundle("plannerOnly", 0.9, pp, p)).status_code == 201
+    # planner runs are NOT on the code board, and don't count as code
+    assert not any(r["family"] == "plannerOnly" for r in client.get("/leaderboard").json()["leaderboard"])
+    board = client.get("/leaderboard", params={"sort": "planner_score"}).json()["leaderboard"]
+    row = next(r for r in board if r["family"] == "plannerOnly")
+    assert row["planner_score"] == 0.9 and row["n_planner"] == 2 and row["code_score"] is None
+    assert any(x["key"] == "planner_score" for x in client.get("/facets").json()["sort_axes"])
+
+
 def test_efficiency_metrics_aggregation_and_sort(client):
     lean_p, lean = _newkey()      # small, lean solution
     bloat_p, bloat = _newkey()    # correct but bloated

@@ -30,13 +30,21 @@ export default async function Home({
   const vram = sp.max_vram_gb ?? "";
   const sort = sp.sort ?? "code_score";
   const isAgent = sort === "agent_score";
+  const isPlanner = sort === "planner_score";
+  const boardTitle = isAgent ? "Agentic leaderboard" : isPlanner ? "Planner leaderboard" : "Coder leaderboard";
   const [data, facets] = await Promise.all([getLeaderboard(sp), getFacets()]);
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-8">
-      <h1 className="text-2xl font-semibold">{isAgent ? "Agentic leaderboard" : "Coder leaderboard"}</h1>
+      <h1 className="text-2xl font-semibold">{boardTitle}</h1>
       <p className="mt-1 max-w-2xl text-sm text-stone-400">
-        {isAgent ? (
+        {isPlanner ? (
+          <>
+            The best <em>planner</em> run per family — the model writes an implementation plan, a
+            fixed coder executes it, and tests verify. The same coder for everyone isolates planning
+            ability from coding.
+          </>
+        ) : isAgent ? (
           <>
             The best <em>agentic</em> run per family — multi-machine / goal-state-env tasks where the
             model drives an environment to a goal state. Scored separately from coding ability.
@@ -114,6 +122,7 @@ export default async function Home({
                 <th className="py-2 pr-4 font-medium">Model</th>
                 <th className="py-2 pr-4 font-medium">Code score</th>
                 <th className="py-2 pr-4 font-medium">Agentic</th>
+                <th className="py-2 pr-4 font-medium">Planner</th>
                 <th className="py-2 pr-4 font-medium">Safety</th>
                 <th className="py-2 pr-4 font-medium">Solved</th>
                 <th className="py-2 pr-4 font-medium">Efficiency</th>
@@ -137,6 +146,9 @@ export default async function Home({
                   </td>
                   <td className="py-2 pr-4 tabular-nums text-stone-300">
                     {r.agent_score == null ? "—" : `${r.agent_score.toFixed(2)} (${r.n_agent})`}
+                  </td>
+                  <td className="py-2 pr-4 tabular-nums text-stone-300">
+                    {r.planner_score == null ? "—" : `${r.planner_score.toFixed(2)} (${r.n_planner})`}
                   </td>
                   <td className="py-2 pr-4 tabular-nums text-stone-300">
                     {r.safety_score == null ? "—" : r.safety_score.toFixed(2)}

@@ -20,9 +20,11 @@ export type LeaderRow = {
   code_score: number | null;
   safety_score: number | null;
   agent_score: number | null;
+  planner_score: number | null;
   solved: number;
   n_code: number;
   n_agent: number;
+  n_planner: number;
   by_category: Record<string, number>;
   tok_per_s: number | null;
   metrics: Record<string, number>;
