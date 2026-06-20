@@ -285,9 +285,13 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
   env type** (`engine/env/planner.py`, runner `--planner <m> --coder <c>`): planner writes a plan →
   fixed coder executes → tests verify; scored on a separate **planner_score** axis (the same coder
   isolates planning from coding); web shows a Planner column + "Planner leaderboard". Stub-tested
-  (plan→reference-code→tests). _Deferred:_ microvm `[[links]]` shaping/firewall (host-side
-  tc/iptables on taps needs CAP_NET_ADMIN — those conditions route to docker); per-source multi-link
-  shaping.
+  (plan→reference-code→tests) + verified live with two real agents (planner wrote a recursive-descent
+  plan, coder implemented it → 10/10 on py-05-calc). **Link-condition completion:** docker shaping now
+  supports **multiple shaped destinations per source** (prio qdisc + per-dst `tc` filters,
+  `netshape.py`); microvm **firewall** is applied **in-guest** via blackhole routes (no host
+  privilege) — microvm link *shaping* stays on docker (CI guest kernel lacks `sch_netem`). P3 is
+  complete; only a netem-enabled custom guest kernel (for microvm shaping) remains as optional future
+  work.
 - **P4 — Multimodal.** vision-to-UI (build interface from screenshot/video), game-playing, for
   models that support it.
 

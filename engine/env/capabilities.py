@@ -132,11 +132,12 @@ PROVIDER_CAPS: dict[str, Capabilities] = {
         EGRESS_CONTROL: "real", INTERNAL_DNS: "real", UDP: "real", ICMP: "real",
         FIREWALL: "real", NAT: "real", LINK_SHAPING: "simulated"}),
     # microvm: isolated bridge → real egress control; /etc/hosts → internal DNS; real kernel
-    # boundary. Firewall/link-shaping need host-side tc/iptables on the taps (CAP_NET_ADMIN) and
-    # aren't wired yet → not advertised, so link-condition challenges route to docker.
+    # boundary; FIREWALL applied in-guest via blackhole routes (no host privilege). LINK_SHAPING is
+    # NOT advertised — the CI guest kernel has no sch_netem, so latency/loss can't be applied in-guest
+    # and host-side netem on the taps would need CAP_NET_ADMIN → shaping challenges route to docker.
     "microvm": Capabilities("microvm", 2, "vm", {
         EGRESS_CONTROL: "real", INTERNAL_DNS: "real", UDP: "real", ICMP: "real",
-        KERNEL_ISOLATION: "real"}),
+        FIREWALL: "real", KERNEL_ISOLATION: "real"}),
 }
 
 # Capabilities intentionally unsupported (would require non-reproducible external hosts). A challenge

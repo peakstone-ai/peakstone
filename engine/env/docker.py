@@ -148,26 +148,23 @@ class DockerEnvironment(Environment):
         return r.returncode == 0
 
     def _apply_network(self, req) -> dict:
-        """Apply [[links]] conditions: per-source netem shaping + per-pair iptables firewall."""
+        """Apply [[links]] conditions: per-source netem shaping (multiple dsts via tc filters) +
+        per-pair iptables firewall."""
+        from .netshape import netem_args, shaping_commands
         applied = {"shaping": [], "firewall": []}
-        shaped: set[str] = set()
+        by_src: dict[str, list] = {}
         for l in req.links:
-            if (l.latency_ms or l.loss or l.bandwidth_kbps):
-                if l.src in shaped:   # whole-interface netem; one shaped link per source for now
-                    applied["shaping"].append({"src": l.src, "dst": l.dst,
-                                               "skipped": "multiple shaped links from one source"})
-                else:
-                    parts = ["netem"]
-                    if l.latency_ms:
-                        parts += ["delay", f"{int(l.latency_ms)}ms"]
-                    if l.loss:
-                        parts += ["loss", f"{l.loss * 100:.2f}%"]
-                    if l.bandwidth_kbps:
-                        parts += ["rate", f"{int(l.bandwidth_kbps)}kbit"]
-                    ok = self._sidecar(l.src, "tc qdisc replace dev eth0 root " + " ".join(parts))
-                    applied["shaping"].append({"src": l.src, "dst": l.dst,
-                                               "rule": " ".join(parts), "ok": ok})
-                    shaped.add(l.src)
+            if l.latency_ms or l.loss or l.bandwidth_kbps:
+                by_src.setdefault(l.src, []).append(l)
+        for src, links in by_src.items():
+            if not self._ips.get(src):
+                continue
+            cmds = shaping_commands(links, lambda d: self._ips.get(d, "0.0.0.0"))
+            ok = self._sidecar(src, " && ".join(cmds))
+            for l in links:
+                applied["shaping"].append({"src": src, "dst": l.dst, "ok": ok,
+                                           "netem": " ".join(netem_args(l))})
+        for l in req.links:
             if l.firewall == "blocked" and self._ips.get(l.src) and self._ips.get(l.dst):
                 ok = (self._sidecar(l.src, f"iptables -A OUTPUT -d {self._ips[l.dst]} -j DROP")
                       and self._sidecar(l.dst, f"iptables -A OUTPUT -d {self._ips[l.src]} -j DROP"))

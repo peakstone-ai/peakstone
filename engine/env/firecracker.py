@@ -216,6 +216,7 @@ class FirecrackerEnvironment(Environment):
         # assign a tap + IP per node from the pool (networked runs only)
         self._ip: dict[str, str] = {}
         self._tap: dict[str, str] = {}
+        self._applied_net: dict = {}
         if networked:
             taps = available_taps()
             if len(taps) < len(spec.nodes):
@@ -273,6 +274,24 @@ class FirecrackerEnvironment(Environment):
             if r.rc != 0:
                 raise RuntimeError(f"network config failed on '{n.name}': {r.stderr or r.stdout}")
             node.write_file("/etc/hosts", hosts)
+        self._applied_net = self._apply_links()
+
+    def _apply_links(self) -> dict:
+        """Apply [[links]] conditions IN-GUEST (each microVM is root in its own kernel, so no host
+        privilege needed). Firewall = blackhole routes; netem shaping is unavailable (the CI guest
+        kernel has no sch_netem) so latency/loss links are recorded as skipped and route to docker."""
+        applied: dict = {"firewall": [], "shaping": []}
+        for l in self.spec.requirements.links:
+            if l.firewall == "blocked":
+                a, b = self._ip.get(l.src), self._ip.get(l.dst)
+                if a and b:
+                    ok = (self.nodes[l.src].run(f"ip route add blackhole {b}/32", timeout=8).rc == 0
+                          and self.nodes[l.dst].run(f"ip route add blackhole {a}/32", timeout=8).rc == 0)
+                    applied["firewall"].append({"src": l.src, "dst": l.dst, "ok": ok})
+            if l.latency_ms or l.loss or l.bandwidth_kbps:
+                applied["shaping"].append({"src": l.src, "dst": l.dst,
+                                           "skipped": "guest kernel lacks sch_netem (shaping routes to docker)"})
+        return applied
 
     def _wait_agent(self, name: str, uds: str, deadline: float) -> None:
         while time.monotonic() < deadline:
@@ -321,6 +340,7 @@ class FirecrackerEnvironment(Environment):
         if self._networked:
             p["network"] = {"bridge": FC_BRIDGE, "subnet": f"{FC_SUBNET}.0/24",
                             "nodes": dict(self._ip)}
+            p["applied_network"] = self._applied_net
         return p
 
 

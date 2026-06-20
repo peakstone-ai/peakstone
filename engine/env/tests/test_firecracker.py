@@ -95,3 +95,19 @@ def test_two_microvms_communicate_over_the_bridge():
         # the isolated bridge has no uplink: egress is genuinely blocked
         egress = c.run("python3 -c \"import socket; socket.setdefaulttimeout(4); socket.create_connection(('1.1.1.1',53))\"")
         assert egress.rc != 0, "guest unexpectedly reached the internet"
+
+
+@pytest.mark.skipif(not _CAN_NET, reason="needs kvm+artifacts AND the fc bridge/tap pool")
+def test_microvm_firewall_blocks_a_link_in_guest():
+    from engine.env import Requirements
+    from engine.env.capabilities import Link
+    req = Requirements(links=[Link("a", "b", firewall="blocked")])
+    spec = EnvSpec("fc-fw", nodes=[NodeSpec("a", needs=["b"]), NodeSpec("b", ports=[9000])],
+                   requirements=req)
+    with FirecrackerProvider().provision(spec) as env:
+        assert env.provenance()["applied_network"]["firewall"][0]["ok"] is True
+        env.node("b").run("cd /work && python3 -m http.server 9000", background=True)
+        env.wait_ready("b", 9000, timeout=15)
+        probe = ("python3 -c \"import socket; socket.setdefaulttimeout(3); "
+                 "socket.create_connection(('b',9000))\"")
+        assert env.node("a").run(probe).rc != 0   # blackhole route drops a->b even with b serving

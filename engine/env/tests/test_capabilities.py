@@ -25,6 +25,20 @@ def test_requirements_reduce_to_capability_keys():
     assert Requirements().empty
 
 
+def test_shaping_commands_multi_link():
+    # one source, two shaped destinations -> a prio qdisc + per-dst netem child + filter each
+    from engine.env.netshape import shaping_commands
+    links = [Link("s", "a", latency_ms=50), Link("s", "b", latency_ms=200, loss=0.01)]
+    ips = {"a": "10.0.0.2", "b": "10.0.0.3"}
+    cmds = shaping_commands(links, lambda d: ips[d])
+    assert cmds[0].startswith("tc qdisc replace dev eth0 root handle 1: prio bands 3")
+    assert any("netem delay 50ms" in c for c in cmds)
+    assert any("netem delay 200ms loss 1.00%" in c for c in cmds)
+    assert any("match ip dst 10.0.0.2/32 flowid 1:2" in c for c in cmds)
+    assert any("match ip dst 10.0.0.3/32 flowid 1:3" in c for c in cmds)
+    assert shaping_commands([], lambda d: ips[d]) == []
+
+
 def test_match_egress_local_fails_docker_real():
     req = Requirements(egress="blocked")
     assert match(req, PROVIDER_CAPS["local"]).ok is False

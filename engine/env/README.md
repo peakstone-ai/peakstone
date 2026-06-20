@@ -54,8 +54,9 @@ Env overrides: `PEAKSTONE_FC_HOME`, `PEAKSTONE_FC_BIN/KERNEL/ROOTFS`, `PEAKSTONE
   - **Milestone 2:** multi-node **node↔node networking** over an isolated bridge + user-owned tap
     pool (`fc-net-setup.sh`). Each VM gets a static IP; the guest's `eth0` is configured post-boot
     over vsock; peers resolve **by name** via an injected `/etc/hosts` and the `PEER_<NAME>_HOST/PORT`
-    contract. No-uplink bridge → `egress=blocked` is real. (Link shaping/firewall on microvm taps
-    needs `CAP_NET_ADMIN`, so those conditions still route to docker.)
+    contract. No-uplink bridge → `egress=blocked` is real. Firewall (`[[links]] firewall="blocked"`)
+    is applied **in-guest** via blackhole routes (no host privilege); link *shaping* (latency/loss)
+    routes to docker — the CI guest kernel has no `sch_netem`.
   - **Build the guest artifacts / set up networking:** see the Setup section above.
 
 **ssh-to-real-hosts is intentionally excluded** — real public IPs / DNS / ISP firewalls would give
@@ -84,17 +85,20 @@ nat = true
 - **Requirements → capability keys** (`required_caps`): `egress_control`, `internal_dns`,
   `link_shaping`, `firewall`, `nat`, `udp`, `public_ip`, `real_dns`, `kernel_isolation`.
 - **Provider advertisement** (`PROVIDER_CAPS`): `local` (≈ none), `docker` (egress/dns/firewall/nat
-  **real**, link shaping **simulated**), `microvm` (+ `kernel_isolation`, impl deferred).
+  **real**, link shaping **simulated**), `microvm` (egress/dns/**firewall**/kernel-isolation **real**;
+  **no** link shaping — see below).
 - **Fidelity** is `real` (e.g. a docker `internal:` network genuinely blocks egress) or `simulated`
   (netem latency). It's recorded in `result.env.network_fidelity` and is meant to gate trust — a
   result under simulated conditions isn't comparable to one under real conditions.
 - **Reproducibility policy:** `public_ip` / `real_dns` are in the vocabulary but **no provider offers
   them** → such a challenge is `UnsatisfiableEnv` by design, not silently run under weaker conditions.
-- **Application (docker):** the provider *applies* the conditions, it doesn't just advertise them.
-  A privileged sidecar (`nicolaka/netshoot`) joins each node's network namespace and runs `tc`
-  netem (latency/loss/bandwidth) and `iptables` (firewall) — so node containers stay unprivileged
-  and tool-free, and the rules persist in the netns. Applied rules are recorded in
-  `provenance.network.applied`.
+- **Application (docker):** a privileged sidecar (`nicolaka/netshoot`) joins each node's netns and
+  runs `tc` netem (latency/loss/bandwidth, **multiple shaped destinations per source** via a `prio`
+  qdisc + per-dst `u32` filters — see `netshape.py`) and `iptables` (firewall). Node containers stay
+  unprivileged and tool-free; rules persist in the netns and are recorded in `provenance.applied_network`.
+- **Application (microvm):** conditions apply **in-guest** (each microVM is root in its own kernel —
+  no host privilege). Firewall = `ip route` blackhole; **link shaping is not supported** because the
+  Firecracker CI guest kernel has no `sch_netem`, so latency/loss challenges route to docker.
 - **Preconditions:** capabilities double as checks. `check_preconditions` asserts the declared
   conditions actually hold (egress really blocked, a blocked link really unreachable) before scoring,
   so a challenge can't pass under the wrong network.
