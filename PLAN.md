@@ -250,7 +250,12 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
   challenges, via DCO) + CC-BY-4.0 (result data); name reserved as trademark (`NOTICE`,
   `TRADEMARK.md` in place). Copyright holder = **The Peakstone Authors** (swap to a personal name or
   formed entity later if desired). Still TODO: grab GitHub org `peakstone` + PyPI `peakstone`.
-- Identity: how submitters get a keypair/handle (GitHub OAuth + generated signing key?).
+- Identity (design **decided**, providers TBD): the **ed25519 pubkey is the root identity** (durable,
+  portable); auth providers are **pluggable bindings** that merely attest "account ↔ pubkey", keyed
+  by an internal user id — never a provider's id. Tables: `keys` (pubkey → user) + `identity_links`
+  (user ↔ provider account, many per user). GitHub OAuth ships first (dev-friendly); GitLab/Google/
+  email-magic-link/wallet(SIWE)/ORCID are additive later. A keypair alone works (pseudonymous, no
+  OAuth). The engine/bundle layer is auth-agnostic — it only signs and embeds pubkey+signature.
 - Transcript storage: inline vs. object store (S3-compatible) for large suites; retention.
 - Anti-gaming for non-deterministic/judge challenges (seed disclosure, multi-run medians).
 - Calibration mechanics (DEFERRED until we build it): exact pass-rate thresholds for the T0–T4

@@ -1,0 +1,305 @@
+"""Produce a signed, schema-valid Peakstone result bundle from a run.
+
+A bundle is the reproducibility contract (see schema/result-bundle.schema.json): it embeds the exact
+model identity (repo + file SHA-256 + quant + engine + sampling + serve flags), the environment,
+content-hashed challenges, transcripts, and scores — content-addressed and ed25519-signed so a
+deterministic result is independently re-runnable.
+
+This layer is auth-agnostic: it signs with the local key (engine/keys.py) and embeds pubkey +
+signature; binding a pubkey to an account is a server-side concern.
+
+TODO (tracked in PLAN.md): hf_revision pinning, params_total/active, sampling seed (deterministic
+runs), full (untruncated) transcripts, robust split-GGUF + multi-engine identity.
+"""
+from __future__ import annotations
+
+import datetime as dt
+import hashlib
+import json
+import os
+import platform
+import re
+import shutil
+import subprocess
+import tomllib
+from pathlib import Path
+
+import jsonschema
+
+from . import keys
+
+ROOT = Path(__file__).resolve().parent.parent
+SCHEMA_PATH = ROOT / "schema" / "result-bundle.schema.json"
+BUNDLE_VERSION = "1.0"
+SAFETY_SCORINGS = {"injection", "refusal", "hallucination", "secure-code", "adherence"}
+
+
+# --------------------------------------------------------------------------- #
+# hashing
+# --------------------------------------------------------------------------- #
+def canonical_bytes(obj) -> bytes:
+    """Deterministic JSON encoding for content-addressing (sorted keys, compact)."""
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+
+
+def _sha256_bytes(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()
+
+
+def _sha256_file_cached(path: Path) -> str:
+    """SHA-256 of a (possibly huge) file, cached by (path, size, mtime) under PEAKSTONE_HOME."""
+    if os.environ.get("PEAKSTONE_SKIP_FILE_HASH"):
+        return "(skipped)"
+    st = path.stat()
+    cache_file = keys.KEY_DIR / "filehash-cache.json"
+    cache = {}
+    if cache_file.exists():
+        try:
+            cache = json.loads(cache_file.read_text())
+        except Exception:  # noqa: BLE001
+            cache = {}
+    key = f"{path.resolve()}|{st.st_size}|{int(st.st_mtime)}"
+    if key in cache:
+        return cache[key]
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8 << 20), b""):
+            h.update(chunk)
+    digest = h.hexdigest()
+    cache[key] = digest
+    keys.KEY_DIR.mkdir(parents=True, exist_ok=True)
+    cache_file.write_text(json.dumps(cache))
+    return digest
+
+
+def _model_file_hash(file_path: Path) -> str:
+    """Hash a model file; for a split GGUF (NNNNN-of-NNNNN), hash all parts -> combined digest."""
+    if not file_path.exists():
+        return "(missing)"
+    m = re.search(r"-(\d{5})-of-(\d{5})\.gguf$", file_path.name)
+    if not m:
+        return _sha256_file_cached(file_path)
+    total = int(m.group(2))
+    parts = sorted(file_path.parent.glob(re.sub(r"-\d{5}-of-\d{5}\.gguf$", "-*-of-*.gguf", file_path.name)))
+    if len(parts) != total:
+        return _sha256_file_cached(file_path)  # incomplete; fall back to part 1
+    return _sha256_bytes("".join(_sha256_file_cached(p) for p in parts).encode())
+
+
+def _hash_challenge_dir(d: Path) -> str:
+    """Content hash of a challenge: meta.toml + spec.md + every file under tests/ (sorted)."""
+    h = hashlib.sha256()
+    files = [d / "meta.toml", d / "spec.md"]
+    files += sorted((d / "tests").rglob("*")) if (d / "tests").is_dir() else []
+    for f in files:
+        if f.is_file():
+            h.update(f.relative_to(d).as_posix().encode())
+            h.update(b"\0")
+            h.update(f.read_bytes())
+    return h.hexdigest()
+
+
+def challenge_hashes(challenges_dir: Path) -> dict[str, str]:
+    """Map challenge id -> content hash, by reading every meta.toml in the corpus."""
+    out: dict[str, str] = {}
+    for meta in challenges_dir.rglob("meta.toml"):
+        d = meta.parent
+        if any(p[:1] in ("_", ".") for p in d.relative_to(challenges_dir).parts):
+            continue
+        try:
+            cid = tomllib.loads(meta.read_text())["id"]
+        except Exception:  # noqa: BLE001
+            continue
+        out[cid] = _hash_challenge_dir(d)
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# environment + model identity
+# --------------------------------------------------------------------------- #
+def capture_env(gpu_meta: dict | None) -> dict:
+    env: dict = {}
+    gpu_meta = gpu_meta or {}
+    env["gpu"] = gpu_meta.get("name", "unknown")
+    if gpu_meta.get("driver_version"):
+        env["driver"] = gpu_meta["driver_version"]
+    # CPU model name (prettier than platform.processor() on Linux)
+    cpu = platform.processor() or "unknown"
+    try:
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.startswith("model name"):
+                cpu = line.split(":", 1)[1].strip()
+                break
+    except Exception:  # noqa: BLE001
+        pass
+    env["cpu"] = cpu
+    try:
+        env["ram_gb"] = round(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9, 1)
+    except Exception:  # noqa: BLE001
+        pass
+    env["os"] = platform.platform()
+    return env
+
+
+def _engine_info() -> dict:
+    """Best-effort llama.cpp version (the only served engine today)."""
+    binary = os.environ.get("LLAMA_SERVER") or str(Path.home() / "llama.cpp" / "build" / "bin" / "llama-server")
+    info = {"name": "llama.cpp", "version": "unknown"}
+    if shutil.which(binary) or Path(binary).exists():
+        try:
+            out = subprocess.run([binary, "--version"], capture_output=True, text=True, timeout=10)
+            # llama.cpp prints e.g. "version: 1 (ef8268f)" — keep the whole string (the commit
+            # hash is the reproducible part; the leading number is just a local build counter).
+            m = re.search(r"version:\s*(.+)", (out.stderr or "") + (out.stdout or ""))
+            if m:
+                info["version"] = m.group(1).strip()
+        except Exception:  # noqa: BLE001
+            pass
+    return info
+
+
+def _quant_from_filename(name: str) -> str:
+    m = re.search(r"-((?:UD-)?(?:IQ|Q|TQ|BF|F)\w*?)(?:-\d{5}-of-\d{5})?\.gguf$", name)
+    return m.group(1) if m else "unknown"
+
+
+def _sampling(flags: str, run_cfg: dict) -> dict:
+    """Effective sampling: temperature from config [run] (the bench overrides it on the request);
+    top_p/top_k/repeat_penalty from the served model flags (the request does not override those)."""
+    s: dict = {"temperature": run_cfg.get("temperature", 0.2)}
+    for flag, key in [("--top-p", "top_p"), ("--top-k", "top_k"), ("--repeat-penalty", "repeat_penalty")]:
+        m = re.search(re.escape(flag) + r"\s+([0-9.]+)", flags)
+        if m:
+            s[key] = float(m.group(1)) if "." in m.group(1) else int(m.group(1))
+    if run_cfg.get("max_tokens"):
+        s["max_tokens"] = run_cfg["max_tokens"]
+    # NOTE: no seed captured yet -> temperature>0 runs are not bit-reproducible (PLAN.md TODO).
+    return s
+
+
+def model_identity(model_name: str, run_cfg: dict) -> dict:
+    """Assemble the model block from serve/models.toml + file hash + engine version (best-effort)."""
+    try:
+        reg = tomllib.loads((ROOT / "serve" / "models.toml").read_text())
+    except Exception:  # noqa: BLE001
+        reg = {}
+    cfg = reg.get(model_name)
+    if not cfg:  # reference run or model not in the local registry
+        return {
+            "family": model_name, "artifact": "(unregistered)", "hf_repo": "(local/unknown)",
+            "file_sha256": "(none)", "engine": {"name": "unknown", "version": "unknown"},
+            "sampling": _sampling("", run_cfg),
+        }
+    file = cfg.get("file", "")
+    return {
+        "family": model_name,
+        "artifact": _quant_from_filename(file),
+        "hf_repo": cfg.get("repo", "(unknown)"),
+        "file_sha256": _model_file_hash(ROOT / file) if file else "(none)",
+        "context": cfg.get("ctx"),
+        "serve_flags": cfg.get("flags", ""),
+        "engine": _engine_info(),
+        "sampling": _sampling(cfg.get("flags", ""), run_cfg),
+    }
+
+
+# --------------------------------------------------------------------------- #
+# result mapping + assembly
+# --------------------------------------------------------------------------- #
+def _verification(row: dict) -> str:
+    if row.get("scoring") == "judge" or (row.get("judge_detail", {}) or {}).get("scores"):
+        return "llm-judge"
+    return "deterministic-tests"
+
+
+def _result(row: dict, chash: dict, judge_model: str | None) -> dict:
+    score: dict = {"final": round(float(row.get("final_score", 0.0)), 4)}
+    if row.get("total"):
+        score["passed"] = row.get("passed", 0)
+        score["total"] = row["total"]
+    r: dict = {
+        "challenge_id": row["challenge"],
+        "challenge_hash": chash.get(row["challenge"], "(unknown)"),
+        "verification": _verification(row),
+        "score": score,
+    }
+    if row.get("type") or row.get("category"):
+        r["category"] = row.get("type") or row.get("category")
+    if isinstance(row.get("difficulty"), int) and 1 <= row["difficulty"] <= 5:
+        r["difficulty"] = row["difficulty"]
+    for k in ("attempts", "passed_on_attempt", "tok_per_s", "latency_s"):
+        if row.get(k) is not None:
+            r[k] = row[k]
+    if row.get("mode") == "planner":
+        r["mode"] = "planner"
+        r["coder_model"] = row.get("coder_model")
+    tr: dict = {}
+    if row.get("planner_response"):
+        tr["plan"] = row["planner_response"]
+    if row.get("response"):
+        tr["raw_output"] = row["response"]
+    if row.get("stdout"):
+        tr["stdout"] = row["stdout"]
+    if row.get("stderr"):
+        tr["stderr"] = row["stderr"]
+    if tr:
+        r["transcript"] = tr
+    jd = row.get("judge_detail") or {}
+    if jd.get("scores"):
+        r["judge"] = {"model": judge_model or "unknown", "scores": jd["scores"]}
+    return r
+
+
+def produce_bundle(meta: dict, results: list[dict], *, harness_version: str = "0.1.0",
+                   sign: bool = True) -> dict:
+    """Assemble a schema-valid, content-addressed, (optionally) signed result bundle."""
+    run_cfg = {}
+    try:
+        run_cfg = tomllib.loads((ROOT / "engine" / "config.toml").read_text()).get("run", {})
+    except Exception:  # noqa: BLE001
+        pass
+
+    model_name = (meta.get("planner_model") or (meta.get("models") or ["unknown"])[0])
+    chash = challenge_hashes(ROOT / "challenges")
+
+    bundle_results = [_result(r, chash, meta.get("judge")) for r in results]
+    suite_hash = _sha256_bytes("".join(sorted(r["challenge_hash"] for r in bundle_results)).encode())
+
+    bundle: dict = {
+        "bundle_version": BUNDLE_VERSION,
+        "submitted_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "harness": {"name": "peakstone-engine", "version": harness_version},
+        "model": model_identity(model_name, run_cfg),
+        "environment": capture_env(meta.get("gpu")),
+        "suite": {"id": meta.get("suite_id", "adhoc"),
+                  "version": meta.get("suite_version", meta.get("timestamp", "unversioned")),
+                  "content_hash": suite_hash},
+        "results": bundle_results,
+    }
+    if meta.get("coder_model"):
+        bundle["harness"]["coder_model"] = meta["coder_model"]
+
+    # content-address (signature omitted) + sign
+    bundle["bundle_hash"] = _sha256_bytes(canonical_bytes(_without_sig(bundle)))
+    if sign:
+        priv, pub = keys.load_or_create_keypair()
+        bundle["submitter"] = {"pubkey": pub, "signature": keys.sign(priv, bundle["bundle_hash"].encode())}
+
+    _validate(bundle)
+    return bundle
+
+
+def _without_sig(bundle: dict) -> dict:
+    b = {k: v for k, v in bundle.items() if k not in ("submitter", "bundle_hash")}
+    return b
+
+
+def _validate(bundle: dict) -> None:
+    schema = json.loads(SCHEMA_PATH.read_text())
+    jsonschema.validate(bundle, schema)
+
+
+def write_bundle(bundle: dict, path: Path) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(bundle, indent=2, ensure_ascii=False))
+    return path

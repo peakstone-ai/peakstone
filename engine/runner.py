@@ -129,6 +129,9 @@ def main(argv=None):
     ap.add_argument("--config", default=str(ROOT / "engine" / "config.toml"))
     ap.add_argument("--challenges-dir", default=str(ROOT / "challenges"))
     ap.add_argument("--out", default=None)
+    ap.add_argument("--bundle", action="store_true",
+                    help="also emit a signed, schema-valid Peakstone result bundle (bundle.json) "
+                         "next to the report — the reproducible, submittable artifact.")
     # planner evaluation (decoupled two-phase: gen plans with planner served, then exec with
     # the fixed coder served). See serve/planner_eval.sh for orchestration.
     ap.add_argument("--gen-plans", metavar="PLANNER",
@@ -476,7 +479,22 @@ def main(argv=None):
     }
     write_report(results, outdir, meta)
     print(f"\nReport: {outdir / 'leaderboard.md'}")
+    if args.bundle and not args.reference:
+        _emit_bundle(meta, results, outdir)
     return 0
+
+
+def _emit_bundle(meta, results, outdir):
+    """Produce + write a signed result bundle next to the report (best-effort; never fails a run)."""
+    try:
+        from . import bundle as _bundle
+        b = _bundle.produce_bundle(meta, results)
+        path = _bundle.write_bundle(b, Path(outdir) / "bundle.json")
+        n_det = sum(1 for r in b["results"] if r["verification"] == "deterministic-tests")
+        print(f"Bundle: {path}  ({len(b['results'])} results, {n_det} deterministic, "
+              f"signed by {b['submitter']['pubkey'][:12]}…)")
+    except Exception as e:  # noqa: BLE001
+        print(f"!! bundle not written: {type(e).__name__}: {e}", file=sys.stderr)
 
 
 def _load_tool_task(d: Path):
@@ -731,6 +749,8 @@ def run_exec_plans(args, chs, host, ports, run_cfg, use_judge, judge_model, judg
     }
     write_report(results, outdir, meta)
     print(f"\nReport: {outdir / 'leaderboard.md'}")
+    if args.bundle:
+        _emit_bundle(meta, results, outdir)
     return 0
 
 

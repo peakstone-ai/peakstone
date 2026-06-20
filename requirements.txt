@@ -1,0 +1,7 @@
+# Peakstone engine runtime dependencies (beyond the Python stdlib).
+# The test runner itself is stdlib-only; these are for result-bundle production:
+jsonschema>=4      # validate bundles against schema/result-bundle.schema.json
+cryptography>=42   # ed25519 signing of result bundles (engine/keys.py)
+
+# Optional, only for the library-fluency challenges' Python references:
+#   numpy pandas pydantic networkx more-itertools python-dateutil sortedcontainers
