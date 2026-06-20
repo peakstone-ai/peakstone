@@ -4,6 +4,33 @@ Goal-state-env challenges put a model in front of **N isolated, no-internet node
 whether it drives the system into a goal state — "the client got the right bytes", "all peers
 converged" — not on a unit-test diff.
 
+## Setup / requirements per provider
+
+| Provider | Needs | One-time setup |
+|---|---|---|
+| **local** | nothing (stdlib) | — |
+| **docker** | Docker Engine + Compose v2 | running daemon; user in the `docker` group. Link shaping pulls the `nicolaka/netshoot` sidecar image on first use. |
+| **microvm** (Firecracker) | `/dev/kvm` + KVM-capable host | see below |
+
+**Firecracker — host setup**
+1. **KVM access:** `sudo usermod -aG kvm $USER` (note `-aG`, append) then re-login. Confirm with
+   `python -c "import os; os.close(os.open('/dev/kvm', os.O_RDWR))"`.
+2. **Guest artifacts** (firecracker binary + kernel + agent + rootfs), no sudo:
+   ```bash
+   bash engine/env/firecracker_agent/build-image.sh      # → ~/.peakstone/fc  (PEAKSTONE_FC_HOME)
+   ```
+   This alone enables **single-node, vsock-only** microVMs (no networking needed).
+3. **Multi-node networking** (only for challenges with >1 node), run **once as root**:
+   ```bash
+   sudo engine/env/firecracker_agent/fc-net-setup.sh     # isolated bridge + user-owned tap pool
+   ```
+   The taps are persistent + owned by you, so the harness attaches VMs **without `CAP_NET_ADMIN`**.
+   The bridge has no uplink → guests have no internet (that's `egress=blocked`). The devices don't
+   survive a reboot — the script prints a systemd unit to persist them.
+
+Env overrides: `PEAKSTONE_FC_HOME`, `PEAKSTONE_FC_BIN/KERNEL/ROOTFS`, `PEAKSTONE_FC_MEM_MIB`,
+`PEAKSTONE_FC_BRIDGE`, `PEAKSTONE_FC_TAP_PREFIX`, `PEAKSTONE_FC_SUBNET`, `PEAKSTONE_FC_TAP_COUNT`.
+
 ## Pieces
 - **`base.py`** — the `EnvironmentProvider` / `Environment` / `Node` interface. A node gives the
   agent `write_file` / `read_file` / `run` (with peer discovery via `PORT`, `PEER_<NAME>_HOST/PORT`)
@@ -24,11 +51,12 @@ converged" — not on a unit-test diff.
     microVM per node (`firecracker --no-api --config-file`) with the Go guest agent
     (`firecracker_agent/main.go`) as PID 1 over vsock — `write_file`/`read_file`/`run`/`read_logs`.
     Needs only `/dev/kvm` + the binary + a kernel/rootfs (no TAP, no `CAP_NET_ADMIN`); boots in ~1s.
-  - **Milestone 2 (todo):** node↔node TAP networking, so multi-node `[[links]]` challenges run. A
-    spec with >1 node (or any node with ports/needs) is refused with `UnsupportedHost` until then.
-  - **Build the guest artifacts** (one-time, no sudo — `mkfs.ext4 -d`, not a loop mount):
-    `bash engine/env/firecracker_agent/build-image.sh` → firecracker binary + kernel + agent +
-    `rootfs.ext4` in `~/.peakstone/fc` (override with `PEAKSTONE_FC_HOME`).
+  - **Milestone 2:** multi-node **node↔node networking** over an isolated bridge + user-owned tap
+    pool (`fc-net-setup.sh`). Each VM gets a static IP; the guest's `eth0` is configured post-boot
+    over vsock; peers resolve **by name** via an injected `/etc/hosts` and the `PEER_<NAME>_HOST/PORT`
+    contract. No-uplink bridge → `egress=blocked` is real. (Link shaping/firewall on microvm taps
+    needs `CAP_NET_ADMIN`, so those conditions still route to docker.)
+  - **Build the guest artifacts / set up networking:** see the Setup section above.
 
 **ssh-to-real-hosts is intentionally excluded** — real public IPs / DNS / ISP firewalls would give
 genuine real-world conditions but destroy reproducibility, which is the platform's whole point.

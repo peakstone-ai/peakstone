@@ -267,11 +267,16 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
   microVM per node (`firecracker --no-api --config-file`) with a static Go guest agent as PID 1 over
   **vsock** — write_file/read_file/run/read_logs, ~1s boot. Needs only `/dev/kvm` + binary +
   kernel/rootfs (no TAP/CAP_NET_ADMIN). Guest image built sudo-free via `mkfs.ext4 -d`
-  (`firecracker_agent/build-image.sh`). Its win over docker is *isolation* (real kernel boundary for
-  untrusted agent code). 21 tests (incl. a real microVM boot+exec, docker firewall blocks a serving
-  peer, 200ms netem ≥150ms RTT). _Deferred:_ Firecracker **Milestone 2** = node↔node TAP networking
-  (multi-node `[[links]]`; refused with UnsupportedHost until then); per-source multi-link shaping;
-  wiring the agent mode into the main runner CLI + API/web; p2p/convergence challenges; planner-agent.
+  (`firecracker_agent/build-image.sh`). **Milestone 2 done + verified:** multi-node node↔node
+  networking over an isolated host bridge + a pre-created user-owned tap pool (`fc-net-setup.sh`, run
+  once as root → no runtime CAP_NET_ADMIN). Each VM gets a static IP; guest eth0+lo brought up
+  post-boot over vsock; peers resolve by name via injected `/etc/hosts` + the `PEER_<NAME>_HOST/PORT`
+  contract; no-uplink bridge → real `egress=blocked`. Verified: two microVMs, client fetches from
+  server by name over the bridge, internet unreachable. Its win over docker is *isolation* (real
+  kernel boundary for untrusted agent code). 22 tests (real microVM boot+exec, 2-VM bridge comms,
+  docker firewall/netem). _Deferred:_ microvm `[[links]]` shaping/firewall (host-side tc/iptables on
+  taps needs CAP_NET_ADMIN — those conditions route to docker); per-source multi-link shaping; wiring
+  the agent mode into the main runner CLI + API/web; p2p/convergence challenges; planner-agent.
 - **P4 — Multimodal.** vision-to-UI (build interface from screenshot/video), game-playing, for
   models that support it.
 

@@ -131,9 +131,12 @@ PROVIDER_CAPS: dict[str, Capabilities] = {
     "docker": Capabilities("docker", 1, "container", {
         EGRESS_CONTROL: "real", INTERNAL_DNS: "real", UDP: "real", ICMP: "real",
         FIREWALL: "real", NAT: "real", LINK_SHAPING: "simulated"}),
+    # microvm: isolated bridge → real egress control; /etc/hosts → internal DNS; real kernel
+    # boundary. Firewall/link-shaping need host-side tc/iptables on the taps (CAP_NET_ADMIN) and
+    # aren't wired yet → not advertised, so link-condition challenges route to docker.
     "microvm": Capabilities("microvm", 2, "vm", {
         EGRESS_CONTROL: "real", INTERNAL_DNS: "real", UDP: "real", ICMP: "real",
-        FIREWALL: "real", NAT: "real", LINK_SHAPING: "simulated", KERNEL_ISOLATION: "real"}),
+        KERNEL_ISOLATION: "real"}),
 }
 
 # Capabilities intentionally unsupported (would require non-reproducible external hosts). A challenge

@@ -77,6 +77,8 @@ func bringUp() {
 		}
 	}
 	os.MkdirAll("/work", 0o755)
+	// loopback must be up or 127.0.0.1 is "Network unreachable" (a minimal init leaves lo down)
+	exec.Command("/bin/sh", "-c", "ip link set lo up").Run()
 }
 
 func reap() { // PID 1 must reap orphaned children
