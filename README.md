@@ -45,6 +45,18 @@ Each run records full per-challenge transcripts and the model/environment metada
 reproduce it. See `engine/runner.py --help` for filters (`--lang`, `--type`, `--difficulty`,
 `--ids`) and modes (judge, retries, agents-md, planner eval).
 
+## Dashboard (TUI)
+
+A Textual terminal UI shows your **local GPU/CPU/RAM** live, next to the leaderboard **filtered to
+what fits your hardware** — so you can see how models that actually run on your machine compare:
+
+```bash
+pip install -e ".[dashboard]"
+peakstone --api https://peakstone.ai        # or default http://localhost:8000
+```
+
+See **[dashboard/README.md](./dashboard/README.md)**. (Reproduce-a-run + submit-from-TUI are the next slices.)
+
 ## Add a challenge
 
 Create `challenges/<lang-or-category>/NN-slug/` with `meta.toml`, `spec.md`, `tests/`, and a

@@ -32,9 +32,12 @@ api = [
     "alembic>=1.13",
     "psycopg[binary]>=3.1",
 ]
+# the local hardware dashboard (Textual TUI). Reads the public API; runs the engine to reproduce.
+dashboard = ["textual>=0.60"]
 dev = ["pytest>=8", "httpx>=0.27"]
 
 [project.scripts]
+peakstone = "dashboard.app:main"
 peakstone-bench = "engine.runner:main"
 
 [project.urls]
@@ -42,7 +45,7 @@ Homepage = "https://peakstone.ai"
 Source = "https://github.com/peakstone-ai/peakstone"
 
 [tool.setuptools.packages.find]
-include = ["engine*", "api*"]
+include = ["engine*", "api*", "dashboard*"]
 exclude = ["*.tests", "*.tests.*"]
 
 # NOTE (pre-PyPI): the engine currently resolves schema/, challenges/, serve/ and config.toml
