@@ -137,6 +137,13 @@ def capture_env(gpu_meta: dict | None) -> dict:
         env["ram_gb"] = round(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9, 1)
     except Exception:  # noqa: BLE001
         pass
+    # total GPU memory — the "fits in <=X GB VRAM" leaderboard facet keys on this
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+                             capture_output=True, text=True, timeout=10)
+        env["vram_gb"] = round(int(out.stdout.split("\n")[0]) / 1024, 1)
+    except Exception:  # noqa: BLE001
+        pass
     env["os"] = platform.platform()
     return env
 

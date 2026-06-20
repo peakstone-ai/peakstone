@@ -1,0 +1,29 @@
+# Peakstone — Postgres + API. Run from repo root:  docker compose -f infra/docker-compose.yml up
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: peakstone
+      POSTGRES_PASSWORD: peakstone
+      POSTGRES_DB: peakstone
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U peakstone"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ..
+      dockerfile: infra/Dockerfile
+    environment:
+      PEAKSTONE_DATABASE_URL: postgresql+psycopg://peakstone:peakstone@db:5432/peakstone
+    ports: ["8000:8000"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
