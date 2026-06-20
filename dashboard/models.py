@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -74,9 +75,23 @@ def add_model(name: str, repo: str, file: str | None = None, *, port: int | None
     return ModelEntry(name, repo, rel, port, ctx, flags)
 
 
-def download(entry: ModelEntry, log=lambda s: None, *, runner=subprocess.run) -> bool:
-    """Fetch the GGUF via `hf download <repo> <filename> --local-dir models/<name>`. Returns True on
-    success. `runner` is injectable for tests."""
+def remote_size(repo: str, filename: str) -> int | None:
+    """Total bytes of a repo file (for a real progress bar), via the HF API. Best-effort."""
+    try:
+        from huggingface_hub import get_hf_file_metadata, hf_hub_url
+        return get_hf_file_metadata(hf_hub_url(repo, filename)).size
+    except Exception:  # noqa: BLE001  (network/auth/version — fall back to indeterminate)
+        return None
+
+
+def _dir_size(d: Path) -> int:
+    return sum(f.stat().st_size for f in d.rglob("*") if f.is_file()) if d.exists() else 0
+
+
+def download(entry: ModelEntry, log=lambda s: None, *, progress=None,
+             popen=subprocess.Popen) -> bool:
+    """Fetch the GGUF via `hf download`. `progress(done_bytes, total_bytes|None)` is called while it
+    runs (poll of the on-disk size). `popen` is injectable for tests."""
     if not entry.repo or not entry.file:
         log("no repo/file in registry for this model")
         return False
@@ -86,11 +101,18 @@ def download(entry: ModelEntry, log=lambda s: None, *, runner=subprocess.run) ->
     local_dir = REPO / "models" / entry.name
     filename = Path(entry.file).name
     log(f"downloading {entry.repo} / {filename} → {local_dir} …")
+    total = remote_size(entry.repo, filename) if progress is not None else None
     env = {**os.environ, "HF_HUB_ENABLE_HF_TRANSFER": "1"}
-    r = runner(["hf", "download", entry.repo, filename, "--local-dir", str(local_dir)],
-               env=env, capture_output=True, text=True)
-    if r.returncode != 0:
-        log(f"download failed: {(r.stderr or '')[-300:]}")
+    proc = popen(["hf", "download", entry.repo, filename, "--local-dir", str(local_dir)],
+                 env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    while proc.poll() is None:
+        if progress is not None:
+            progress(_dir_size(local_dir), total)
+        time.sleep(0.5)
+    if progress is not None:
+        progress(_dir_size(local_dir), total)
+    if proc.returncode != 0:
+        log(f"download failed (rc={proc.returncode})")
         return False
     log(f"downloaded {entry.name} ({entry.size_gb} GB)")
     return entry.present

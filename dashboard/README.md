@@ -18,7 +18,9 @@ for the public instance.
 | `f` | toggle the "fits my hardware" VRAM filter |
 | `s` | cycle the sort axis (code / agentic / planner / tok-s) |
 | `⏎` | **reproduce** the selected model on your hardware (serve → bench → your tok/s vs published) |
-| `m` | **models** — list local models, `a` add (HF repo + file), `d` download |
+| `s` | (in the reproduce view) **submit** the reproduced run to the leaderboard |
+| `m` | **models** — list local models, `a` add (HF repo + file), `d` download (live progress bar) |
+| `h` | **history** — past reproduce runs (your tok/s vs published, code score) |
 | `r` | refresh the leaderboard |
 | `q` | quit |
 
@@ -36,8 +38,10 @@ then shows **your tok/s vs the published number** (and the ratio) plus the code 
 
 `reproduce.py` keeps the serve / health / bench / stop steps as injectable seams, so the
 orchestration is unit-tested without a GPU; `models.py` manages the `serve/models.toml` registry +
-`hf` downloads.
+`hf` downloads. After a successful reproduce, press `s` to **submit** the (already-signed) bundle to
+the leaderboard. Every run is logged to `~/.peakstone/repro-history.json` and shown under `h`.
+Downloads show a live progress bar (size polled against the HF file size).
 
 ## Roadmap (next slices)
-- **Submit** signed runs from the TUI (POST a bundle after a reproduce).
-- Live download progress bars; per-run history.
+- Speculative/draft-model and quant comparison side-by-side.
+- Background queue: reproduce several models in sequence.

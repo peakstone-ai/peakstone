@@ -83,18 +83,61 @@ def test_registry_add_and_list(monkeypatch, tmp_path):
         models.add_model("bad name!", "r")       # invalid name rejected
 
 
-def test_download_invokes_hf(monkeypatch, tmp_path):
+def test_download_invokes_hf_with_progress(monkeypatch, tmp_path):
     from dashboard import models
     monkeypatch.setattr(models, "REPO", tmp_path)
+    monkeypatch.setattr(models, "remote_size", lambda repo, fn: 1000)   # known total -> real bar
+    monkeypatch.setattr(models.time, "sleep", lambda s: None)
     e = models.ModelEntry("m", "org/repo", "models/m/x.gguf", 8081, 32768, "")
-    calls = {}
+    calls, progress = {}, []
 
-    def fake_run(cmd, **kw):
+    class FakeProc:
+        returncode = 0
+
+        def __init__(self):
+            self._n = 0
+
+        def poll(self):
+            self._n += 1
+            return None if self._n == 1 else 0   # one loop iteration, then done
+
+    def fake_popen(cmd, **kw):
         calls["cmd"] = cmd
-        return type("R", (), {"returncode": 0, "stderr": ""})()
+        return FakeProc()
 
-    models.download(e, runner=fake_run)
+    models.download(e, popen=fake_popen, progress=lambda d, t: progress.append((d, t)))
     assert calls["cmd"][:3] == ["hf", "download", "org/repo"] and "--local-dir" in calls["cmd"]
+    assert progress and progress[-1][1] == 1000        # total reported to the progress bar
+
+
+def test_submit_bundle(monkeypatch):
+    from dashboard import client
+
+    class FakeResp:
+        status = 201
+
+        def read(self):
+            return b'{"id": 1, "trust_tier": "self-reported"}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(client.urllib.request, "urlopen", lambda req, timeout=30: FakeResp())
+    status, detail = client.submit_bundle("http://x", {"bundle_version": "1"})
+    assert status == 201 and "id" in detail
+
+
+def test_history_append_load(monkeypatch, tmp_path):
+    from dashboard import history
+    monkeypatch.setattr(history, "HOME", tmp_path)
+    monkeypatch.setattr(history, "HISTORY_PATH", tmp_path / "h.json")
+    assert history.load() == []
+    history.append({"model": "m", "ok": True, "your_tps": 80})
+    h = history.load()
+    assert len(h) == 1 and h[0]["model"] == "m" and "at" in h[0]
 
 
 def test_reproduce_orchestration(monkeypatch):
@@ -121,20 +164,35 @@ def test_reproduce_orchestration(monkeypatch):
     assert unhealthy.ok is False and "healthy" in unhealthy.note
 
 
-def test_reproduce_screen_shows_result(monkeypatch):
+def test_reproduce_screen_shows_result_and_records_history(monkeypatch):
+    from dashboard import history
     from dashboard import reproduce as R
     from dashboard.app import Dashboard, ReproduceScreen
     monkeypatch.setattr(R, "reproduce", lambda model, **k: R.ReproduceResult(
-        model, True, your_tps=80.0, published_tps=100.0, code_score=0.9, passed=9, total=10, note="done"))
+        model, True, your_tps=80.0, published_tps=100.0, code_score=0.9, passed=9, total=10,
+        note="done", bundle={"bundle_version": "1"}))
+    recorded = []
+    monkeypatch.setattr(history, "append", recorded.append)
+    submitted = {}
+    monkeypatch.setattr(R, "ReproduceResult", R.ReproduceResult)  # keep dataclass
 
     async def scenario():
         app = Dashboard("http://x")
         async with app.run_test() as pilot:
-            await app.push_screen(ReproduceScreen("qwen3-coder", 100.0))
+            await app.push_screen(ReproduceScreen("qwen3-coder", 100.0, "http://x"))
             await app.workers.wait_for_complete()
             await pilot.pause()
             result = str(app.screen.query_one("#repro-result", Static).render())
-            assert "80" in result and "0.8" in result   # your tps (80) + ratio vs published (80/100)
+            assert "80" in result and "0.8" in result and "submit" in result
+            # the run was recorded in history
+            assert recorded and recorded[0]["model"] == "qwen3-coder" and recorded[0]["your_tps"] == 80.0
+            # pressing 's' submits the bundle
+            from dashboard import client
+            monkeypatch.setattr(client, "submit_bundle", lambda url, b, **k: submitted.update(b=b) or (201, "ok"))
+            await pilot.press("s")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert submitted.get("b") == {"bundle_version": "1"}
 
     asyncio.run(scenario())
 

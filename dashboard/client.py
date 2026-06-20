@@ -31,3 +31,18 @@ def get_leaderboard(base_url: str, *, max_vram_gb: float | None = None,
 
 def get_facets(base_url: str, *, timeout: float = 10) -> dict:
     return _get(base_url, "/facets", {}, timeout)
+
+
+def submit_bundle(base_url: str, bundle: dict, *, timeout: float = 30) -> tuple[int, str]:
+    """POST a signed result bundle. Returns (http_status, detail); 201 ok, 409 already submitted,
+    400 rejected. Raises APIError only if the server is unreachable."""
+    req = urllib.request.Request(
+        f"{base_url.rstrip('/')}/submissions", data=json.dumps(bundle).encode(),
+        headers={"content-type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            return r.status, r.read().decode()[:200]
+    except urllib.error.HTTPError as e:
+        return e.code, e.read().decode()[:200]
+    except (urllib.error.URLError, OSError) as e:
+        raise APIError(str(e))

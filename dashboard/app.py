@@ -9,9 +9,9 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Footer, Header, Input, RichLog, Static
+from textual.widgets import Button, DataTable, Footer, Header, Input, ProgressBar, RichLog, Static
 
-from . import client, hardware, models, reproduce
+from . import client, hardware, history, models, reproduce
 
 # a short, fast challenge set for a reproduce run — enough to measure tok/s + a code score
 REPRODUCE_IDS = ["py-02-csv-groupby", "py-05-calc", "py-01-fizzbuzz"]
@@ -59,6 +59,7 @@ class Dashboard(App):
         ("s", "cycle_sort", "Sort axis"),
         ("enter", "reproduce", "Reproduce"),
         ("m", "models", "Models"),
+        ("h", "history", "History"),
     ]
     SORTS = ["code_score", "agent_score", "planner_score", "tok_per_s"]
 
@@ -95,6 +96,9 @@ class Dashboard(App):
     def action_models(self) -> None:
         self.push_screen(ModelsScreen())
 
+    def action_history(self) -> None:
+        self.push_screen(HistoryScreen())
+
     def action_reproduce(self) -> None:
         table = self.query_one(DataTable)
         i = table.cursor_row
@@ -103,7 +107,7 @@ class Dashboard(App):
         row = self._board_rows[i]
         if not row.get("family"):
             return
-        self.push_screen(ReproduceScreen(row["family"], row.get("tok_per_s")))
+        self.push_screen(ReproduceScreen(row["family"], row.get("tok_per_s"), self.base_url))
 
     @work(thread=True, exclusive=True)
     def load_board(self) -> None:
@@ -148,12 +152,14 @@ class ReproduceScreen(ModalScreen):
     #repro-log { height: 1fr; border: round $primary; }
     #repro-result { height: auto; padding-top: 1; }
     """
-    BINDINGS = [("escape", "dismiss", "Close")]
+    BINDINGS = [("escape", "dismiss", "Close"), ("s", "submit", "Submit")]
 
-    def __init__(self, model: str, published_tps: float | None):
+    def __init__(self, model: str, published_tps: float | None, base_url: str):
         super().__init__()
         self.model = model
         self.published_tps = published_tps
+        self.base_url = base_url
+        self._result: reproduce.ReproduceResult | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="repro"):
@@ -174,17 +180,37 @@ class ReproduceScreen(ModalScreen):
 
         res = reproduce.reproduce(self.model, challenge_ids=REPRODUCE_IDS,
                                   published_tps=self.published_tps, log=emit)
+        history.append({"model": res.model, "ok": res.ok, "your_tps": res.your_tps,
+                        "published_tps": res.published_tps, "code_score": res.code_score, "note": res.note})
         self.app.call_from_thread(self._show, res)
 
     def _show(self, res: "reproduce.ReproduceResult") -> None:
+        self._result = res
         out = self.query_one("#repro-result", Static)
         if res.ok:
             ratio = f"  ([b]{res.tps_ratio}×[/b] published)" if res.tps_ratio else ""
+            submit_hint = "  ·  press [b]s[/] to submit" if res.bundle else ""
             out.update(f"[green b]done[/]  ·  your [b]{_fmt(res.your_tps, '{:.0f}')}[/] tok/s vs published "
                        f"{_fmt(res.published_tps, '{:.0f}')}{ratio}  ·  code {_fmt(res.code_score)} "
-                       f"({res.passed}/{res.total})")
+                       f"({res.passed}/{res.total}){submit_hint}")
         else:
             out.update(f"[red b]failed[/] — {res.note}")
+
+    def action_submit(self) -> None:
+        if not (self._result and self._result.ok and self._result.bundle):
+            self.notify("nothing to submit yet")
+            return
+        self.submit_run()
+
+    @work(thread=True, exclusive=True)
+    def submit_run(self) -> None:
+        try:
+            status, detail = client.submit_bundle(self.base_url, self._result.bundle)
+        except client.APIError as e:
+            self.app.call_from_thread(self.app.notify, f"submit failed: {e}", severity="error")
+            return
+        msg = {201: "submitted ✓", 409: "already submitted", 400: "rejected"}.get(status, f"status {status}")
+        self.app.call_from_thread(self.app.notify, f"{msg}")
 
 
 class AddModelScreen(ModalScreen):
@@ -217,8 +243,9 @@ class AddModelScreen(ModalScreen):
 class ModelsScreen(ModalScreen):
     CSS = """
     ModelsScreen { align: center middle; }
-    #models { width: 90; height: 22; border: thick $accent; background: $surface; padding: 1; }
+    #models { width: 90; height: 24; border: thick $accent; background: $surface; padding: 1; }
     #models-tbl { height: 1fr; }
+    #dl-bar { margin-top: 1; }
     """
     BINDINGS = [("escape", "dismiss", "Close"), ("a", "add", "Add"), ("d", "download", "Download")]
 
@@ -226,9 +253,11 @@ class ModelsScreen(ModalScreen):
         with Vertical(id="models"):
             yield Static("[b]Local models[/b] (serve/models.toml)  ·  a add  ·  d download  ·  Esc close")
             yield DataTable(id="models-tbl", cursor_type="row", zebra_stripes=True)
+            yield ProgressBar(id="dl-bar", show_eta=False)
 
     def on_mount(self) -> None:
         self.query_one("#models-tbl", DataTable).add_columns("Model", "Present", "Size", "Port", "Repo")
+        self.query_one("#dl-bar", ProgressBar).display = False
         self.refresh_models()
 
     def refresh_models(self) -> None:
@@ -253,8 +282,44 @@ class ModelsScreen(ModalScreen):
         entry = models.load_registry().get(name)
         if entry:
             self.app.call_from_thread(self.app.notify, f"downloading {name}…")
-            models.download(entry, lambda s: self.app.call_from_thread(self.app.notify, s, timeout=8))
+            self.app.call_from_thread(self._bar_show, True)
+            models.download(entry, lambda s: self.app.call_from_thread(self.app.notify, s, timeout=8),
+                            progress=lambda done, total: self.app.call_from_thread(self._bar_update, done, total))
+            self.app.call_from_thread(self._bar_show, False)
         self.app.call_from_thread(self.refresh_models)
+
+    def _bar_show(self, show: bool) -> None:
+        self.query_one("#dl-bar", ProgressBar).display = show
+
+    def _bar_update(self, done: int, total: int | None) -> None:
+        bar = self.query_one("#dl-bar", ProgressBar)
+        if total:
+            bar.update(total=total, progress=done)
+
+
+class HistoryScreen(ModalScreen):
+    CSS = """
+    HistoryScreen { align: center middle; }
+    #history { width: 96; height: 22; border: thick $accent; background: $surface; padding: 1; }
+    #hist-tbl { height: 1fr; }
+    """
+    BINDINGS = [("escape", "dismiss", "Close")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="history"):
+            yield Static("[b]Reproduce history[/b]  ·  Esc close")
+            yield DataTable(id="hist-tbl", zebra_stripes=True)
+
+    def on_mount(self) -> None:
+        t = self.query_one("#hist-tbl", DataTable)
+        t.add_columns("When", "Model", "Your TPS", "Published", "Code", "Result")
+        rows = list(reversed(history.load()))
+        for h in rows:
+            t.add_row(h.get("at", ""), h.get("model", ""),
+                      _fmt(h.get("your_tps"), "{:.0f}"), _fmt(h.get("published_tps"), "{:.0f}"),
+                      _fmt(h.get("code_score")), "ok" if h.get("ok") else (h.get("note") or "fail")[:24])
+        if not rows:
+            t.add_row("", "(no reproduce runs yet)", "", "", "", "")
 
 
 def main() -> None:

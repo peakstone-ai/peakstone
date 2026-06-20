@@ -31,6 +31,7 @@ class ReproduceResult:
     passed: int = 0
     total: int = 0
     note: str = ""
+    bundle: dict | None = None    # the signed bundle, for one-key submission to the leaderboard
 
     @property
     def tps_ratio(self) -> float | None:
@@ -112,4 +113,4 @@ def reproduce(name: str, *, challenge_ids: list[str], published_tps: float | Non
         your_tps=round(sum(tps) / len(tps), 1) if tps else None,
         published_tps=published_tps,
         code_score=round(sum(codes) / len(codes), 3) if codes else None,
-        passed=passed, total=total, note="done")
+        passed=passed, total=total, note="done", bundle=bundle)
