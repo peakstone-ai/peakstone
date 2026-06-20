@@ -262,11 +262,14 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
   under non-reproducible conditions. **Docker now *applies* `[[links]]` conditions** (not just
   advertises): a privileged `nicolaka/netshoot` sidecar joins each node's netns and runs `tc` netem
   (latency/loss/bandwidth) + `iptables` (firewall), so node containers stay unprivileged; applied
-  rules recorded in `provenance.network.applied`. 15 tests (incl. docker firewall actually blocks a
-  serving peer + 200ms netem measurable as ≥150ms RTT). _Deferred:_ Firecracker microVM (real kernel
-  isolation; advertised, impl pending); per-source multi-link shaping (one shaped link per source for
-  now); wiring the agent mode into the main runner CLI + API/web; p2p/convergence example challenges;
-  planner-agent as an env type.
+  rules recorded in `provenance.network.applied`. **Firecracker microVM provider scaffolded**
+  (`firecracker.py`): interface-complete with rigorous host-prereq detection (`/dev/kvm` access +
+  CAP_NET_ADMIN + binary) and unit-tested VM-config assembly; `provision()` refuses with exact
+  missing pieces. Its win over docker is *isolation* (real kernel boundary for untrusted agent code),
+  not network realism. 20 tests (incl. docker firewall actually blocks a serving peer + 200ms netem
+  measurable as ≥150ms RTT; firecracker scaffold). _Deferred:_ Firecracker boot + vsock guest-agent
+  exec (needs a KVM+TAP host — this dev box has neither); per-source multi-link shaping; wiring the
+  agent mode into the main runner CLI + API/web; p2p/convergence example challenges; planner-agent.
 - **P4 — Multimodal.** vision-to-UI (build interface from screenshot/video), game-playing, for
   models that support it.
 

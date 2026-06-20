@@ -22,4 +22,7 @@ def get_provider(name: str = "local"):
     if name == "docker":
         from .docker import DockerComposeProvider
         return DockerComposeProvider()
+    if name in ("microvm", "firecracker"):
+        from .firecracker import FirecrackerProvider
+        return FirecrackerProvider()
     raise ValueError(f"unknown environment provider {name!r}")

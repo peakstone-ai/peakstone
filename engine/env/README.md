@@ -17,10 +17,16 @@ converged" — not on a unit-test diff.
 - **`agent.py`** — the live-LLM run mode: the model iterates write → run → `verify` until green.
 - **`spec.py`** — loads a challenge dir into an `EnvChallenge`.
 
-Firecracker-microVM is a future provider behind the same interface (it adds a real kernel boundary
-for untrusted agent code). **ssh-to-real-hosts is intentionally excluded** — real public IPs / DNS /
-ISP firewalls would give genuine real-world conditions but destroy reproducibility, which is the
-platform's whole point.
+- **`firecracker.py`** — `FirecrackerProvider` (microvm). **Scaffold**: interface-complete with
+  rigorous prerequisite detection (`host_prereqs()` — needs `/dev/kvm` access + `CAP_NET_ADMIN` for
+  TAP + the firecracker binary) and unit-tested VM-config assembly; `provision()` refuses with the
+  exact missing pieces rather than half-booting. The boot + vsock guest-agent exec path is the
+  remaining work (needs a KVM+TAP host). Its headline advantage over docker is **isolation** — a real
+  kernel boundary for untrusted agent code — not network realism (docker already covers DNS/firewall/
+  NAT/egress).
+
+**ssh-to-real-hosts is intentionally excluded** — real public IPs / DNS / ISP firewalls would give
+genuine real-world conditions but destroy reproducibility, which is the platform's whole point.
 
 ## Network capabilities (`capabilities.py`)
 A challenge declares the network conditions its test is only valid under; a provider advertises what
