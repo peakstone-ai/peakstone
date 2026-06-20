@@ -9,6 +9,7 @@ export type Run = {
   engine: { name?: string; version?: string };
   trust_tier: string;
   submitted_at: string;
+  submitter: string | null;
   bundle_hash: string;
 };
 
@@ -60,4 +61,53 @@ export function getLeaderboard(sp: Record<string, string | undefined>) {
 
 export function getModel(family: string) {
   return getJSON<ModelPage>(`/models/${encodeURIComponent(family)}`);
+}
+
+export type Facets = {
+  quants: string[];
+  suites: { name: string; version: string }[];
+  trust_tiers: string[];
+};
+
+export function getFacets() {
+  return getJSON<Facets>("/facets");
+}
+
+export type ChallengeRow = {
+  id: string;
+  category: string | null;
+  verification: string | null;
+  seed_difficulty: number | null;
+  status: string;
+  n_runs: number;
+  avg_score: number | null;
+  pass_rate: number | null;
+};
+
+export type ChallengeList = { count: number; challenges: ChallengeRow[] };
+
+export function getChallenges() {
+  return getJSON<ChallengeList>("/challenges");
+}
+
+export type ChallengeResult = {
+  family: string;
+  score: number;
+  passed: number | null;
+  total: number | null;
+  run: Run;
+};
+
+export type ChallengeDetail = {
+  id: string;
+  category: string | null;
+  verification: string | null;
+  seed_difficulty: number | null;
+  status: string;
+  n_families: number;
+  results: ChallengeResult[];
+};
+
+export function getChallenge(id: string) {
+  return getJSON<ChallengeDetail>(`/challenges/${encodeURIComponent(id)}`);
 }

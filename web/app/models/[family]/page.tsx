@@ -71,6 +71,9 @@ export default async function ModelPage({
                 </td>
                 <td className="py-2 pr-4">
                   <Trust t={r.run.trust_tier} />
+                  {r.run.submitter ? (
+                    <span className="ml-1 text-xs text-stone-500">@{r.run.submitter}</span>
+                  ) : null}
                 </td>
                 <td className="py-2 pr-4 text-stone-500">{r.suite}</td>
               </tr>

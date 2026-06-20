@@ -252,16 +252,22 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
 2. ✅ **DONE (P1.2)** — `engine/bundle.py` `produce_bundle()` (model identity + file SHA-256 + env +
    content-hashed challenges + transcripts + scores), schema-validated, content-addressed,
    ed25519-signed via `engine/keys.py` (auth-agnostic). `runner --bundle` emits it.
-3. ✅ **DONE (P1.3)** — `infra/docker-compose.yml` (Postgres + api) + Dockerfile. _TODO: Alembic
-   migrations (dev uses `create_all`)._
-4. ✅ **DONE (P1.4 core)** — `api/`: `POST /submissions` (trust chain), faceted `GET /leaderboard`
-   (incl. `max_vram_gb` "fits-my-hardware" filter), `GET /models/{family}`. Verified on SQLite +
-   Postgres. _TODO: GitHub-OAuth identity binding (pubkey→account); community-verified tier._
-5. ✅ **DONE (P1.5)** — `web/` Next.js 16 (React 19, Tailwind 4): coder leaderboard with the
-   VRAM "fits-my-hardware" filter pills, model detail page (uncollapsed runs), capability-vs-
-   release-date evolution chart (recharts), and a "how to submit" CLI guide. `npm run build`
-   green; verified live end-to-end (seed → API → homepage renders families → VRAM ≤8GB filter
-   drops the 24GB run). _TODO: challenge pages; quant filter UI; wire identity/account binding._
+3. ✅ **DONE (P1.3)** — `infra/docker-compose.yml` (Postgres + api) + Dockerfile. **Alembic done:**
+   `api/alembic/` with env wired to `Base.metadata` + `PEAKSTONE_DATABASE_URL`; initial revision
+   `df8d401ae31a` (`alembic upgrade head`; `alembic check` clean). `create_all` kept for dev/tests.
+4. ✅ **DONE (P1.4)** — `api/`: `POST /submissions` (trust chain), faceted `GET /leaderboard`
+   (incl. `max_vram_gb` "fits-my-hardware" filter), `GET /models/{family}`, `GET /facets`,
+   `GET /challenges[/{id}]`. **Identity binding done:** provider-pluggable account binding
+   (`api/identity.py`) — key-ownership proof (signed nonce) + OAuth account proof; GitHub wired
+   behind `PEAKSTONE_GITHUB_CLIENT_ID/SECRET` (503 until configured). **Community-verified tier
+   done:** a run is promoted once ≥`PEAKSTONE_COMMUNITY_MIN_IDENTITIES` (default 2) distinct
+   identities reproduce its deterministic result vector (`repro_sig`); two keys on one bound
+   account count once (anti-self-verify). 7 pytest cases in `api/tests/`. Verified SQLite + Postgres.
+5. ✅ **DONE (P1.5)** — `web/` Next.js 16 (React 19, Tailwind 4): coder leaderboard with the VRAM
+   filter pills **+ quant/trust selects**, model detail page (uncollapsed runs, submitter handle),
+   **challenge corpus + per-challenge mini-leaderboards** (`/challenges`), capability-vs-release-date
+   evolution chart (recharts), and a "how to submit" CLI guide. `npm run build` green; verified live
+   end-to-end (VRAM + quant filters narrow correctly; challenge pages render).
 
 ## 11. Open questions to resolve as we build
 - ~~Project name & domain~~ **DECIDED: Peakstone / peakstone.ai.** License: Apache-2.0 (code +

@@ -1,6 +1,7 @@
 import Link from "next/link";
-import { getLeaderboard } from "@/lib/api";
+import { getFacets, getLeaderboard } from "@/lib/api";
 import { ApiDown, ScoreBar, Trust } from "@/components/ui";
+import { SelectFilter } from "@/components/Filters";
 
 export const dynamic = "force-dynamic";
 
@@ -20,7 +21,7 @@ export default async function Home({
 }) {
   const sp = await searchParams;
   const vram = sp.max_vram_gb ?? "";
-  const data = await getLeaderboard(sp);
+  const [data, facets] = await Promise.all([getLeaderboard(sp), getFacets()]);
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-8">
@@ -35,11 +36,16 @@ export default async function Home({
         <span className="text-sm text-stone-500">Fits my hardware:</span>
         {VRAM_PRESETS.map(([label, val]) => {
           const active = vram === val;
-          const href = val ? `/?max_vram_gb=${val}` : "/";
+          const params = new URLSearchParams();
+          for (const k of ["quant", "trust", "suite", "version"]) {
+            if (sp[k]) params.set(k, sp[k] as string);
+          }
+          if (val) params.set("max_vram_gb", val);
+          const qs = params.toString();
           return (
             <Link
               key={label}
-              href={href}
+              href={qs ? `/?${qs}` : "/"}
               className={`rounded-full px-3 py-1 text-sm transition-colors ${
                 active
                   ? "bg-emerald-600 text-white"
@@ -51,6 +57,17 @@ export default async function Home({
           );
         })}
       </div>
+
+      {facets && (facets.quants.length > 0 || facets.trust_tiers.length > 1) && (
+        <div className="mb-5 flex flex-wrap items-center gap-4">
+          {facets.quants.length > 0 && (
+            <SelectFilter param="quant" label="Quant" options={facets.quants} />
+          )}
+          {facets.trust_tiers.length > 1 && (
+            <SelectFilter param="trust" label="Trust" options={facets.trust_tiers} allLabel="Any" />
+          )}
+        </div>
+      )}
 
       {!data ? (
         <ApiDown />
@@ -99,6 +116,9 @@ export default async function Home({
                   <td className="py-2 pr-4 text-stone-400">
                     <span className="text-stone-300">{r.run.artifact}</span> ·{" "}
                     {r.run.vram_gb ?? "?"} GB · <Trust t={r.run.trust_tier} />
+                    {r.run.submitter ? (
+                      <span className="text-stone-500"> · @{r.run.submitter}</span>
+                    ) : null}
                   </td>
                 </tr>
               ))}

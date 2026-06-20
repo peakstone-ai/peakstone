@@ -35,7 +35,10 @@ class ModelFamily(Base):
 class ModelArtifact(Base):
     """A specific quant/build of a family (the thing a run actually loads)."""
     __tablename__ = "model_artifacts"
-    __table_args__ = (UniqueConstraint("hf_repo", "artifact", "file_sha256", name="uq_artifact"),)
+    # family-scoped: the ingest lookup keys on family too, and two distinct families can both carry a
+    # placeholder/unknown artifact identity (no sha) without colliding.
+    __table_args__ = (UniqueConstraint("family_id", "hf_repo", "artifact", "file_sha256",
+                                       name="uq_artifact"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     family_id: Mapped[int] = mapped_column(ForeignKey("model_families.id"), index=True)
     artifact: Mapped[str] = mapped_column(String)          # e.g. UD-Q4_K_XL
@@ -76,6 +79,17 @@ class IdentityLink(Base):
     verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
+class KeyChallenge(Base):
+    """A short-lived nonce a key must sign to prove ownership before binding to an account.
+    Single-use: consumed (deleted) when redeemed. (Account binding flow — see api/identity.py.)"""
+    __tablename__ = "key_challenges"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    pubkey: Mapped[str] = mapped_column(String, index=True)
+    nonce: Mapped[str] = mapped_column(String, unique=True, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
 class Challenge(Base):
     """Corpus entry (lazily upserted from submissions for now; richer authoring lands in P2)."""
     __tablename__ = "challenges"
@@ -113,6 +127,10 @@ class Submission(Base):
     env: Mapped[dict] = mapped_column(JSONv)               # gpu/driver/cpu/ram/vram/offload — faceting
     vram_gb: Mapped[float | None] = mapped_column(Float, index=True)  # denormalized for the VRAM filter
     harness_version: Mapped[str | None] = mapped_column(String)
+    # Fingerprint of the deterministic result vector (sorted challenge->score). Two submissions of
+    # the same artifact+suite with the same repro_sig are reproductions of each other → the basis
+    # of the community-verified trust tier (see ingest._recompute_trust).
+    repro_sig: Mapped[str | None] = mapped_column(String, index=True)
     trust_tier: Mapped[str] = mapped_column(String, default="self-reported", index=True)
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     raw: Mapped[dict] = mapped_column(JSONv)               # full bundle, for audit / re-verification

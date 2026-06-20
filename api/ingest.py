@@ -6,6 +6,10 @@ Trust chain at ingest: (1) JSON Schema valid, (2) re-derived bundle_hash matches
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import os
+
 from sqlalchemy import select
 
 from engine import bundle as eng_bundle  # the engine is the source of truth for hashing/validation
@@ -13,9 +17,59 @@ from engine import keys
 
 from . import models
 
+# Trust tiers, weakest → strongest. A run is promoted to community-verified once enough *distinct
+# identities* independently reproduce its deterministic result vector (PLAN §5). runner-verified is
+# set out-of-band by a trusted re-runner and never downgraded here.
+TRUST_ORDER = {"self-reported": 0, "community-verified": 1, "runner-verified": 2}
+# Distinct identities required to promote to community-verified (a bound account counts once even
+# across several of its keys; unbound keys each count once). Calibratable; 2 is the floor.
+COMMUNITY_MIN_IDENTITIES = int(os.environ.get("PEAKSTONE_COMMUNITY_MIN_IDENTITIES", "2"))
+
 
 class IngestError(ValueError):
     """Bad/rejected bundle (maps to HTTP 400/409)."""
+
+
+def _repro_sig(results: list[dict]) -> str | None:
+    """Fingerprint the deterministic result vector — the thing a reproduction must match.
+
+    Only deterministic-tests results count (llm-judge/human aren't reproducible). Scores are
+    rounded so floating-point noise doesn't split a genuine reproduction. None if nothing
+    deterministic ran (such a run can never be community-verified)."""
+    det = [(r["challenge_id"], round(float(r.get("score", {}).get("final", 0.0)), 4))
+           for r in results if r.get("verification", "deterministic-tests") == "deterministic-tests"]
+    if not det:
+        return None
+    payload = json.dumps(sorted(det), separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _identity_of(db, sub: models.Submission) -> str:
+    """The reproduction identity of a submission: its bound account if the key is linked, else the
+    key itself. Two keys owned by the same account count as ONE reproducer (anti-self-verify)."""
+    key = db.get(models.Key, sub.key_id)
+    if key and key.user_id is not None:
+        return f"user:{key.user_id}"
+    return f"key:{sub.key_id}"
+
+
+def _recompute_trust(db, sub: models.Submission) -> None:
+    """After inserting `sub`, promote every self-reported run in its reproduction group to
+    community-verified once ≥ COMMUNITY_MIN_IDENTITIES distinct identities agree."""
+    if not sub.repro_sig:
+        return
+    group = db.scalars(select(models.Submission).where(
+        models.Submission.artifact_id == sub.artifact_id,
+        models.Submission.suite_name == sub.suite_name,
+        models.Submission.suite_version == sub.suite_version,
+        models.Submission.repro_sig == sub.repro_sig,
+    )).all()
+    identities = {_identity_of(db, s) for s in group}
+    if len(identities) < COMMUNITY_MIN_IDENTITIES:
+        return
+    for s in group:
+        if TRUST_ORDER.get(s.trust_tier, 0) < TRUST_ORDER["community-verified"]:
+            s.trust_tier = "community-verified"
 
 
 def _get_or_create(db, model, defaults=None, **filters):
@@ -79,6 +133,7 @@ def ingest_bundle(db, b: dict) -> models.Submission:
         engine=m.get("engine", {}), sampling=m.get("sampling", {}),
         serve_flags=m.get("serve_flags"), context=m.get("context"),
         env=env, vram_gb=env.get("vram_gb"), harness_version=b.get("harness", {}).get("version"),
+        repro_sig=_repro_sig(b["results"]),
         raw=b,
     )
     db.add(submission)
@@ -101,6 +156,7 @@ def ingest_bundle(db, b: dict) -> models.Submission:
                 verification=r.get("verification"), seed_difficulty=r.get("difficulty"),
                 content_hash=r.get("challenge_hash")))
 
+    _recompute_trust(db, submission)
     db.commit()
     db.refresh(submission)
     return submission
