@@ -201,8 +201,8 @@ Q4@24GB run and a Q8@48GB run of the same model are distinct points. The leaderb
 /db         migrations (Alembic).
 /infra      docker-compose (Postgres + api + web), sandbox runners.
 ```
-The existing repo restructures in place: `bench/ → engine/`, `challenges/` stays, `serve/` stays as
-a local convenience for running your own models.
+The existing repo restructures in place: `bench/ → engine/` (**done**), `challenges/` stays, `serve/`
+trimmed to the reusable local model-serving helpers, lab cruft + `results/` cleared.
 
 ## 8. Security
 - **Untrusted code runs sandboxed.** Already partly done: `sandbox.py` uses subprocess + timeout +
@@ -222,7 +222,7 @@ a local convenience for running your own models.
      re-derive bundle hash) and leaderboard/query endpoints.
   4. Next.js: overall + per-category leaderboards, model pages, **capability-vs-release-date charts**,
      a "how to submit" CLI guide.
-  5. Seed with our existing results (the runs already in `results/`).
+  5. Seed by re-running the engine on a handful of models to produce the first real bundles.
   6. **community-verified** tier (auto-promote deterministic results reproduced ≥N times).
 - **P2 — Challenge authoring.** In-repo + web-form challenge submission, moderation queue, sandbox
   hardening, challenge versioning & deprecation, per-challenge discussion.
@@ -233,11 +233,17 @@ a local convenience for running your own models.
   models that support it.
 
 ## 10. Immediate next steps (P1, in order)
-1. Lock the project name + license (Apache-2.0?) and `/schema/result-bundle.schema.json` v1.
-2. Carve `engine/` out of `bench/` with a `produce_bundle()` path; add env capture + signing.
+1. ✅ **DONE** — name (Peakstone) + license (Apache-2.0 / CC-BY-4.0) + `/schema/result-bundle.schema.json`
+   v1 + `taxonomy.json` (validated). Repo cleaned of lab cruft; `bench/ → engine/` carve-out done.
+2. **← NEXT (P1.2):** add `engine/bundle.py` `produce_bundle()` — assemble a schema-valid result
+   bundle from a run (model identity + file SHA-256 + env capture + content-hashed challenges +
+   transcripts + scores), validate against the schema, and **sign** it (ed25519). Wire `runner.py`
+   to emit a bundle alongside the existing `results.json`. (env capture: extend `_gpu_info` /
+   `_gpu_mem_used`; add CPU/RAM/OS/driver.)
 3. Stand up `docker-compose` (Postgres) + Alembic baseline migration for the §6 tables.
-4. FastAPI: `POST /submissions` (validate + store), `GET /leaderboard`, `GET /models/{family}`.
-5. Next.js skeleton with the overall leaderboard reading from the API; backfill our `results/`.
+4. FastAPI: `POST /submissions` (validate schema + signature + re-derive bundle hash, store),
+   `GET /leaderboard` (faceted — §6a), `GET /models/{family}`.
+5. Next.js skeleton with the overall leaderboard reading from the API.
 
 ## 11. Open questions to resolve as we build
 - ~~Project name & domain~~ **DECIDED: Peakstone / peakstone.ai.** License: Apache-2.0 (code +
