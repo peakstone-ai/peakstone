@@ -7,9 +7,14 @@ from __future__ import annotations
 
 from textual import work
 from textual.app import App, ComposeResult
-from textual.widgets import DataTable, Footer, Header, Static
+from textual.containers import Vertical
+from textual.screen import ModalScreen
+from textual.widgets import Button, DataTable, Footer, Header, Input, RichLog, Static
 
-from . import client, hardware
+from . import client, hardware, models, reproduce
+
+# a short, fast challenge set for a reproduce run — enough to measure tok/s + a code score
+REPRODUCE_IDS = ["py-02-csv-groupby", "py-05-calc", "py-01-fizzbuzz"]
 
 
 def _bar(used: int, total: int, width: int = 22) -> str:
@@ -52,6 +57,8 @@ class Dashboard(App):
         ("r", "refresh", "Refresh"),
         ("f", "toggle_fit", "Fit filter"),
         ("s", "cycle_sort", "Sort axis"),
+        ("enter", "reproduce", "Reproduce"),
+        ("m", "models", "Models"),
     ]
     SORTS = ["code_score", "agent_score", "planner_score", "tok_per_s"]
 
@@ -60,6 +67,7 @@ class Dashboard(App):
         self.base_url = base_url
         self.fit = True          # filter to models that fit my VRAM
         self.sort_i = 0
+        self._board_rows: list[dict] = []
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -84,6 +92,19 @@ class Dashboard(App):
         self.sort_i = (self.sort_i + 1) % len(self.SORTS)
         self.load_board()
 
+    def action_models(self) -> None:
+        self.push_screen(ModelsScreen())
+
+    def action_reproduce(self) -> None:
+        table = self.query_one(DataTable)
+        i = table.cursor_row
+        if not self._board_rows or i is None or i >= len(self._board_rows):
+            return
+        row = self._board_rows[i]
+        if not row.get("family"):
+            return
+        self.push_screen(ReproduceScreen(row["family"], row.get("tok_per_s")))
+
     @work(thread=True, exclusive=True)
     def load_board(self) -> None:
         snap = hardware.snapshot()
@@ -99,8 +120,9 @@ class Dashboard(App):
         table = self.query_one(DataTable)
         table.clear()
         scope = f"fits ≤{max_vram:g} GB" if max_vram else "all hardware"
-        self.sub_title = f"{self.base_url}  ·  {scope}  ·  sort: {self.SORTS[self.sort_i]}"
+        self.sub_title = f"{self.base_url}  ·  {scope}  ·  sort: {self.SORTS[self.sort_i]}  ·  ⏎ reproduce  m models"
         rows = data.get("leaderboard", [])
+        self._board_rows = rows
         for r in rows:
             run = r.get("run", {})
             table.add_row(
@@ -116,6 +138,123 @@ class Dashboard(App):
         table.clear()
         self.sub_title = f"{self.base_url}  ·  API unreachable"
         table.add_row("", "API unreachable", msg[:50], "", "", "", "", "")
+
+
+class ReproduceScreen(ModalScreen):
+    """Reproduce a model on local hardware and compare your tok/s to the published number."""
+    CSS = """
+    ReproduceScreen { align: center middle; }
+    #repro { width: 84; height: 24; border: thick $accent; background: $surface; padding: 1; }
+    #repro-log { height: 1fr; border: round $primary; }
+    #repro-result { height: auto; padding-top: 1; }
+    """
+    BINDINGS = [("escape", "dismiss", "Close")]
+
+    def __init__(self, model: str, published_tps: float | None):
+        super().__init__()
+        self.model = model
+        self.published_tps = published_tps
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="repro"):
+            yield Static(f"[b]Reproduce[/b] {self.model}  ·  published {_fmt(self.published_tps, '{:.0f}')} tok/s",
+                         id="repro-title")
+            yield RichLog(id="repro-log", wrap=True, max_lines=300)
+            yield Static("running… (Esc to close)", id="repro-result")
+
+    def on_mount(self) -> None:
+        self.run_reproduce()
+
+    @work(thread=True, exclusive=True)
+    def run_reproduce(self) -> None:
+        log = self.query_one("#repro-log", RichLog)
+
+        def emit(s: str) -> None:
+            self.app.call_from_thread(log.write, s)
+
+        res = reproduce.reproduce(self.model, challenge_ids=REPRODUCE_IDS,
+                                  published_tps=self.published_tps, log=emit)
+        self.app.call_from_thread(self._show, res)
+
+    def _show(self, res: "reproduce.ReproduceResult") -> None:
+        out = self.query_one("#repro-result", Static)
+        if res.ok:
+            ratio = f"  ([b]{res.tps_ratio}×[/b] published)" if res.tps_ratio else ""
+            out.update(f"[green b]done[/]  ·  your [b]{_fmt(res.your_tps, '{:.0f}')}[/] tok/s vs published "
+                       f"{_fmt(res.published_tps, '{:.0f}')}{ratio}  ·  code {_fmt(res.code_score)} "
+                       f"({res.passed}/{res.total})")
+        else:
+            out.update(f"[red b]failed[/] — {res.note}")
+
+
+class AddModelScreen(ModalScreen):
+    CSS = """
+    AddModelScreen { align: center middle; }
+    #addmodel { width: 76; height: auto; border: thick $accent; background: $surface; padding: 1; }
+    #addmodel Input { margin-bottom: 1; }
+    """
+    BINDINGS = [("escape", "dismiss", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="addmodel"):
+            yield Static("[b]Add a model[/b]  (registers it in serve/models.toml)")
+            yield Input(placeholder="name  e.g. qwen3-coder", id="m-name")
+            yield Input(placeholder="HF repo  e.g. unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF", id="m-repo")
+            yield Input(placeholder="GGUF filename  e.g. Qwen3-Coder-...-Q4_K_XL.gguf", id="m-file")
+            yield Static("", id="addmodel-err")
+            yield Button("Add", id="m-add", variant="primary")
+
+    def on_button_pressed(self, _: Button.Pressed) -> None:
+        try:
+            models.add_model(self.query_one("#m-name", Input).value.strip(),
+                             self.query_one("#m-repo", Input).value.strip(),
+                             self.query_one("#m-file", Input).value.strip() or None)
+            self.dismiss(True)
+        except ValueError as e:
+            self.query_one("#addmodel-err", Static).update(f"[red]{e}[/]")
+
+
+class ModelsScreen(ModalScreen):
+    CSS = """
+    ModelsScreen { align: center middle; }
+    #models { width: 90; height: 22; border: thick $accent; background: $surface; padding: 1; }
+    #models-tbl { height: 1fr; }
+    """
+    BINDINGS = [("escape", "dismiss", "Close"), ("a", "add", "Add"), ("d", "download", "Download")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="models"):
+            yield Static("[b]Local models[/b] (serve/models.toml)  ·  a add  ·  d download  ·  Esc close")
+            yield DataTable(id="models-tbl", cursor_type="row", zebra_stripes=True)
+
+    def on_mount(self) -> None:
+        self.query_one("#models-tbl", DataTable).add_columns("Model", "Present", "Size", "Port", "Repo")
+        self.refresh_models()
+
+    def refresh_models(self) -> None:
+        t = self.query_one("#models-tbl", DataTable)
+        t.clear()
+        for e in models.load_registry().values():
+            t.add_row(e.name, "✓" if e.present else "—", f"{e.size_gb} GB" if e.size_gb else "—",
+                      str(e.port or ""), (e.repo or "")[:42])
+
+    def action_add(self) -> None:
+        self.app.push_screen(AddModelScreen(), lambda _ok: self.refresh_models())
+
+    def action_download(self) -> None:
+        t = self.query_one("#models-tbl", DataTable)
+        if t.row_count == 0:
+            return
+        name = str(t.get_row_at(t.cursor_row)[0])
+        self.download_model(name)
+
+    @work(thread=True, exclusive=True)
+    def download_model(self, name: str) -> None:
+        entry = models.load_registry().get(name)
+        if entry:
+            self.app.call_from_thread(self.app.notify, f"downloading {name}…")
+            models.download(entry, lambda s: self.app.call_from_thread(self.app.notify, s, timeout=8))
+        self.app.call_from_thread(self.refresh_models)
 
 
 def main() -> None:
