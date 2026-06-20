@@ -74,6 +74,10 @@ def load_challenges(root: Path) -> list[Challenge]:
         # challenges/_archived/) is excluded from the active suite.
         if any(part[:1] in ("_", ".") for part in d.relative_to(root).parts):
             continue
+        # goal-state-env (multi-machine) challenges are loaded by engine.env.spec, not here — they
+        # have an env.toml + no `language` and would otherwise break this loader.
+        if (d / "env.toml").exists():
+            continue
         m = tomllib.loads(meta.read_text())
         spec = (d / "spec.md").read_text() if (d / "spec.md").exists() else ""
         j = m.get("judge", {})

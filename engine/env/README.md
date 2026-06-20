@@ -106,6 +106,15 @@ select_provider(Requirements())                       # -> local
 run_reference(ch, LocalProvider())                    # raises UnsatisfiableEnv if local can't satisfy
 ```
 
+## Running a model against env challenges
+```bash
+python -m engine.runner --env --models <model> [--env-provider auto|local|docker|microvm] [--bundle]
+```
+The model drives the tool loop until each challenge's verifier passes. `--env-provider auto` (default)
+picks the cheapest provider that satisfies each challenge's network requirements. Results are
+goal-state-env rows: the API scores them as a separate **`agent_score`** axis (not blended into
+coding), and the leaderboard faces on it (`?sort=agent_score`).
+
 ## Authoring a goal-state-env challenge
 ```
 challenges/env/<slug>/

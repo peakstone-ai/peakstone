@@ -55,8 +55,8 @@ def _avg(xs):
 # alongside code_score; a model can be correct-but-bloated vs correct-and-lean.
 METRIC_AXES = {"peak_rss_mb": "asc", "loc": "asc", "solution_bytes": "asc", "test_wall_s": "asc"}
 # All sortable leaderboard keys → default order.
-SORT_ORDER = {"code_score": "desc", "safety_score": "desc", "solved": "desc",
-              "tok_per_s": "desc", **METRIC_AXES}
+SORT_ORDER = {"code_score": "desc", "agent_score": "desc", "safety_score": "desc",
+              "solved": "desc", "tok_per_s": "desc", **METRIC_AXES}
 
 
 def _agg_metrics(rs) -> dict:
@@ -71,7 +71,11 @@ def _agg_metrics(rs) -> dict:
 
 def _summarize(sub: models.Submission) -> dict:
     rs = sub.results
-    code = [r.final for r in rs if (r.category or "") not in SAFETY]
+    # three capability axes, kept separate: coding ability, safety/honesty, and agentic (goal-state-
+    # env, multi-machine). An agentic run isn't a "coder" and vice-versa.
+    agent = [r.final for r in rs if (r.verification or "") == "goal-state-env"]
+    code = [r.final for r in rs
+            if (r.category or "") not in SAFETY and (r.verification or "") != "goal-state-env"]
     safety = [r.final for r in rs if (r.category or "") in SAFETY]
     by_cat = defaultdict(list)
     for r in rs:
@@ -79,8 +83,10 @@ def _summarize(sub: models.Submission) -> dict:
     return {
         "code_score": _avg(code),
         "safety_score": _avg(safety),
+        "agent_score": _avg(agent),
         "solved": sum(1 for x in code if x >= 0.999),
         "n_code": len(code),
+        "n_agent": len(agent),
         "by_category": {k: round(sum(v) / len(v), 3) for k, v in sorted(by_cat.items())},
         "tok_per_s": _avg([r.tok_per_s for r in rs]),
         "metrics": _agg_metrics(rs),
@@ -128,6 +134,9 @@ def leaderboard(db: Session = Depends(get_session), suite: str | None = None,
     if trust:
         q = q.where(models.Submission.trust_tier == trust)
 
+    # each family collapses to its best run *for the chosen axis* — so sort=agent_score ranks each
+    # family's best agentic run, sort=code_score its best coding run. Runs with no value on the axis
+    # don't qualify for that board at all (a safety-only or agent-only run isn't a "coder").
     best: dict[str, dict] = {}
     for s in db.scalars(q).all():
         art = db.get(models.ModelArtifact, s.artifact_id)
@@ -135,20 +144,19 @@ def leaderboard(db: Session = Depends(get_session), suite: str | None = None,
             continue
         fam = db.get(models.ModelFamily, art.family_id)
         summ = _summarize(s)
-        score = summ["code_score"] or -1.0
+        row = {"family": fam.name, "release_date": fam.release_date, **summ,
+               "run": _run_info(db, s, art)}
+        val = _sort_value(row, sort)
+        if val is None:
+            continue
         cur = best.get(fam.name)
-        if cur is None or score > cur["_score"]:
-            best[fam.name] = {"family": fam.name, "release_date": fam.release_date,
-                              "_score": score, **summ, "run": _run_info(db, s, art)}
-    # rank by the chosen axis; runs missing that metric sink to the bottom regardless of order
-    all_rows = list(best.values())
-    present = [r for r in all_rows if _sort_value(r, sort) is not None]
-    missing = [r for r in all_rows if _sort_value(r, sort) is None]
-    present.sort(key=lambda r: _sort_value(r, sort), reverse=(order == "desc"))
-    rows = present + missing
+        better = cur is None or (val > cur["_v"] if order == "desc" else val < cur["_v"])
+        if better:
+            best[fam.name] = {**row, "_v": val}
+    rows = sorted(best.values(), key=lambda r: r["_v"], reverse=(order == "desc"))
     for i, r in enumerate(rows, 1):
         r["rank"] = i
-        r.pop("_score", None)
+        r.pop("_v", None)
     return {"filters": {"suite": suite, "version": version, "max_vram_gb": max_vram_gb,
                         "quant": quant, "trust": trust, "sort": sort, "order": order},
             "count": len(rows), "leaderboard": rows}

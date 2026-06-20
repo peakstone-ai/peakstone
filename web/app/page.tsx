@@ -29,15 +29,25 @@ export default async function Home({
   const sp = await searchParams;
   const vram = sp.max_vram_gb ?? "";
   const sort = sp.sort ?? "code_score";
+  const isAgent = sort === "agent_score";
   const [data, facets] = await Promise.all([getLeaderboard(sp), getFacets()]);
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-8">
-      <h1 className="text-2xl font-semibold">Coder leaderboard</h1>
+      <h1 className="text-2xl font-semibold">{isAgent ? "Agentic leaderboard" : "Coder leaderboard"}</h1>
       <p className="mt-1 max-w-2xl text-sm text-stone-400">
-        The best <em>qualifying</em> run per model family, ranked by code score. Safety/honesty is
-        scored separately (not blended into coding ability). Runs are never collapsed — quants,
-        contexts, and hardware are distinct.
+        {isAgent ? (
+          <>
+            The best <em>agentic</em> run per family — multi-machine / goal-state-env tasks where the
+            model drives an environment to a goal state. Scored separately from coding ability.
+          </>
+        ) : (
+          <>
+            The best <em>qualifying</em> run per model family, ranked by code score. Safety/honesty
+            and agentic ability are scored separately (not blended into coding). Runs are never
+            collapsed — quants, contexts, and hardware are distinct.
+          </>
+        )}
       </p>
 
       <div className="my-5 flex flex-wrap items-center gap-2">
@@ -103,6 +113,7 @@ export default async function Home({
                 <th className="py-2 pr-2 font-medium">#</th>
                 <th className="py-2 pr-4 font-medium">Model</th>
                 <th className="py-2 pr-4 font-medium">Code score</th>
+                <th className="py-2 pr-4 font-medium">Agentic</th>
                 <th className="py-2 pr-4 font-medium">Safety</th>
                 <th className="py-2 pr-4 font-medium">Solved</th>
                 <th className="py-2 pr-4 font-medium">Efficiency</th>
@@ -123,6 +134,9 @@ export default async function Home({
                   </td>
                   <td className="py-2 pr-4">
                     <ScoreBar v={r.code_score} />
+                  </td>
+                  <td className="py-2 pr-4 tabular-nums text-stone-300">
+                    {r.agent_score == null ? "—" : `${r.agent_score.toFixed(2)} (${r.n_agent})`}
                   </td>
                   <td className="py-2 pr-4 tabular-nums text-stone-300">
                     {r.safety_score == null ? "—" : r.safety_score.toFixed(2)}

@@ -259,6 +259,42 @@ def test_proposal_reject(client):
     assert not any(c["id"] == "py-reject" for c in client.get("/challenges").json()["challenges"])
 
 
+def _env_bundle(model, passed, priv, pub):
+    rows = [{"model": "m", "challenge": f"env-{i}", "type": "goal-state-env",
+             "verification": "goal-state-env", "scoring": "goal-state", "difficulty": 3,
+             "final_score": 1.0 if passed else 0.0, "passed": int(passed), "total": 1,
+             "response": "x", "stdout": "",
+             "env": {"provider": "local", "checks": [{"name": "goal", "ok": passed}]}}
+            for i in range(2)]
+    b = bundle.produce_bundle({"models": [model], "judge": None, "timestamp": "AG",
+                              "gpu": {"name": "RTX 4090", "driver_version": "595"}}, rows, sign=False)
+    b["bundle_hash"] = bundle._sha256_bytes(bundle.canonical_bytes(bundle._without_sig(b)))
+    b["submitter"] = {"pubkey": pub, "signature": keys.sign(priv, b["bundle_hash"].encode())}
+    return b
+
+
+def test_agentic_axis_is_separate_from_coding(client):
+    cp, c = _newkey(); ap, a = _newkey()
+    client.post("/submissions", json=_bundle("coderOnly", [0.8, 0.8], 24, cp, c, "AX"))
+    assert client.post("/submissions", json=_env_bundle("agentOnly", True, ap, a)).status_code == 201
+
+    # goal-state-env results land in their OWN axis, not folded into code_score
+    code_board = client.get("/leaderboard").json()["leaderboard"]
+    coder = next(r for r in code_board if r["family"] == "coderOnly")
+    assert coder["agent_score"] is None                     # a coder has no agentic runs
+    assert not any(r["family"] == "agentOnly" for r in code_board)  # agent-only isn't on the code board
+
+    # faceting by agent_score surfaces the agentic run with its score
+    agent_board = client.get("/leaderboard", params={"sort": "agent_score"}).json()["leaderboard"]
+    agent = next(r for r in agent_board if r["family"] == "agentOnly")
+    assert agent["agent_score"] == 1.0 and agent["n_agent"] == 2
+    assert not any(r["family"] == "coderOnly" for r in agent_board)  # a coder isn't on the agent board
+    assert any(x["key"] == "agent_score" for x in client.get("/facets").json()["sort_axes"])
+    # the env challenges were registered in the corpus with goal-state-env verification
+    chs = {c["id"]: c for c in client.get("/challenges").json()["challenges"]}
+    assert chs["env-0"]["verification"] == "goal-state-env"
+
+
 def test_efficiency_metrics_aggregation_and_sort(client):
     lean_p, lean = _newkey()      # small, lean solution
     bloat_p, bloat = _newkey()    # correct but bloated

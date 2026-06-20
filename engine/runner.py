@@ -142,6 +142,12 @@ def main(argv=None):
                          "and run tests; rows are tagged mode=planner for the Planner leaderboard.")
     ap.add_argument("--coder", default="qwen3-coder",
                     help="fixed executor model for --exec-plans (default qwen3-coder).")
+    ap.add_argument("--env", action="store_true",
+                    help="agentic mode: run goal-state-env (multi-machine) challenges with --models "
+                         "driving the tool loop until the verifier passes.")
+    ap.add_argument("--env-provider", default="auto",
+                    help="environment provider for --env: auto|local|docker|microvm (default auto: "
+                         "the cheapest that satisfies each challenge's network requirements).")
     args = ap.parse_args(argv)
 
     cfg = tomllib.loads(Path(args.config).read_text())
@@ -172,6 +178,9 @@ def main(argv=None):
 
     if args.judge_only:
         return run_judge_only(args, judge_model, make_judge_client())
+
+    if args.env:
+        return run_env_agent(args, host, ports, run_cfg)
 
     if not args.models and not args.gen_plans and not args.exec_plans:
         print("--models is required (unless using --judge-only/--gen-plans/--exec-plans)",
@@ -482,6 +491,81 @@ def main(argv=None):
     write_report(results, outdir, meta)
     print(f"\nReport: {outdir / 'leaderboard.md'}")
     if args.bundle and not args.reference:
+        _emit_bundle(meta, results, outdir)
+    return 0
+
+
+def _select_env_provider(args, ch):
+    """Pick the provider for a goal-state-env challenge: explicit override, else the cheapest that
+    satisfies its network requirements and is actually available (falling back to local)."""
+    from .env import get_provider, select_provider
+    if args.env_provider and args.env_provider != "auto":
+        return get_provider(args.env_provider)
+    m = select_provider(ch.env.requirements)
+    if m is None:
+        return None
+    prov = get_provider(m.provider)
+    if prov.available():
+        return prov
+    local = get_provider("local")
+    return local if ch.env.requirements.empty else None   # local can't supply network conditions
+
+
+def run_env_agent(args, host, ports, run_cfg):
+    """Agentic run mode: the model drives a multi-node environment (tool loop) until the goal-state
+    verifier passes. Emits goal-state-env result rows that flow to the leaderboard like coding runs."""
+    from .env import env_result_row, load_env_challenges
+    from .env.agent import run_env_task
+    from .env.firecracker import UnsupportedHost
+
+    models = _csv(args.models)
+    if not models:
+        print("--env needs --models <model>", file=sys.stderr)
+        return 1
+    chs = load_env_challenges(Path(args.challenges_dir))
+    if args.ids:
+        wanted = set(_csv(args.ids))
+        chs = [c for c in chs if c.id in wanted]
+    if not chs:
+        print("No goal-state-env challenges found (challenges/env/*/).", file=sys.stderr)
+        return 1
+
+    results = []
+    print(f"Agentic run: {len(models)} model(s) over {len(chs)} env challenge(s).")
+    for model in models:
+        client = _model_client(host, ports, model)
+        if client is None:
+            continue
+        for ch in chs:
+            prov = _select_env_provider(args, ch)
+            if prov is None:
+                print(f"  {model}  --  {ch.id}: no available provider satisfies its requirements")
+                continue
+            try:
+                res = run_env_task(client, model, ch, prov)
+            except (UnsupportedHost, RuntimeError) as e:
+                print(f"  {model}  --  {ch.id}: provider error: {e}")
+                continue
+            results.append(env_result_row(ch, res, model=model,
+                                          turns_to_green=res.get("turns_to_green"),
+                                          turns_used=res.get("turns_used"),
+                                          transcript=res.get("transcript", "")))
+            flag = "ok " if res["passed"] else "   "
+            print(f"  {model}  {flag} {ch.id} [{prov.name}]  passed={res['passed']} "
+                  f"turns={res.get('turns_used')} green@{res.get('turns_to_green')}")
+
+    if not results:
+        print("No env results produced.", file=sys.stderr)
+        return 1
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    outdir = Path(args.out) if args.out else ROOT / "results" / f"env-{stamp}"
+    outdir.mkdir(parents=True, exist_ok=True)
+    (outdir / "env-results.json").write_text(json.dumps(results, indent=2))
+    meta = {"timestamp": stamp, "models": models, "n_challenges": len(chs),
+            "judge": None, "sandbox": "env", "reference": False, "gpu": _gpu_info()}
+    print(f"\n{sum(1 for r in results if r['final_score'] >= 0.999)}/{len(results)} reached goal state. "
+          f"Results: {outdir / 'env-results.json'}")
+    if args.bundle:
         _emit_bundle(meta, results, outdir)
     return 0
 

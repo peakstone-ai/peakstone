@@ -274,9 +274,15 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
   contract; no-uplink bridge → real `egress=blocked`. Verified: two microVMs, client fetches from
   server by name over the bridge, internet unreachable. Its win over docker is *isolation* (real
   kernel boundary for untrusted agent code). 22 tests (real microVM boot+exec, 2-VM bridge comms,
-  docker firewall/netem). _Deferred:_ microvm `[[links]]` shaping/firewall (host-side tc/iptables on
-  taps needs CAP_NET_ADMIN — those conditions route to docker); per-source multi-link shaping; wiring
-  the agent mode into the main runner CLI + API/web; p2p/convergence challenges; planner-agent.
+  docker firewall/netem). **Agent run-mode wired end-to-end:** `python -m engine.runner --env
+  --models <m> [--env-provider auto|local|docker|microvm]` runs goal-state-env challenges through the
+  agent tool-loop (auto-selecting the cheapest satisfying provider) and emits goal-state-env bundle
+  rows. The API scores them as a **separate `agent_score` axis** (not folded into code/safety) and
+  the leaderboard faces on it (`?sort=agent_score` → "Agentic leaderboard"); the web shows an Agentic
+  column + dynamic heading. Agent loop tested without a live model via a stub client. _Deferred:_
+  microvm `[[links]]` shaping/firewall (host-side tc/iptables on taps needs CAP_NET_ADMIN — those
+  conditions route to docker); per-source multi-link shaping; p2p/convergence challenges;
+  planner-agent as an env type.
 - **P4 — Multimodal.** vision-to-UI (build interface from screenshot/video), game-playing, for
   models that support it.
 

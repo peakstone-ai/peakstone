@@ -19,8 +19,10 @@ export type LeaderRow = {
   release_date: string | null;
   code_score: number | null;
   safety_score: number | null;
+  agent_score: number | null;
   solved: number;
   n_code: number;
+  n_agent: number;
   by_category: Record<string, number>;
   tok_per_s: number | null;
   metrics: Record<string, number>;

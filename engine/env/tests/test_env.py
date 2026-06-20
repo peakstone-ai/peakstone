@@ -63,6 +63,39 @@ def test_env_result_becomes_a_valid_bundle(challenge):
     bundle._validate(b)  # raises if invalid
 
 
+class _StubClient:
+    """A fake LLM that 'solves' the challenge by writing its reference files then calling verify —
+    exercises the agent tool-loop (engine.env.agent) without a served model."""
+    def __init__(self, ch):
+        self.ch = ch
+        self.turn = 0
+
+    def chat_tools(self, model, messages, tools, **kw):
+        import json
+        self.turn += 1
+        if self.turn == 1:
+            calls = []
+            for node, files in self.ch.reference_files().items():
+                for path, content in files.items():
+                    calls.append({"id": f"c{len(calls)}", "function": {
+                        "name": "write_file",
+                        "arguments": json.dumps({"node": node, "path": path, "content": content})}})
+            calls.append({"id": "v", "function": {"name": "verify", "arguments": "{}"}})
+            return {"message": {"role": "assistant", "tool_calls": calls}}
+        return {"message": {"role": "assistant", "content": "done"}}   # no tool calls -> stop
+
+
+def test_agent_loop_drives_env_to_goal_state(challenge):
+    from engine.env.agent import run_env_task
+    res = run_env_task(_StubClient(challenge), "stub", challenge, LocalProvider())
+    assert res["passed"] is True
+    assert res["turns_to_green"] == 1
+    # the agent result becomes a valid goal-state-env bundle row
+    row = env_result_row(challenge, res, model="stub", turns_to_green=res["turns_to_green"],
+                         turns_used=res["turns_used"], transcript=res["transcript"])
+    assert row["verification"] == "goal-state-env" and row["final_score"] == 1.0
+
+
 @pytest.mark.skipif(not DockerComposeProvider().available(), reason="docker daemon not available")
 def test_docker_reference_reaches_goal_state(challenge):
     res = run_reference(challenge, DockerComposeProvider())
