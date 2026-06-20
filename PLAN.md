@@ -262,14 +262,16 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
   under non-reproducible conditions. **Docker now *applies* `[[links]]` conditions** (not just
   advertises): a privileged `nicolaka/netshoot` sidecar joins each node's netns and runs `tc` netem
   (latency/loss/bandwidth) + `iptables` (firewall), so node containers stay unprivileged; applied
-  rules recorded in `provenance.network.applied`. **Firecracker microVM provider scaffolded**
-  (`firecracker.py`): interface-complete with rigorous host-prereq detection (`/dev/kvm` access +
-  CAP_NET_ADMIN + binary) and unit-tested VM-config assembly; `provision()` refuses with exact
-  missing pieces. Its win over docker is *isolation* (real kernel boundary for untrusted agent code),
-  not network realism. 20 tests (incl. docker firewall actually blocks a serving peer + 200ms netem
-  measurable as ≥150ms RTT; firecracker scaffold). _Deferred:_ Firecracker boot + vsock guest-agent
-  exec (needs a KVM+TAP host — this dev box has neither); per-source multi-link shaping; wiring the
-  agent mode into the main runner CLI + API/web; p2p/convergence example challenges; planner-agent.
+  rules recorded in `provenance.network.applied`. **Firecracker microVM provider — Milestone 1
+  done + verified on hardware** (`firecracker.py` + `firecracker_agent/`): `provision()` boots a real
+  microVM per node (`firecracker --no-api --config-file`) with a static Go guest agent as PID 1 over
+  **vsock** — write_file/read_file/run/read_logs, ~1s boot. Needs only `/dev/kvm` + binary +
+  kernel/rootfs (no TAP/CAP_NET_ADMIN). Guest image built sudo-free via `mkfs.ext4 -d`
+  (`firecracker_agent/build-image.sh`). Its win over docker is *isolation* (real kernel boundary for
+  untrusted agent code). 21 tests (incl. a real microVM boot+exec, docker firewall blocks a serving
+  peer, 200ms netem ≥150ms RTT). _Deferred:_ Firecracker **Milestone 2** = node↔node TAP networking
+  (multi-node `[[links]]`; refused with UnsupportedHost until then); per-source multi-link shaping;
+  wiring the agent mode into the main runner CLI + API/web; p2p/convergence challenges; planner-agent.
 - **P4 — Multimodal.** vision-to-UI (build interface from screenshot/video), game-playing, for
   models that support it.
 

@@ -1,17 +1,21 @@
-"""Firecracker provider scaffold — hermetic checks that don't require a microVM to boot.
+"""Firecracker provider — hermetic checks + a real single-node boot when the host can run it.
 
-The boot/exec path needs a KVM-capable host with CAP_NET_ADMIN (this CI box has neither), so those
-aren't tested here; what IS tested is that the provider detects its prerequisites honestly, refuses
-cleanly when they're missing, and assembles a well-formed VM config.
+Milestone 1 (vsock-only exec) is implemented and boots an actual microVM. The boot test runs only
+where /dev/kvm + the binary + a guest kernel/rootfs are present (it's skipped on CI without them);
+the rest are pure and always run.
 """
 from __future__ import annotations
 
+import os
+
 import pytest
 
-from engine.env import get_provider
-from engine.env.base import NodeSpec
+from engine.env import EnvSpec, NodeSpec, get_provider
 from engine.env.capabilities import KERNEL_ISOLATION, PROVIDER_CAPS
-from engine.env.firecracker import (FirecrackerProvider, UnsupportedHost, host_prereqs, vm_config)
+from engine.env.firecracker import (FC_KERNEL, FC_ROOTFS, FirecrackerProvider, UnsupportedHost,
+                                    host_prereqs, vm_config)
+
+_CAN_BOOT = FirecrackerProvider().available() and os.path.exists(FC_KERNEL) and os.path.exists(FC_ROOTFS)
 
 
 def test_get_provider_resolves_microvm():
@@ -26,26 +30,44 @@ def test_capabilities_include_kernel_isolation():
     assert caps.isolation == "vm"
 
 
-def test_available_matches_prereqs():
-    p = FirecrackerProvider()
-    assert p.available() == (not host_prereqs())
+def test_available_tracks_vsock_only_prereqs():
+    # available() reflects the implemented path (vsock-only: no TAP/CAP_NET_ADMIN needed)
+    assert FirecrackerProvider().available() == (not host_prereqs(networking=False))
 
 
-def test_provision_refuses_without_prereqs():
-    # this host lacks kvm-group access / CAP_NET_ADMIN, so provisioning must raise with reasons
-    if FirecrackerProvider().available():
-        pytest.skip("host can actually run Firecracker; refusal path not exercised")
+def test_multinode_provision_refuses_until_m2():
+    # >1 node (or any node needing networking) requires TAP networking, which isn't implemented yet
+    spec = EnvSpec("fc-multi", nodes=[NodeSpec("a", needs=["b"]), NodeSpec("b", ports=[80])])
     with pytest.raises(UnsupportedHost) as ei:
-        FirecrackerProvider().provision(object())  # type: ignore[arg-type]
-    assert ei.value.reasons   # non-empty, explains exactly what's missing
+        FirecrackerProvider().provision(spec)
+    assert any("networking" in r for r in ei.value.reasons)
 
 
 def test_vm_config_is_well_formed():
-    cfg = vm_config(NodeSpec("server", ports=[8080]),
-                    rootfs="/img/rootfs.ext4", kernel="/img/vmlinux",
-                    tap="ps-tap-server", guest_mac="06:00:AC:10:00:02")
+    cfg = vm_config(NodeSpec("server"), rootfs="/img/rootfs.ext4", kernel="/img/vmlinux",
+                    uds_path="/tmp/server.vsock")
     assert cfg["boot-source"]["kernel_image_path"] == "/img/vmlinux"
-    assert cfg["drives"][0]["is_root_device"] is True
-    assert cfg["vsock"]["uds_path"].endswith("server.vsock")        # control plane (no TAP needed)
-    assert cfg["network-interfaces"][0]["host_dev_name"] == "ps-tap-server"  # data plane
-    assert cfg["machine-config"]["vcpu_count"] >= 1
+    assert "init=/usr/local/bin/ps-agent" in cfg["boot-source"]["boot_args"]
+    assert cfg["drives"][0]["is_root_device"] is True and cfg["drives"][0]["is_read_only"] is False
+    assert cfg["vsock"]["uds_path"].endswith("server.vsock")
+    assert "network-interfaces" not in cfg                  # vsock-only by default
+    # a TAP interface is added only when given (the M2 data plane)
+    assert "network-interfaces" in vm_config(NodeSpec("s"), rootfs="r", kernel="k",
+                                             uds_path="u", tap="ps-tap-s", guest_mac="06:00:AC:10:00:02")
+
+
+@pytest.mark.skipif(not _CAN_BOOT, reason="no /dev/kvm + firecracker binary + guest kernel/rootfs")
+def test_boots_a_real_microvm_and_execs_over_vsock():
+    spec = EnvSpec("fc-boot-test", nodes=[NodeSpec("vm")])   # single node -> vsock-only
+    with FirecrackerProvider().provision(spec) as env:
+        vm = env.node("vm")
+        # the agent is PID 1 (real kernel boundary — the microVM's whole point)
+        assert vm.run("cat /proc/1/comm").stdout.strip() == "ps-agent"
+        assert vm.run("id -u").stdout.strip() == "0"
+        assert vm.run("uname -r").stdout.strip().startswith("6.")
+        # exec + file round-trip over vsock
+        vm.write_file("hello.txt", "over vsock")
+        assert vm.read_file("hello.txt").get("content") == "over vsock"
+        r = vm.run("python3 -c 'print(6*7)'")
+        assert r.rc == 0 and r.stdout.strip() == "42"
+        assert env.provenance()["provider"] == "microvm"

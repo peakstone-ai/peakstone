@@ -17,13 +17,18 @@ converged" — not on a unit-test diff.
 - **`agent.py`** — the live-LLM run mode: the model iterates write → run → `verify` until green.
 - **`spec.py`** — loads a challenge dir into an `EnvChallenge`.
 
-- **`firecracker.py`** — `FirecrackerProvider` (microvm). **Scaffold**: interface-complete with
-  rigorous prerequisite detection (`host_prereqs()` — needs `/dev/kvm` access + `CAP_NET_ADMIN` for
-  TAP + the firecracker binary) and unit-tested VM-config assembly; `provision()` refuses with the
-  exact missing pieces rather than half-booting. The boot + vsock guest-agent exec path is the
-  remaining work (needs a KVM+TAP host). Its headline advantage over docker is **isolation** — a real
-  kernel boundary for untrusted agent code — not network realism (docker already covers DNS/firewall/
-  NAT/egress).
+- **`firecracker.py`** + **`firecracker_agent/`** — `FirecrackerProvider` (microvm). Its headline
+  advantage over docker is **isolation** — a real kernel boundary for untrusted agent code — not
+  network realism (docker already covers DNS/firewall/NAT/egress).
+  - **Milestone 1 (done, verified):** single-node **vsock-only exec**. `provision()` boots a real
+    microVM per node (`firecracker --no-api --config-file`) with the Go guest agent
+    (`firecracker_agent/main.go`) as PID 1 over vsock — `write_file`/`read_file`/`run`/`read_logs`.
+    Needs only `/dev/kvm` + the binary + a kernel/rootfs (no TAP, no `CAP_NET_ADMIN`); boots in ~1s.
+  - **Milestone 2 (todo):** node↔node TAP networking, so multi-node `[[links]]` challenges run. A
+    spec with >1 node (or any node with ports/needs) is refused with `UnsupportedHost` until then.
+  - **Build the guest artifacts** (one-time, no sudo — `mkfs.ext4 -d`, not a loop mount):
+    `bash engine/env/firecracker_agent/build-image.sh` → firecracker binary + kernel + agent +
+    `rootfs.ext4` in `~/.peakstone/fc` (override with `PEAKSTONE_FC_HOME`).
 
 **ssh-to-real-hosts is intentionally excluded** — real public IPs / DNS / ISP firewalls would give
 genuine real-world conditions but destroy reproducibility, which is the platform's whole point.
