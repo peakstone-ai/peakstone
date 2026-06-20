@@ -7,6 +7,7 @@ foreground nodes (clients) once, then run the challenge's verifier against the l
 from __future__ import annotations
 
 from .base import Environment, EnvSpec
+from .capabilities import Requirements, match
 
 
 def _normalize(vr) -> dict:
@@ -68,6 +69,7 @@ def env_result_row(challenge, result: dict, *, model: str, turns_to_green=None,
     n_pass = sum(1 for c in checks if c.get("ok"))
     total = len(checks) or 1
     prov = result.get("provenance") or {}
+    net = prov.get("network") or {}
     return {
         "model": model, "challenge": challenge.id, "language": "multi",
         "type": "goal-state-env", "category": challenge.category, "difficulty": challenge.difficulty,
@@ -75,14 +77,58 @@ def env_result_row(challenge, result: dict, *, model: str, turns_to_green=None,
         "final_score": 1.0 if result.get("passed") else round(n_pass / total, 4),
         "passed": n_pass, "total": total, "response": transcript, "stdout": "",
         "env": {"provider": prov.get("provider"), "image_digests": prov.get("image_digests", {}),
-                "checks": checks, "turns_to_green": turns_to_green, "turns_used": turns_used},
+                "checks": checks, "turns_to_green": turns_to_green, "turns_used": turns_used,
+                # network fidelity (real vs simulated conditions) gates how comparable this result is
+                "network_fidelity": net.get("fidelity"), "preconditions": net.get("preconditions", []),
+                "requirements": net.get("requirements")},
     }
 
 
-def run_reference(challenge, provider) -> dict:
-    """Validate a challenge by running its reference solution to goal-state (no LLM)."""
-    with provider.provision(challenge.env) as env:
-        result = run_once(env, challenge.env, challenge.reference_files(),
+class UnsatisfiableEnv(RuntimeError):
+    """The provider cannot supply the network conditions the challenge requires."""
+
+
+def check_preconditions(env: Environment, req: Requirements) -> list[dict]:
+    """Assert the declared network conditions actually hold, so a challenge can't pass under the
+    wrong ones (capabilities as verifiable preconditions). Best-effort + deterministic."""
+    checks: list[dict] = []
+    if req.egress in ("blocked", "allowed") and env.nodes:
+        node = next(iter(env.nodes))
+        probe = ("python -c \"import socket; socket.setdefaulttimeout(4); "
+                 "socket.create_connection(('1.1.1.1', 53))\"")
+        reached = env.node(node).run(probe, timeout=8).rc == 0
+        want_blocked = req.egress == "blocked"
+        ok = (not reached) if want_blocked else reached
+        checks.append({"name": f"egress is {req.egress}", "ok": ok,
+                       "detail": f"internet {'reachable' if reached else 'unreachable'} from '{node}'"})
+    return checks
+
+
+def _network_provenance(env, spec) -> dict:
+    req = spec.requirements
+    m = match(req, env_provider_caps(env))
+    return {"requirements": req.summary(), "fidelity": m.fidelity,
+            "satisfied": m.ok, "unmet": m.unmet, "isolation": getattr(env, "provider_name", "?"),
+            "preconditions": check_preconditions(env, req)}
+
+
+def env_provider_caps(env):
+    from .capabilities import PROVIDER_CAPS
+    return PROVIDER_CAPS.get(getattr(env, "provider_name", ""), PROVIDER_CAPS["local"])
+
+
+def run_reference(challenge, provider, *, strict: bool = True) -> dict:
+    """Validate a challenge by running its reference solution to goal-state (no LLM).
+
+    `strict` refuses to run if the provider can't supply the required network conditions — a result
+    under the wrong conditions would be meaningless (and silently misleading)."""
+    spec = challenge.env
+    m = match(spec.requirements, provider.capabilities())
+    if strict and not m.ok:
+        raise UnsatisfiableEnv(
+            f"provider {provider.name!r} cannot satisfy {challenge.id}: missing {m.unmet}")
+    with provider.provision(spec) as env:
+        result = run_once(env, spec, challenge.reference_files(),
                           challenge.load_verifier(), fixtures=challenge.fixtures())
-        result["provenance"] = env.provenance()
+        result["provenance"] = {**env.provenance(), "network": _network_provenance(env, spec)}
         return result

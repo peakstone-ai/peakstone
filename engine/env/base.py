@@ -12,6 +12,8 @@ from __future__ import annotations
 import abc
 from dataclasses import dataclass, field
 
+from .capabilities import Capabilities, Requirements
+
 
 @dataclass
 class NodeSpec:
@@ -28,6 +30,7 @@ class EnvSpec:
     id: str
     nodes: list[NodeSpec]
     timeout: int = 20                  # per foreground-node run
+    requirements: Requirements = field(default_factory=Requirements)  # network conditions the test needs
 
     @property
     def node_map(self) -> dict[str, NodeSpec]:
@@ -107,6 +110,10 @@ class EnvironmentProvider(abc.ABC):
     @abc.abstractmethod
     def available(self) -> bool:
         """Whether this provider can run here (e.g. docker daemon reachable)."""
+
+    @abc.abstractmethod
+    def capabilities(self) -> Capabilities:
+        """The network conditions this provider can offer (for matching against challenge requirements)."""
 
     @abc.abstractmethod
     def provision(self, spec: EnvSpec) -> Environment: ...

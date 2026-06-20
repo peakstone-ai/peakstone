@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .base import EnvSpec, NodeSpec
+from .capabilities import Link, NodeNet, Requirements
 
 
 @dataclass
@@ -59,13 +60,27 @@ class EnvChallenge:
         return mod.verify
 
 
+def _parse_requirements(data: dict) -> Requirements:
+    net = data.get("network", {})
+    nodes = {n["name"]: NodeNet(public_ip=bool(n.get("public_ip", False)),
+                                transports=list(n.get("transports", ["tcp"])))
+             for n in data.get("nodes", [])
+             if n.get("public_ip") or n.get("transports", ["tcp"]) != ["tcp"]}
+    links = [Link(src=l["from"], dst=l["to"], latency_ms=l.get("latency_ms"), loss=l.get("loss"),
+                  bandwidth_kbps=l.get("bandwidth_kbps"), firewall=l.get("firewall"),
+                  nat=bool(l.get("nat", False)))
+             for l in data.get("links", [])]
+    return Requirements(egress=net.get("egress"), dns=net.get("dns"), nodes=nodes, links=links)
+
+
 def load_env_spec(env_toml: Path, challenge_id: str, timeout: int) -> EnvSpec:
     data = tomllib.loads(env_toml.read_text())
     nodes = [NodeSpec(name=n["name"], start=n.get("start"), background=bool(n.get("background", False)),
                       ports=list(n.get("ports", [])), needs=list(n.get("needs", [])),
                       image=n.get("image"))
              for n in data.get("nodes", [])]
-    return EnvSpec(id=challenge_id, nodes=nodes, timeout=timeout)
+    return EnvSpec(id=challenge_id, nodes=nodes, timeout=timeout,
+                   requirements=_parse_requirements(data))
 
 
 def load_env_challenge(d: Path) -> EnvChallenge:

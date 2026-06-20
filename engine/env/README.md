@@ -17,7 +17,50 @@ converged" — not on a unit-test diff.
 - **`agent.py`** — the live-LLM run mode: the model iterates write → run → `verify` until green.
 - **`spec.py`** — loads a challenge dir into an `EnvChallenge`.
 
-Firecracker-microVM and ssh-to-real-hosts are future providers behind the same interface.
+Firecracker-microVM is a future provider behind the same interface (it adds a real kernel boundary
+for untrusted agent code). **ssh-to-real-hosts is intentionally excluded** — real public IPs / DNS /
+ISP firewalls would give genuine real-world conditions but destroy reproducibility, which is the
+platform's whole point.
+
+## Network capabilities (`capabilities.py`)
+A challenge declares the network conditions its test is only valid under; a provider advertises what
+it can offer, at a fidelity. The matcher picks the cheapest sufficient provider and records the
+fidelity in provenance.
+
+```toml
+# env.toml — optional network requirements
+[network]
+egress = "blocked"          # nodes must NOT reach the internet (or "allowed")
+dns    = "internal"         # service-name resolution between nodes (or "real" — unsupported, see below)
+
+[[links]]                   # conditions on the edge between two nodes
+from = "client"
+to   = "server"
+latency_ms = 50
+loss = 0.01
+firewall = "open"           # or "blocked"
+nat = true
+```
+
+- **Requirements → capability keys** (`required_caps`): `egress_control`, `internal_dns`,
+  `link_shaping`, `firewall`, `nat`, `udp`, `public_ip`, `real_dns`, `kernel_isolation`.
+- **Provider advertisement** (`PROVIDER_CAPS`): `local` (≈ none), `docker` (egress/dns/firewall/nat
+  **real**, link shaping **simulated**), `microvm` (+ `kernel_isolation`, impl deferred).
+- **Fidelity** is `real` (e.g. a docker `internal:` network genuinely blocks egress) or `simulated`
+  (netem latency). It's recorded in `result.env.network_fidelity` and is meant to gate trust — a
+  result under simulated conditions isn't comparable to one under real conditions.
+- **Reproducibility policy:** `public_ip` / `real_dns` are in the vocabulary but **no provider offers
+  them** → such a challenge is `UnsatisfiableEnv` by design, not silently run under weaker conditions.
+- **Preconditions:** capabilities double as checks. `check_preconditions` asserts the declared
+  conditions actually hold (e.g. probes that egress is really blocked) before scoring, so a challenge
+  can't pass under the wrong network.
+
+```python
+from engine.env import select_provider, Requirements, run_reference
+select_provider(Requirements(egress="blocked"))      # -> docker (real fidelity)
+select_provider(Requirements())                       # -> local
+run_reference(ch, LocalProvider())                    # raises UnsatisfiableEnv if local can't satisfy
+```
 
 ## Authoring a goal-state-env challenge
 ```

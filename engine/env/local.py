@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from .base import Environment, EnvironmentProvider, EnvSpec, Node, NodeSpec, RunResult
+from .capabilities import PROVIDER_CAPS, Capabilities
 
 
 def _free_port() -> int:
@@ -158,6 +159,9 @@ class LocalProvider(EnvironmentProvider):
 
     def available(self) -> bool:
         return True
+
+    def capabilities(self) -> Capabilities:
+        return PROVIDER_CAPS["local"]
 
     def provision(self, spec: EnvSpec) -> LocalEnvironment:
         return LocalEnvironment(spec)

@@ -251,13 +251,18 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
   First example `challenges/env/01-file-server` (server/client byte transport) passes on **both
   providers**. `agent.py` is the live-LLM run mode (write→run→verify loop). Bundle carries
   `result.env` (provider + image digests + verifier checks + turns-to-green); `verification=
-  goal-state-env`; deterministic verifier → can reach runner-verified. 5 tests (incl. a docker
-  container run). _Deferred:_ Firecracker microVM + ssh-to-hosts providers; wiring the agent mode
-  into the main runner CLI + API/web surfacing; p2p/convergence example challenges; planner-agent as
-  an env type.
-- **P3-orig spec (for reference).** impl #2 **Firecracker microVM-on-VLAN** (stronger isolation for
-  untrusted agent code); impl #3 **ssh-to-real-hosts**. p2p "all peers converged" / "file replicated"
-  verifiers. **Planner-agent testing folds in here as one env type.**
+  goal-state-env`; deterministic verifier → can reach runner-verified. **Network capability layer
+  (`capabilities.py`):** a challenge declares network conditions in `env.toml` (`[network]` egress/
+  dns, `[[links]]` latency/loss/firewall/nat); providers advertise capabilities at a *fidelity*
+  (docker: egress/dns/firewall/nat **real**, link shaping **simulated**); `match`/`select_provider`
+  pick the cheapest sufficient provider and record fidelity in `result.env.network_fidelity` (gates
+  trust); capabilities double as **preconditions** the harness asserts (`check_preconditions`, e.g.
+  egress really blocked) before scoring. **Reproducibility policy: real-host providers
+  (ssh-to-hosts) are excluded by design** — `public_ip`/`real_dns` are unsatisfiable rather than run
+  under non-reproducible conditions. 13 tests (incl. docker egress precondition). _Deferred:_
+  Firecracker microVM (real kernel isolation; advertised, impl pending); link-shaping execution
+  (netem/tc) in the docker provider; wiring the agent mode into the main runner CLI + API/web;
+  p2p/convergence example challenges; planner-agent as an env type.
 - **P4 — Multimodal.** vision-to-UI (build interface from screenshot/video), game-playing, for
   models that support it.
 

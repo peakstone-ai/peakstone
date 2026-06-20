@@ -16,6 +16,7 @@ import time
 from pathlib import Path
 
 from .base import Environment, EnvironmentProvider, EnvSpec, Node, NodeSpec, RunResult
+from .capabilities import PROVIDER_CAPS, Capabilities
 
 WORK = "/work"
 
@@ -149,6 +150,9 @@ class DockerComposeProvider(EnvironmentProvider):
             return False
         r = subprocess.run(["docker", "compose", "version"], capture_output=True)
         return r.returncode == 0
+
+    def capabilities(self) -> Capabilities:
+        return PROVIDER_CAPS["docker"]
 
     def provision(self, spec: EnvSpec) -> DockerEnvironment:
         return DockerEnvironment(spec)
