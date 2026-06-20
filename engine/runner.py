@@ -2,13 +2,13 @@
 
 Examples:
   # sanity-check the suite itself against reference solutions (no model needed)
-  python -m bench.runner --reference --models reference
+  python -m engine.runner --reference --models reference
 
   # run two models over the whole suite
-  python -m bench.runner --models glm-4.7-flash,qwen3-coder
+  python -m engine.runner --models glm-4.7-flash,qwen3-coder
 
   # one language, easy challenges only, no judge
-  python -m bench.runner --models devstral --lang python --difficulty 1,2 --no-judge
+  python -m engine.runner --models devstral --lang python --difficulty 1,2 --no-judge
 """
 from __future__ import annotations
 
@@ -126,7 +126,7 @@ def main(argv=None):
                          "challenges and score a deterministic 'global adherence' axis on each "
                          "(separate from correctness). Bare flag uses the built-in default; pass a "
                          "FILE to override. Helps reasoning models reach a complete answer.")
-    ap.add_argument("--config", default=str(ROOT / "bench" / "config.toml"))
+    ap.add_argument("--config", default=str(ROOT / "engine" / "config.toml"))
     ap.add_argument("--challenges-dir", default=str(ROOT / "challenges"))
     ap.add_argument("--out", default=None)
     # planner evaluation (decoupled two-phase: gen plans with planner served, then exec with

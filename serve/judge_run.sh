@@ -24,7 +24,7 @@ for _ in $(seq 1 180); do
 done
 if [ "$ready" != 1 ]; then echo "judge server failed to start:"; tail -8 "$log"; kill "$SRV" 2>/dev/null; exit 1; fi
 
-python -m bench.runner --judge-only "$SRC" --judge-model "$JUDGE"
+python -m engine.runner --judge-only "$SRC" --judge-model "$JUDGE"
 rc=$?
 kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null
 rm -f "$log"

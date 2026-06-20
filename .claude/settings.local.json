@@ -2,7 +2,19 @@
   "permissions": {
     "allow": [
       "WebFetch(domain:toolhalla.ai)",
-      "Bash(nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv)"
+      "Bash(nvidia-smi --query-gpu=name,memory.total,driver_version --format=csv)",
+      "Bash(mkdir -p models/qwen3-coder-next-q6)",
+      "Bash(HF_HUB_ENABLE_HF_TRANSFER=0 nohup hf download unsloth/Qwen3-Coder-Next-GGUF --include UD-Q6_K/* --local-dir models/qwen3-coder-next-q6)",
+      "Bash(echo \"Q6 download launched pid $!\")",
+      "Read(//tmp/**)",
+      "Bash(git add *)",
+      "Bash(git commit -q -m 'stage qwen3-coder-next-q6 \\(UD-Q6_K split\\) to A/B the Q4 quant on the 80B-A3B *)",
+      "Bash(python3 -c \"import tomllib; m=tomllib.load\\(open\\('serve/models.toml','rb'\\)\\)['qwen3-coder-next-q6']; print\\('registry OK:', m['port'], m['file']\\)\")",
+      "Read(//home/psc/models/qwen3-coder-next-q6/.cache/huggingface/download/**)",
+      "Read(//home/psc/models/qwen3-coder-next-q6/UD-Q6_K/**)",
+      "Bash(awk '{print $5, $9}')",
+      "Bash(awk '/Mem:/{print \"  free \"$4\" avail \"$7}')",
+      "Bash(git commit -q -m 'PLAN: runs are faceted \\(never collapsed\\) + fits-my-hardware filtering *)"
     ]
   }
 }

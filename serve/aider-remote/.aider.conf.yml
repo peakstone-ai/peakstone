@@ -1,9 +1,0 @@
-# Aider config for connecting to the blackodd llama-swap server over the LAN.
-# Copy to $HOME on the remote machine:  cp .aider.conf.yml ~/.aider.conf.yml
-openai-api-base: http://192.168.1.127:8080/v1
-openai-api-key: dummy
-
-# Architect mode: glm-planner reasons out the change, qwen3-coder writes the diff.
-architect: true
-model: openai/glm-planner
-editor-model: openai/qwen3-coder

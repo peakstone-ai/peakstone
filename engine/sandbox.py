@@ -60,8 +60,12 @@ def _node_env(node_bin: str | None) -> dict:
 # Cap address space per test subprocess so a runaway generated solution (e.g. an unbounded
 # allocation or infinite slice growth) fails its OWN test instead of OOM-ing the whole machine.
 # A model-written Go solution once made `go test` allocate 44GB and the global OOM-killer took
-# down the session. 12 GiB is far above any legitimate test's needs but well below catastrophe.
-_MEM_LIMIT_BYTES = int(os.environ.get("LLMLAB_TEST_MEM_LIMIT_GB", "12")) * 1024 ** 3
+# down the session. 24 GiB clears the large *virtual* reservations made by WASM/JIT toolchains
+# (tsx/esbuild, the Go runtime) while staying well below catastrophe — at 12 GiB the TS runner hit
+# "WebAssembly: Cannot allocate Wasm memory". NOTE: RLIMIT_AS limits virtual address space, a blunt
+# proxy for physical use; the proper fix (P2 sandbox) is a cgroup memory.max (limits RSS, ignores
+# virtual reservations). Override with PEAKSTONE_TEST_MEM_LIMIT_GB.
+_MEM_LIMIT_BYTES = int(os.environ.get("PEAKSTONE_TEST_MEM_LIMIT_GB", "24")) * 1024 ** 3
 
 
 def _apply_limits():  # runs in the forked child before exec; inherited by its children
@@ -114,7 +118,7 @@ def _place_tests(workdir: Path, challenge_dir: Path, at_root: bool) -> None:
 def _link_node_modules(workdir: Path, cfg: dict) -> str | None:
     """Symlink a shared node_modules into the workdir so ES-module imports of installed
     libraries (lodash, date-fns, zod, ...) resolve (NODE_PATH does not work for ESM)."""
-    nm = os.path.expanduser(cfg.get("js_node_modules") or str(_REPO / "bench" / "jsenv" / "node_modules"))
+    nm = os.path.expanduser(cfg.get("js_node_modules") or str(_REPO / "engine" / "jsenv" / "node_modules"))
     if os.path.isdir(nm):
         link = workdir / "node_modules"
         if not link.exists():
@@ -166,7 +170,7 @@ def _run_node(workdir, ch, files, timeout, cfg, ts: bool):
         # typecheck gate (recorded, non-fatal to test counting). Point tsc at the global
         # @types/node so node:test / node:assert imports resolve under strict mode.
         # @types/node + @types/lodash + each lib's bundled types all live in the symlinked
-        # node_modules (bench/jsenv), so default type resolution finds them — no typeRoots.
+        # node_modules (engine/jsenv), so default type resolution finds them — no typeRoots.
         copts = {
             "target": "ES2022", "module": "NodeNext", "moduleResolution": "NodeNext",
             "strict": True, "noEmit": True, "allowImportingTsExtensions": True,

@@ -1,7 +1,7 @@
 """Export stored solutions from a run so an external judge (e.g. Claude in-session) can read
 and grade them — no model endpoint required.
 
-  python -m bench.export_solutions <results-path> [--out solutions.json] [--models a,b]
+  python -m engine.export_solutions <results-path> [--out solutions.json] [--models a,b]
 
 Output JSON: {"specs": {challenge_id: spec}, "items": [{model, challenge, language,
 difficulty, scoring, passed, total, test_score, solution}]}.

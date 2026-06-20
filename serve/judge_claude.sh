@@ -29,9 +29,9 @@ case "$cmd" in
     OUT="${2:-/tmp/llmlab_tojudge.json}"
     IDS="${3:-}"
     if [ -n "$IDS" ]; then
-      python -m bench.export_solutions "$SRC" --ids "$IDS" --out "$OUT"
+      python -m engine.export_solutions "$SRC" --ids "$IDS" --out "$OUT"
     else
-      python -m bench.export_solutions "$SRC" --out "$OUT"
+      python -m engine.export_solutions "$SRC" --out "$OUT"
     fi
     echo ""
     echo "Now have Claude read $OUT and write a scores.json, then run:"
@@ -40,7 +40,7 @@ case "$cmd" in
   apply)
     SRC="${1:?usage: judge_claude.sh apply <results-path> <scores.json>}"
     SCORES="${2:?usage: judge_claude.sh apply <results-path> <scores.json>}"
-    python -m bench.apply_judge "$SRC" "$SCORES" --judge-name claude
+    python -m engine.apply_judge "$SRC" "$SCORES" --judge-name claude
     ;;
   *)
     sed -n '2,20p' "$0"

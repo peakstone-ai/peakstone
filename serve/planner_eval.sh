@@ -38,7 +38,7 @@ stop_srv() { kill "${SRV:-}" 2>/dev/null; wait "${SRV:-}" 2>/dev/null; sleep 3; 
 for p in "${PLANNERS[@]}"; do
   echo "=== [plan] $p ==="
   if ! serve_wait "$p"; then echo "!! $p never became ready; skipping"; stop_srv; continue; fi
-  python -m bench.runner --gen-plans "$p" --type "$TYPE" --max-tokens "${MAXTOK:-16384}" \
+  python -m engine.runner --gen-plans "$p" --type "$TYPE" --max-tokens "${MAXTOK:-16384}" \
     --out "$OUT/plans-$p" 2>&1 | tail -10
   stop_srv
 done
@@ -48,15 +48,15 @@ echo "=== [exec] coder=$CODER ==="
 if ! serve_wait "$CODER"; then echo "!! coder $CODER never became ready"; stop_srv; exit 1; fi
 # solo baseline: the fixed coder doing the same tasks WITHOUT a plan -> the Planner leaderboard's
 # "vs baseline" lift is each planner's downstream score minus this.
-python -m bench.runner --models "$CODER" --type "$TYPE" --no-judge --out "$OUT/baseline-$CODER" 2>&1 | tail -6
+python -m engine.runner --models "$CODER" --type "$TYPE" --no-judge --out "$OUT/baseline-$CODER" 2>&1 | tail -6
 for p in "${PLANNERS[@]}"; do
   [ -d "$OUT/plans-$p" ] || continue
-  python -m bench.runner --exec-plans "$OUT/plans-$p" --coder "$CODER" --type "$TYPE" \
+  python -m engine.runner --exec-plans "$OUT/plans-$p" --coder "$CODER" --type "$TYPE" \
     --no-judge --out "$OUT/exec-$p" 2>&1 | tail -10
 done
 stop_srv
 
 echo "=== merging ==="
-python -m bench.merge "$OUT"/exec-*/results.json "$OUT"/baseline-*/results.json --out "$OUT/combined"
+python -m engine.merge "$OUT"/exec-*/results.json "$OUT"/baseline-*/results.json --out "$OUT/combined"
 echo ""
 echo "DONE. Planner leaderboard: $OUT/combined/leaderboard.md"

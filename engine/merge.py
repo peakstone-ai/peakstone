@@ -1,6 +1,6 @@
 """Merge several per-model results.json files into one combined leaderboard.
 
-  python -m bench.merge results/bench-XXXX/*/results.json --out results/bench-XXXX/combined
+  python -m engine.merge results/bench-XXXX/*/results.json --out results/bench-XXXX/combined
 """
 from __future__ import annotations
 

@@ -7,7 +7,7 @@ pass. We score the final test pass-rate and record turns-to-green.
 Design notes:
   * Editable solution files live in memory (seeded from the challenge's `buggy/` dir). The
     model's write_file edits update that dict.
-  * run_tests reuses bench.sandbox.run_tests, which materializes a fresh temp dir from the
+  * run_tests reuses engine.sandbox.run_tests, which materializes a fresh temp dir from the
     CURRENT solution files + the challenge's real tests/ — so the model cannot pass by
     rewriting the tests (its edits to test paths are ignored).
 """

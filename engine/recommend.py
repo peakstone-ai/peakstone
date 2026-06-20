@@ -1,10 +1,10 @@
 """Auto-generate the report's Recommendations section using the judge model.
 
 Summarizes the benchmark results and asks the served judge model to write recommendations as
-HTML paragraphs, written to <bench>/recommendations.html (picked up by bench.report_html).
+HTML paragraphs, written to <bench>/recommendations.html (picked up by engine.report_html).
 Falls back to a deterministic summary if the model call fails.
 
-  python -m bench.recommend <bench-dir> --model qwen3-coder
+  python -m engine.recommend <bench-dir> --model qwen3-coder
 """
 from __future__ import annotations
 
@@ -99,10 +99,10 @@ def _fallback(summary: list) -> str:
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("bench")
+    ap.add_argument("engine")
     ap.add_argument("--model", default="qwen3-coder")
     ap.add_argument("--out", default=None)
-    ap.add_argument("--config", default=str(ROOT / "bench" / "config.toml"))
+    ap.add_argument("--config", default=str(ROOT / "engine" / "config.toml"))
     args = ap.parse_args(argv)
     bench = Path(args.bench)
     out = Path(args.out) if args.out else bench / "recommendations.html"

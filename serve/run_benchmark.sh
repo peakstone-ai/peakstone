@@ -37,7 +37,7 @@ for m in "${MODELS[@]}"; do
 
   echo "=== [$m] evaluating ==="
   JUDGE_FLAG="--no-judge"; [ "${JUDGE:-0}" = "1" ] && JUDGE_FLAG=""
-  python -m bench.runner --models "$m" $JUDGE_FLAG ${EXTRA:-} --out "$OUT/$m" 2>&1 | tail -25
+  python -m engine.runner --models "$m" $JUDGE_FLAG ${EXTRA:-} --out "$OUT/$m" 2>&1 | tail -25
 
   echo "=== [$m] stopping server ==="
   kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null
@@ -45,6 +45,6 @@ for m in "${MODELS[@]}"; do
 done
 
 echo "=== merging ==="
-python -m bench.merge "$OUT"/*/results.json --out "$OUT/combined"
+python -m engine.merge "$OUT"/*/results.json --out "$OUT/combined"
 echo ""
 echo "DONE. Leaderboard: $OUT/combined/leaderboard.md"

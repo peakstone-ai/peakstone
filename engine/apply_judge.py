@@ -1,7 +1,7 @@
 """Apply externally-produced judge scores (e.g. from Claude in-session, or any judge that
 isn't an OpenAI endpoint) into a comparable leaderboard.
 
-  python -m bench.apply_judge <results-path> <scores.json> [--judge-name claude] [--out DIR]
+  python -m engine.apply_judge <results-path> <scores.json> [--judge-name claude] [--out DIR]
 
 scores.json format:
   {"judge": "claude",
