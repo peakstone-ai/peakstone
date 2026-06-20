@@ -24,6 +24,11 @@ alembic upgrade head                                     # apply schema migratio
 | `GET` | `/facets` | distinct `quants` / `suites` / `trust_tiers` + sortable `sort_axes` for the filter UI |
 | `GET` | `/challenges` | the corpus with empirical pass-rate (calibrated difficulty) |
 | `GET` | `/challenges/{id}` | per-challenge mini-leaderboard (best result per family) |
+| `POST` | `/proposals` | submit a signed challenge proposal (`python -m engine.propose`) to the queue |
+| `GET` | `/proposals` | the moderation queue (`?status=proposed\|approved\|rejected\|all`) |
+| `GET` | `/proposals/{id}` | full proposal (spec + files) for review |
+| `POST` | `/proposals/{id}/review` | admin-signed approve/reject → materializes a published Challenge |
+| `POST` | `/challenges/{id}/deprecate` | admin-signed deprecation |
 | `POST` | `/account/key-challenge` | issue a nonce the key signs to prove ownership |
 | `GET` | `/auth/{provider}/authorize-url` | build the provider OAuth consent URL (503 if unconfigured) |
 | `POST` | `/account/bind` | bind a key to an account: signed nonce + OAuth `code` |
@@ -49,6 +54,19 @@ Each result may carry a `metrics` object (`engine/metrics.py`): `loc`, `solution
 `peak_rss_mb`, `test_wall_s`. These are **not** part of the correctness score — they're separate
 sortable axes ("leanest correct solution"). The API averages them per run; sort with
 `/leaderboard?sort=peak_rss_mb&order=asc`.
+
+## Challenge moderation (open corpus → admin-canonized)
+Anyone proposes a challenge; an admin canonizes it. The API **never executes** the submitted test /
+reference code (it runs on a host holding DB creds) — validation is author-side:
+```bash
+python -m engine.propose challenges/python/15-foo   # validates the reference locally, signs
+python -m engine.propose --check <dir>              # reviewer re-runs before approving
+curl -X POST $API/proposals --data @proposal.json   # queue it
+```
+Proposals are content-addressed + author-signed (same trust chain as result bundles). **Admins** are
+an ed25519 allowlist (`PEAKSTONE_ADMIN_KEYS`, comma-separated pubkeys); a review/deprecate action is
+signed as `<decision>:<content_hash>` / `deprecate:<challenge_id>` so it can't be replayed. Approval
+materializes a versioned, attributed `Challenge` (re-approving a slug bumps `version`).
 
 ## Identity binding (`api/identity.py`)
 The ed25519 key is the **root** identity; accounts are optional, additive bindings (no lock-in).

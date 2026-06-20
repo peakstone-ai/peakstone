@@ -71,12 +71,22 @@ def _node_env(node_bin: str | None) -> dict:
 _MEM_LIMIT_BYTES = int(os.environ.get("PEAKSTONE_TEST_MEM_LIMIT_GB", "24")) * 1024 ** 3
 
 
+# Largest file a test process may create (a runaway / malicious solution writing an unbounded file
+# would otherwise fill the disk). Generous for legit temp output. Override via env.
+_FSIZE_LIMIT_BYTES = int(os.environ.get("PEAKSTONE_TEST_FSIZE_LIMIT_GB", "2")) * 1024 ** 3
+
+
 def _apply_limits():  # runs in the forked child before exec; inherited by its children
     import resource
-    try:
-        resource.setrlimit(resource.RLIMIT_AS, (_MEM_LIMIT_BYTES, _MEM_LIMIT_BYTES))
-    except (ValueError, OSError):
-        pass
+    for res, soft_hard in (
+        (resource.RLIMIT_AS, (_MEM_LIMIT_BYTES, _MEM_LIMIT_BYTES)),       # address space (memory)
+        (resource.RLIMIT_FSIZE, (_FSIZE_LIMIT_BYTES, _FSIZE_LIMIT_BYTES)),  # max file size written
+        (resource.RLIMIT_CORE, (0, 0)),                                   # no core dumps
+    ):
+        try:
+            resource.setrlimit(res, soft_hard)
+        except (ValueError, OSError):
+            pass
 
 
 def _run(cmd: list[str], cwd: Path, timeout: int, env: dict) -> tuple[int, str, str, float, bool]:

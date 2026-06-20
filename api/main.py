@@ -12,7 +12,7 @@ from fastapi import Body, Depends, FastAPI, HTTPException, Query
 from sqlalchemy import case, distinct, func, select
 from sqlalchemy.orm import Session
 
-from . import identity, ingest, models
+from . import identity, ingest, models, proposals
 from .db import get_session, init_db
 
 # Capability categories that are safety/honesty, not coding ability — scored separately so a strong
@@ -202,8 +202,10 @@ def challenges(db: Session = Depends(get_session)):
     for ch in db.scalars(select(models.Challenge).order_by(models.Challenge.id)).all():
         s = stats.get(ch.id)
         n = s.n if s else 0
-        out.append({"id": ch.id, "category": ch.category, "verification": ch.verification,
+        out.append({"id": ch.id, "title": ch.title, "language": ch.language,
+                    "category": ch.category, "verification": ch.verification,
                     "seed_difficulty": ch.seed_difficulty, "status": ch.status,
+                    "version": ch.version, "deprecated": ch.deprecated,
                     "n_runs": n, "avg_score": round(s.avg, 3) if s and s.avg is not None else None,
                     "pass_rate": round((s.solved or 0) / n, 3) if n else None})
     return {"count": len(out), "challenges": out}
@@ -273,3 +275,72 @@ def account(pubkey: str = Query(...), db: Session = Depends(get_session)):
     if summary is None:
         raise HTTPException(404, "key not bound to any account")
     return summary
+
+
+# --- challenge moderation (open corpus → admin-canonized) ----------------------------------------
+
+def _proposal_summary(p: models.ChallengeProposal) -> dict:
+    return {"id": p.id, "slug": p.slug, "title": p.title, "language": p.language,
+            "category": p.category, "difficulty": p.difficulty, "status": p.status,
+            "reference_passes": (p.validation or {}).get("reference_passes"),
+            "content_hash": p.content_hash, "created_at": str(p.created_at),
+            "review_note": p.review_note}
+
+
+@app.post("/proposals", status_code=201)
+def propose_challenge(proposal: dict = Body(...), db: Session = Depends(get_session)):
+    """Submit a signed challenge proposal (built by `python -m engine.propose`) to the queue."""
+    try:
+        p = proposals.propose(db, proposal)
+    except proposals.ProposalError as e:
+        msg = str(e)
+        raise HTTPException(409 if "already submitted" in msg else 400, msg)
+    return _proposal_summary(p)
+
+
+@app.get("/proposals")
+def list_proposals(status: str = "proposed", db: Session = Depends(get_session)):
+    """The moderation queue (default: pending). status=all for every proposal."""
+    q = select(models.ChallengeProposal).order_by(models.ChallengeProposal.created_at.desc())
+    if status != "all":
+        q = q.where(models.ChallengeProposal.status == status)
+    rows = [_proposal_summary(p) for p in db.scalars(q).all()]
+    return {"count": len(rows), "proposals": rows}
+
+
+@app.get("/proposals/{proposal_id}")
+def get_proposal(proposal_id: int, db: Session = Depends(get_session)):
+    """Full proposal (spec + files) for review."""
+    p = db.get(models.ChallengeProposal, proposal_id)
+    if not p:
+        raise HTTPException(404, f"unknown proposal {proposal_id}")
+    return {**_proposal_summary(p), "spec": p.spec, "files": p.files,
+            "scoring": p.scoring, "timeout": p.timeout, "validation": p.validation}
+
+
+@app.post("/proposals/{proposal_id}/review")
+def review_proposal(proposal_id: int, body: dict = Body(...), db: Session = Depends(get_session)):
+    """Admin-signed approve/reject. Sign the message `<decision>:<content_hash>` with an admin key."""
+    try:
+        p = proposals.review(db, proposal_id, pubkey=body.get("pubkey", ""),
+                             signature=body.get("signature", ""), decision=body.get("decision", ""),
+                             note=body.get("note"))
+    except proposals.AdminError as e:
+        raise HTTPException(403, str(e))
+    except proposals.ProposalError as e:
+        msg = str(e)
+        raise HTTPException(409 if "already" in msg else 400, msg)
+    return _proposal_summary(p)
+
+
+@app.post("/challenges/{challenge_id}/deprecate")
+def deprecate_challenge(challenge_id: str, body: dict = Body(...), db: Session = Depends(get_session)):
+    """Admin-signed deprecation. Sign the message `deprecate:<challenge_id>` with an admin key."""
+    try:
+        ch = proposals.deprecate(db, challenge_id, pubkey=body.get("pubkey", ""),
+                                signature=body.get("signature", ""), note=body.get("note"))
+    except proposals.AdminError as e:
+        raise HTTPException(403, str(e))
+    except proposals.ProposalError as e:
+        raise HTTPException(400, str(e))
+    return {"id": ch.id, "status": ch.status, "deprecated": ch.deprecated, "version": ch.version}

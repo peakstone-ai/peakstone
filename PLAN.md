@@ -224,9 +224,16 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
      a "how to submit" CLI guide.
   5. Seed by re-running the engine on a handful of models to produce the first real bundles.
   6. **community-verified** tier (auto-promote deterministic results reproduced ≥N times).
-- **P2 — Challenge authoring + efficiency metrics.** (a) _TODO:_ In-repo + web-form challenge
-  submission, moderation queue, sandbox hardening, challenge versioning & deprecation, per-challenge
-  discussion. (b) ✅ **DONE — No-LLM automated metrics.** `engine/metrics.py` records deterministic,
+- **P2 — Challenge authoring + efficiency metrics.** (a) ✅ **DONE (core) — Open-corpus authoring +
+  moderation.** `engine/propose.py` builds a content-addressed, ed25519-signed challenge proposal
+  from a local dir (validates structure + runs the reference *author-side* — the API never executes
+  untrusted code, by design). API: `POST /proposals` (signed, deduped) → `GET /proposals` queue →
+  `POST /proposals/{id}/review` (admin-signed approve/reject) → materializes a versioned, attributed
+  `Challenge` (published); `POST /challenges/{id}/deprecate` (admin-signed). Admins = ed25519
+  allowlist (`PEAKSTONE_ADMIN_KEYS`); actions signed as `<decision>:<hash>` (no replay). Sandbox
+  hardened with RLIMIT_FSIZE + no core dumps. Web: read-only `/proposals` queue + propose how-to.
+  _Deferred:_ per-challenge threaded discussion; file-upload web authoring form (CLI is the path).
+  (b) ✅ **DONE — No-LLM automated metrics.** `engine/metrics.py` records deterministic,
   judge-free axes per result — `loc`, `solution_bytes`, `peak_rss_mb` (GNU `/usr/bin/time -v` over
   the test run, all 5 languages), `test_wall_s` — carried in the bundle's `metrics` object (schema
   `$defs.result.metrics`). The API aggregates them per run and the leaderboard is sortable by any

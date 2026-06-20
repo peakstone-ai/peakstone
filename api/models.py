@@ -91,14 +91,45 @@ class KeyChallenge(Base):
 
 
 class Challenge(Base):
-    """Corpus entry (lazily upserted from submissions for now; richer authoring lands in P2)."""
+    """Canonical corpus entry. Rows arrive two ways: lazily upserted from result submissions, or
+    materialized when an admin approves a ChallengeProposal (then title/language/author are set)."""
     __tablename__ = "challenges"
     id: Mapped[str] = mapped_column(String, primary_key=True)  # challenge slug, e.g. py-12-txn-kvstore
+    title: Mapped[str | None] = mapped_column(String)
+    language: Mapped[str | None] = mapped_column(String)
     category: Mapped[str | None] = mapped_column(String, index=True)
     verification: Mapped[str | None] = mapped_column(String)
     seed_difficulty: Mapped[int | None] = mapped_column(Integer)
     content_hash: Mapped[str | None] = mapped_column(String)
-    status: Mapped[str] = mapped_column(String, default="published")
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    deprecated: Mapped[bool] = mapped_column(default=False, index=True)
+    author_key_id: Mapped[int | None] = mapped_column(ForeignKey("keys.id"))
+    status: Mapped[str] = mapped_column(String, default="published", index=True)
+
+
+class ChallengeProposal(Base):
+    """An open-corpus submission awaiting admin review (the moderation queue). Content-addressed +
+    author-signed; validation (reference passes its tests) is the author's self-reported claim, which
+    a reviewer re-runs locally before approving — the API never executes the untrusted code."""
+    __tablename__ = "challenge_proposals"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    content_hash: Mapped[str] = mapped_column(String, unique=True, index=True)
+    slug: Mapped[str] = mapped_column(String, index=True)
+    title: Mapped[str | None] = mapped_column(String)
+    language: Mapped[str | None] = mapped_column(String)
+    category: Mapped[str | None] = mapped_column(String)
+    difficulty: Mapped[int | None] = mapped_column(Integer)
+    scoring: Mapped[str | None] = mapped_column(String)
+    timeout: Mapped[int | None] = mapped_column(Integer)
+    spec: Mapped[str] = mapped_column(String)
+    files: Mapped[dict] = mapped_column(JSONv)            # {relpath: content}: meta.toml + tests + reference
+    validation: Mapped[dict] = mapped_column(JSONv)       # author's local reference run (self-reported)
+    author_key_id: Mapped[int] = mapped_column(ForeignKey("keys.id"), index=True)
+    status: Mapped[str] = mapped_column(String, default="proposed", index=True)  # proposed|approved|rejected
+    review_note: Mapped[str | None] = mapped_column(String)
+    reviewed_by_key_id: Mapped[int | None] = mapped_column(ForeignKey("keys.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Suite(Base):

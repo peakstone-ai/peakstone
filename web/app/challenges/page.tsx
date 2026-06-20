@@ -62,6 +62,12 @@ export default async function ChallengesPage() {
                     >
                       {ch.id}
                     </Link>
+                    {ch.title ? <span className="ml-2 text-stone-500">{ch.title}</span> : null}
+                    {ch.deprecated ? (
+                      <span className="ml-2 rounded bg-stone-800 px-1.5 py-0.5 text-xs text-stone-400">
+                        deprecated
+                      </span>
+                    ) : null}
                   </td>
                   <td className="py-2 pr-4 text-stone-400">{ch.category ?? "—"}</td>
                   <td className="py-2 pr-4 text-stone-500">{ch.verification ?? "—"}</td>

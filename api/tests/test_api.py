@@ -20,7 +20,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
 from engine import bundle, keys
-from api import identity
+from api import identity, proposals
 from api.main import app
 
 # canned OAuth accounts, keyed by the fake "code" we pass to /account/bind
@@ -169,6 +169,94 @@ def _metric_bundle(model, loc, rss, priv, pub):
     b["bundle_hash"] = bundle._sha256_bytes(bundle.canonical_bytes(bundle._without_sig(b)))
     b["submitter"] = {"pubkey": pub, "signature": keys.sign(priv, b["bundle_hash"].encode())}
     return b
+
+
+def _proposal(slug, priv, pub, *, with_tests=True, with_ref=True):
+    p = {"proposal_version": "1", "slug": slug, "title": slug.upper(), "language": "python",
+         "category": "basics", "difficulty": 2, "scoring": "tests", "solution_file": "solution.py",
+         "timeout": 30, "spec": f"# {slug}\nImplement it.", "files": {"meta.toml": f"id='{slug}'"}}
+    if with_tests:
+        p["files"]["tests/test_x.py"] = "def test(): assert True"
+    if with_ref:
+        p["files"]["reference/solution.py"] = "value = 1"
+    p["content_hash"] = proposals._content_hash(p)
+    p["validation"] = {"reference_passes": True, "passed": 1, "total": 1}
+    p["submitter"] = {"pubkey": pub, "signature": keys.sign(priv, p["content_hash"].encode())}
+    return p
+
+
+def _as_admin(pub):
+    os.environ["PEAKSTONE_ADMIN_KEYS"] = pub
+
+
+def test_proposal_validation_and_dedupe(client):
+    ap, a = _newkey()
+    assert client.post("/proposals", json=_proposal("py-prop-1", ap, a)).status_code == 201
+    # dedupe on content_hash
+    assert client.post("/proposals", json=_proposal("py-prop-1", ap, a)).status_code == 409
+    # missing tests / reference / bad sig -> 400
+    assert client.post("/proposals", json=_proposal("py-no-tests", ap, a, with_tests=False)).status_code == 400
+    assert client.post("/proposals", json=_proposal("py-no-ref", ap, a, with_ref=False)).status_code == 400
+    bad = _proposal("py-bad-sig", ap, a)
+    bad["submitter"]["signature"] = keys.sign(ap, b"wrong")
+    assert client.post("/proposals", json=bad).status_code == 400
+    tampered = _proposal("py-tampered", ap, a)
+    tampered["difficulty"] = 5  # changes content but not the recorded hash
+    assert client.post("/proposals", json=tampered).status_code == 400
+
+
+def test_challenge_moderation_flow(client):
+    author_p, author = _newkey()
+    admin_p, admin = _newkey()
+    r = client.post("/proposals", json=_proposal("py-moderate", author_p, author))
+    pid = r.json()["id"]
+    # appears in the pending queue
+    assert any(p["slug"] == "py-moderate" for p in client.get("/proposals").json()["proposals"])
+    # full proposal carries spec + files for review
+    detail = client.get(f"/proposals/{pid}").json()
+    assert "tests/test_x.py" in detail["files"] and detail["spec"].startswith("# py-moderate")
+
+    # non-admin review -> 403
+    _as_admin(admin)
+    nonadmin = client.post(f"/proposals/{pid}/review", json={
+        "pubkey": author, "signature": keys.sign(author_p, f"approve:{r.json()['content_hash']}".encode()),
+        "decision": "approve"})
+    assert nonadmin.status_code == 403
+    # admin approves (signs "<decision>:<content_hash>")
+    chash = r.json()["content_hash"]
+    ok = client.post(f"/proposals/{pid}/review", json={
+        "pubkey": admin, "signature": keys.sign(admin_p, f"approve:{chash}".encode()),
+        "decision": "approve", "note": "lgtm"})
+    assert ok.status_code == 200 and ok.json()["status"] == "approved"
+    # a published, attributed Challenge now exists
+    ch = next(c for c in client.get("/challenges").json()["challenges"] if c["id"] == "py-moderate")
+    assert ch["status"] == "published" and ch["title"] == "PY-MODERATE" and ch["version"] == 1
+    # re-reviewing the same proposal -> 409
+    assert client.post(f"/proposals/{pid}/review", json={
+        "pubkey": admin, "signature": keys.sign(admin_p, f"approve:{chash}".encode()),
+        "decision": "approve"}).status_code == 409
+
+    # deprecate (admin-signed) flips status; non-admin can't
+    assert client.post("/challenges/py-moderate/deprecate", json={
+        "pubkey": author, "signature": keys.sign(author_p, b"deprecate:py-moderate"),
+        "decision": "x"}).status_code == 403
+    dep = client.post("/challenges/py-moderate/deprecate", json={
+        "pubkey": admin, "signature": keys.sign(admin_p, b"deprecate:py-moderate")})
+    assert dep.status_code == 200 and dep.json()["deprecated"] is True
+
+
+def test_proposal_reject(client):
+    author_p, author = _newkey()
+    admin_p, admin = _newkey()
+    _as_admin(admin)
+    r = client.post("/proposals", json=_proposal("py-reject", author_p, author))
+    pid, chash = r.json()["id"], r.json()["content_hash"]
+    rej = client.post(f"/proposals/{pid}/review", json={
+        "pubkey": admin, "signature": keys.sign(admin_p, f"reject:{chash}".encode()),
+        "decision": "reject", "note": "off topic"})
+    assert rej.status_code == 200 and rej.json()["status"] == "rejected"
+    # rejection does NOT publish a challenge
+    assert not any(c["id"] == "py-reject" for c in client.get("/challenges").json()["challenges"])
 
 
 def test_efficiency_metrics_aggregation_and_sort(client):

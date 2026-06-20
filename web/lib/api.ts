@@ -77,10 +77,14 @@ export function getFacets() {
 
 export type ChallengeRow = {
   id: string;
+  title: string | null;
+  language: string | null;
   category: string | null;
   verification: string | null;
   seed_difficulty: number | null;
   status: string;
+  version: number;
+  deprecated: boolean;
   n_runs: number;
   avg_score: number | null;
   pass_rate: number | null;
@@ -112,4 +116,24 @@ export type ChallengeDetail = {
 
 export function getChallenge(id: string) {
   return getJSON<ChallengeDetail>(`/challenges/${encodeURIComponent(id)}`);
+}
+
+export type ProposalRow = {
+  id: number;
+  slug: string;
+  title: string | null;
+  language: string | null;
+  category: string | null;
+  difficulty: number | null;
+  status: string;
+  reference_passes: boolean | null;
+  content_hash: string;
+  created_at: string;
+  review_note: string | null;
+};
+
+export type ProposalList = { count: number; proposals: ProposalRow[] };
+
+export function getProposals(status = "proposed") {
+  return getJSON<ProposalList>(`/proposals?status=${encodeURIComponent(status)}`);
 }

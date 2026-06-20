@@ -29,6 +29,24 @@ class BindError(ValueError):
     """Binding rejected (maps to HTTP 4xx)."""
 
 
+# --- admin (moderation) authority ----------------------------------------------------------------
+# Admins are an allowlist of ed25519 pubkeys (env PEAKSTONE_ADMIN_KEYS, comma-separated). Moderation
+# actions are signed by an admin key over the action payload — same root identity as everything else,
+# no passwords/sessions.
+
+def admin_keys() -> set[str]:
+    return {k.strip() for k in os.environ.get("PEAKSTONE_ADMIN_KEYS", "").split(",") if k.strip()}
+
+
+def is_admin(pubkey: str) -> bool:
+    return pubkey in admin_keys()
+
+
+def verify_admin_action(pubkey: str, signature: str, message: str) -> bool:
+    """True iff `pubkey` is an admin AND it signed `message`."""
+    return is_admin(pubkey) and eng_keys.verify(pubkey, signature, message.encode())
+
+
 # --- key-ownership proof -------------------------------------------------------------------------
 
 def issue_key_challenge(db, pubkey: str) -> models.KeyChallenge:
