@@ -132,6 +132,9 @@ class LocalEnvironment(Environment):
                 env[f"PEER_{peer.upper()}_PORT"] = str(pport)
         return env
 
+    def address_of(self, name: str) -> tuple[str, int | None]:
+        return ("127.0.0.1", self._first_port(name))
+
     def wait_ready(self, name: str, port: int, timeout: float = 10.0) -> bool:
         actual = self._ports.get((name, port))
         if actual is None:

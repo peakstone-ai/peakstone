@@ -19,6 +19,9 @@ from .base import Environment, EnvironmentProvider, EnvSpec, Node, NodeSpec, Run
 from .capabilities import PROVIDER_CAPS, Capabilities
 
 WORK = "/work"
+# privileged sidecar image with tc (iproute2) + iptables, used to apply link conditions inside a
+# node's network namespace so the node containers themselves stay unprivileged + tool-free.
+NETSHAPE_IMAGE = os.environ.get("PEAKSTONE_NETSHAPE_IMAGE", "nicolaka/netshoot")
 
 
 def _compose(project: str, cwd: Path, *args: str, **kw) -> subprocess.CompletedProcess:
@@ -83,6 +86,10 @@ class DockerEnvironment(Environment):
         for n in spec.nodes:                # ensure the work dir exists in each container
             self.nodes[n.name].run("true")  # noop exec; mkdir handled lazily by write_file
         self._record_digests(spec)
+        self._cids: dict[str, str] = {}
+        self._ips: dict[str, str] = {}
+        self._record_topology(spec)
+        self._applied_net = self._apply_network(spec.requirements)
 
     def _peer_env(self, n: NodeSpec) -> dict[str, str]:
         env = {}
@@ -118,6 +125,59 @@ class DockerEnvironment(Environment):
             if r.returncode == 0 and r.stdout.strip():
                 self._digests[image] = r.stdout.strip()
 
+    def _record_topology(self, spec: EnvSpec) -> None:
+        for n in spec.nodes:
+            cid = _compose(self.project, self.dir, "ps", "-q", n.name).stdout.strip()
+            self._cids[n.name] = cid
+            if cid:
+                ip = subprocess.run(
+                    ["docker", "inspect", "-f",
+                     "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", cid],
+                    capture_output=True, text=True).stdout.strip()
+                self._ips[n.name] = ip
+
+    def _sidecar(self, node: str, sh: str) -> bool:
+        """Run tc/iptables inside `node`'s network namespace. The rule persists after the sidecar
+        exits, so the node container needs no NET_ADMIN and no networking tools."""
+        cid = self._cids.get(node)
+        if not cid:
+            return False
+        r = subprocess.run(["docker", "run", "--rm", "--network", f"container:{cid}",
+                            "--cap-add", "NET_ADMIN", NETSHAPE_IMAGE, "sh", "-c", sh],
+                           capture_output=True, text=True, timeout=120)
+        return r.returncode == 0
+
+    def _apply_network(self, req) -> dict:
+        """Apply [[links]] conditions: per-source netem shaping + per-pair iptables firewall."""
+        applied = {"shaping": [], "firewall": []}
+        shaped: set[str] = set()
+        for l in req.links:
+            if (l.latency_ms or l.loss or l.bandwidth_kbps):
+                if l.src in shaped:   # whole-interface netem; one shaped link per source for now
+                    applied["shaping"].append({"src": l.src, "dst": l.dst,
+                                               "skipped": "multiple shaped links from one source"})
+                else:
+                    parts = ["netem"]
+                    if l.latency_ms:
+                        parts += ["delay", f"{int(l.latency_ms)}ms"]
+                    if l.loss:
+                        parts += ["loss", f"{l.loss * 100:.2f}%"]
+                    if l.bandwidth_kbps:
+                        parts += ["rate", f"{int(l.bandwidth_kbps)}kbit"]
+                    ok = self._sidecar(l.src, "tc qdisc replace dev eth0 root " + " ".join(parts))
+                    applied["shaping"].append({"src": l.src, "dst": l.dst,
+                                               "rule": " ".join(parts), "ok": ok})
+                    shaped.add(l.src)
+            if l.firewall == "blocked" and self._ips.get(l.src) and self._ips.get(l.dst):
+                ok = (self._sidecar(l.src, f"iptables -A OUTPUT -d {self._ips[l.dst]} -j DROP")
+                      and self._sidecar(l.dst, f"iptables -A OUTPUT -d {self._ips[l.src]} -j DROP"))
+                applied["firewall"].append({"src": l.src, "dst": l.dst, "ok": ok})
+        return applied
+
+    def address_of(self, name: str) -> tuple[str, int | None]:
+        spec = self.spec.node_map.get(name)
+        return (name, spec.ports[0] if spec and spec.ports else None)
+
     def wait_ready(self, name: str, port: int, timeout: float = 10.0) -> bool:
         # connect succeeds → exit 0; refused → the exception makes python exit non-zero
         probe = f"python -c \"import socket; socket.create_connection(('127.0.0.1',{port}),1)\""
@@ -139,7 +199,8 @@ class DockerEnvironment(Environment):
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def provenance(self) -> dict:
-        return {"provider": "docker", "image_digests": self._digests}
+        return {"provider": "docker", "image_digests": self._digests,
+                "applied_network": getattr(self, "_applied_net", {})}
 
 
 class DockerComposeProvider(EnvironmentProvider):

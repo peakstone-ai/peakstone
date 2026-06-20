@@ -259,10 +259,14 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
   trust); capabilities double as **preconditions** the harness asserts (`check_preconditions`, e.g.
   egress really blocked) before scoring. **Reproducibility policy: real-host providers
   (ssh-to-hosts) are excluded by design** — `public_ip`/`real_dns` are unsatisfiable rather than run
-  under non-reproducible conditions. 13 tests (incl. docker egress precondition). _Deferred:_
-  Firecracker microVM (real kernel isolation; advertised, impl pending); link-shaping execution
-  (netem/tc) in the docker provider; wiring the agent mode into the main runner CLI + API/web;
-  p2p/convergence example challenges; planner-agent as an env type.
+  under non-reproducible conditions. **Docker now *applies* `[[links]]` conditions** (not just
+  advertises): a privileged `nicolaka/netshoot` sidecar joins each node's netns and runs `tc` netem
+  (latency/loss/bandwidth) + `iptables` (firewall), so node containers stay unprivileged; applied
+  rules recorded in `provenance.network.applied`. 15 tests (incl. docker firewall actually blocks a
+  serving peer + 200ms netem measurable as ≥150ms RTT). _Deferred:_ Firecracker microVM (real kernel
+  isolation; advertised, impl pending); per-source multi-link shaping (one shaped link per source for
+  now); wiring the agent mode into the main runner CLI + API/web; p2p/convergence example challenges;
+  planner-agent as an env type.
 - **P4 — Multimodal.** vision-to-UI (build interface from screenshot/video), game-playing, for
   models that support it.
 

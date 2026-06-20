@@ -82,6 +82,10 @@ class Environment(abc.ABC):
         return self.nodes[name]
 
     @abc.abstractmethod
+    def address_of(self, name: str) -> tuple[str, int | None]:
+        """How peers reach `name`: (host, first declared port|None)."""
+
+    @abc.abstractmethod
     def wait_ready(self, name: str, port: int, timeout: float = 10.0) -> bool:
         """Block until `name`'s `port` accepts connections (server readiness)."""
 

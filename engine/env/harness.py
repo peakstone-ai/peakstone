@@ -101,6 +101,17 @@ def check_preconditions(env: Environment, req: Requirements) -> list[dict]:
         ok = (not reached) if want_blocked else reached
         checks.append({"name": f"egress is {req.egress}", "ok": ok,
                        "detail": f"internet {'reachable' if reached else 'unreachable'} from '{node}'"})
+    # a firewall-blocked link must actually drop traffic between the pair (assumes dst is serving)
+    for l in req.links:
+        if l.firewall == "blocked":
+            host, port = env.address_of(l.dst)
+            if port is None:
+                continue
+            probe = (f"python -c \"import socket; socket.setdefaulttimeout(4); "
+                     f"socket.create_connection(('{host}', {port}))\"")
+            reached = env.node(l.src).run(probe, timeout=8).rc == 0
+            checks.append({"name": f"link {l.src}->{l.dst} blocked", "ok": not reached,
+                           "detail": f"{l.dst}:{port} {'reachable' if reached else 'unreachable'} from '{l.src}'"})
     return checks
 
 
@@ -109,6 +120,7 @@ def _network_provenance(env, spec) -> dict:
     m = match(req, env_provider_caps(env))
     return {"requirements": req.summary(), "fidelity": m.fidelity,
             "satisfied": m.ok, "unmet": m.unmet, "isolation": getattr(env, "provider_name", "?"),
+            "applied": env.provenance().get("applied_network", {}),
             "preconditions": check_preconditions(env, req)}
 
 

@@ -51,9 +51,14 @@ nat = true
   result under simulated conditions isn't comparable to one under real conditions.
 - **Reproducibility policy:** `public_ip` / `real_dns` are in the vocabulary but **no provider offers
   them** → such a challenge is `UnsatisfiableEnv` by design, not silently run under weaker conditions.
+- **Application (docker):** the provider *applies* the conditions, it doesn't just advertise them.
+  A privileged sidecar (`nicolaka/netshoot`) joins each node's network namespace and runs `tc`
+  netem (latency/loss/bandwidth) and `iptables` (firewall) — so node containers stay unprivileged
+  and tool-free, and the rules persist in the netns. Applied rules are recorded in
+  `provenance.network.applied`.
 - **Preconditions:** capabilities double as checks. `check_preconditions` asserts the declared
-  conditions actually hold (e.g. probes that egress is really blocked) before scoring, so a challenge
-  can't pass under the wrong network.
+  conditions actually hold (egress really blocked, a blocked link really unreachable) before scoring,
+  so a challenge can't pass under the wrong network.
 
 ```python
 from engine.env import select_provider, Requirements, run_reference
