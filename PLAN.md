@@ -224,26 +224,42 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
      a "how to submit" CLI guide.
   5. Seed by re-running the engine on a handful of models to produce the first real bundles.
   6. **community-verified** tier (auto-promote deterministic results reproduced ≥N times).
-- **P2 — Challenge authoring.** In-repo + web-form challenge submission, moderation queue, sandbox
-  hardening, challenge versioning & deprecation, per-challenge discussion.
+- **P2 — Challenge authoring + efficiency metrics.** (a) In-repo + web-form challenge submission,
+  moderation queue, sandbox hardening, challenge versioning & deprecation, per-challenge discussion.
+  (b) **No-LLM automated metrics** — deterministic, judge-free sub-scores measured on a *passing*
+  solution: binary/artifact size (Go/Rust), runtime perf (exec time, ops/sec, peak RSS) via a timed
+  perf harness, compile time, time-to-green (latency + attempts, already captured), LOC / cyclomatic
+  complexity / lint / dep count. These become additional **sortable leaderboard axes** ("fastest
+  correct", "smallest binary") — a model can be correct-but-slow vs correct-and-tiny. Needs no env
+  infra, extends the existing Go/Rust/Python challenges. Schema: a `metrics` object per result
+  (the bundle already allows it via `score.breakdown` / additionalProperties).
 - **P3 — Agentic & multi-machine.** Tool-calling + iteration agent loop as a first-class run mode;
-  `goal-state-env` verification; environment providers (SSH-to-host, Firecracker microVM-on-VLAN)
-  for server/client & p2p projects. **Planner-agent testing folds in here as one env type.**
+  `goal-state-env` verification. **`EnvironmentProvider` abstraction** (provision N isolated,
+  no-internet nodes → node handles + `write_file`/`run`/`read_logs`/`ssh` tools → teardown):
+  impl #1 **docker-compose** (cheap, reproducible, images pinned by digest); impl #2 **Firecracker
+  microVM-on-VLAN** (stronger isolation for untrusted agent code); impl #3 **ssh-to-real-hosts**.
+  The challenge ships an env spec + a deterministic **goal-state verifier** ("client got the right
+  bytes", "all peers converged", "file replicated") for server/client & p2p projects; the agent
+  iterates write→deploy→run→observe→fix until green. Env spec + image digests + full tool-call
+  transcript + verifier go in the bundle → deterministic verifiers can reach the *verified* tier.
+  **Planner-agent testing folds in here as one env type.**
 - **P4 — Multimodal.** vision-to-UI (build interface from screenshot/video), game-playing, for
   models that support it.
 
 ## 10. Immediate next steps (P1, in order)
 1. ✅ **DONE** — name (Peakstone) + license (Apache-2.0 / CC-BY-4.0) + `/schema/result-bundle.schema.json`
    v1 + `taxonomy.json` (validated). Repo cleaned of lab cruft; `bench/ → engine/` carve-out done.
-2. **← NEXT (P1.2):** add `engine/bundle.py` `produce_bundle()` — assemble a schema-valid result
-   bundle from a run (model identity + file SHA-256 + env capture + content-hashed challenges +
-   transcripts + scores), validate against the schema, and **sign** it (ed25519). Wire `runner.py`
-   to emit a bundle alongside the existing `results.json`. (env capture: extend `_gpu_info` /
-   `_gpu_mem_used`; add CPU/RAM/OS/driver.)
-3. Stand up `docker-compose` (Postgres) + Alembic baseline migration for the §6 tables.
-4. FastAPI: `POST /submissions` (validate schema + signature + re-derive bundle hash, store),
-   `GET /leaderboard` (faceted — §6a), `GET /models/{family}`.
-5. Next.js skeleton with the overall leaderboard reading from the API.
+2. ✅ **DONE (P1.2)** — `engine/bundle.py` `produce_bundle()` (model identity + file SHA-256 + env +
+   content-hashed challenges + transcripts + scores), schema-validated, content-addressed,
+   ed25519-signed via `engine/keys.py` (auth-agnostic). `runner --bundle` emits it.
+3. ✅ **DONE (P1.3)** — `infra/docker-compose.yml` (Postgres + api) + Dockerfile. _TODO: Alembic
+   migrations (dev uses `create_all`)._
+4. ✅ **DONE (P1.4 core)** — `api/`: `POST /submissions` (trust chain), faceted `GET /leaderboard`
+   (incl. `max_vram_gb` "fits-my-hardware" filter), `GET /models/{family}`. Verified on SQLite +
+   Postgres. _TODO: GitHub-OAuth identity binding (pubkey→account); community-verified tier._
+5. **← NEXT (P1.5):** Next.js web skeleton — overall + per-category leaderboards reading from the
+   API, the **capability-vs-release-date** chart, model & challenge pages, the VRAM/quant filter UI,
+   and a "how to submit" CLI guide.
 
 ## 11. Open questions to resolve as we build
 - ~~Project name & domain~~ **DECIDED: Peakstone / peakstone.ai.** License: Apache-2.0 (code +
