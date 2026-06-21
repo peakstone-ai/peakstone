@@ -206,7 +206,18 @@ class DockerEnvironment(Environment):
             self.nodes[n.name].run("pkill -9 -f python 2>/dev/null; true")
 
     def teardown(self) -> None:
-        _compose(self.project, self.dir, "down", "-v", "--remove-orphans", timeout=120)
+        # `up` can fail after creating some containers/networks; check the result and retry once so
+        # a transient failure doesn't leave the internal network + containers orphaned.
+        for attempt in range(2):
+            r = _compose(self.project, self.dir, "down", "-v", "--remove-orphans", timeout=120)
+            if r.returncode == 0:
+                break
+            if attempt == 0:
+                time.sleep(1)
+            else:
+                import sys
+                print(f"[docker] teardown of project {self.project!r} failed: "
+                      f"{(r.stderr or '')[-300:]}", file=sys.stderr)
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def provenance(self) -> dict:

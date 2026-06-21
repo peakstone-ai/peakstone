@@ -1,0 +1,43 @@
+"""Regression tests for the bundle/sandbox hardening (deferred audit items 1-4)."""
+from pathlib import Path
+
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+
+from engine import bundle, keys, sandbox
+
+
+def test_effective_sandbox_records_truth():
+    # config may ask for 'docker' but the test runner only implements subprocess -> record the truth
+    assert sandbox.effective_sandbox("docker") == "subprocess"
+    assert sandbox.effective_sandbox(None) == "subprocess"
+    assert sandbox.effective_sandbox("subprocess") == "subprocess"
+
+
+def test_file_sha256_verified_flag(monkeypatch):
+    monkeypatch.setenv("PEAKSTONE_SKIP_FILE_HASH", "1")
+    assert bundle._model_file_hash(Path("/nope.gguf")) == ("(skipped)", False)
+    monkeypatch.delenv("PEAKSTONE_SKIP_FILE_HASH")
+    assert bundle._model_file_hash(Path("/nope.gguf")) == ("(missing)", False)
+
+
+def _bundle(sign=False, **kw):
+    return bundle.produce_bundle(
+        {"models": ["m"], "judge": None, "timestamp": "t", "gpu": {"name": "x", "driver_version": "1"}},
+        [{"model": "m", "challenge": "c", "type": "data", "difficulty": 2, "scoring": "tests",
+          "final_score": 1.0, "passed": 1, "total": 1, "response": "x", "stdout": "ok"}], sign=sign, **kw)
+
+
+def test_pubkey_is_bound_into_the_hash():
+    p = Ed25519PrivateKey.generate()
+    pub = keys.public_key_b64(p)
+    b = bundle.sign_inplace(_bundle(), p, pub)
+    # the legit bundle re-hashes to its claimed hash
+    assert bundle._sha256_bytes(bundle.canonical_bytes(bundle._without_sig(b))) == b["bundle_hash"]
+    # swapping the submitter pubkey now changes the content-address (it's inside the hash)
+    b["submitter"]["pubkey"] = "ATTACKER-KEY"
+    assert bundle._sha256_bytes(bundle.canonical_bytes(bundle._without_sig(b))) != b["bundle_hash"]
+    # but only the signature is excluded — re-signing without touching anything else is stable
+    b2 = bundle.sign_inplace(_bundle(), p, pub)
+    h = b2["bundle_hash"]
+    b2["submitter"]["signature"] = "different"
+    assert bundle._sha256_bytes(bundle.canonical_bytes(bundle._without_sig(b2))) == h

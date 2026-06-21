@@ -69,6 +69,7 @@
         "hf_repo": { "type": "string" },
         "hf_revision": { "type": "string", "description": "Git revision/commit of the HF repo — pins the exact weights version." },
         "file_sha256": { "type": "string", "description": "SHA-256 of the model file(s). For split GGUFs, hash of each part." },
+        "file_sha256_verified": { "type": "boolean", "description": "False if file_sha256 is a placeholder (skipped/missing/incomplete) rather than a real hash — consumers must not treat it as a reproducibility anchor." },
         "params_total": { "type": "string", "description": "e.g. '80B'." },
         "params_active": { "type": "string", "description": "Active params/token for MoE, e.g. '3B'." },
         "release_date": { "type": "string", "format": "date", "description": "Model release date — the x-axis of the evolution chart." },

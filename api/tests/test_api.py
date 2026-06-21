@@ -58,8 +58,7 @@ def _bundle(model, finals, vram, priv, pub, suite_ts):
         + [_result("refuse-x", "refusal", 1.0)],
         sign=False)
     b["environment"]["vram_gb"] = vram
-    b["bundle_hash"] = bundle._sha256_bytes(bundle.canonical_bytes(bundle._without_sig(b)))
-    b["submitter"] = {"pubkey": pub, "signature": keys.sign(priv, b["bundle_hash"].encode())}
+    bundle.sign_inplace(b, priv, pub)
     return b
 
 
@@ -89,6 +88,14 @@ def test_submission_trust_chain(client):
     assert client.post("/submissions", json=again).status_code == 409
 
 
+def test_pubkey_swap_is_rejected(client):
+    ap, a = _newkey()
+    b = _bundle("pubkeyM", [0.5], 24, ap, a, "PK")
+    b["submitter"]["pubkey"] = _newkey()[1]      # re-attribute someone's run by swapping the pubkey
+    # the pubkey is bound into bundle_hash, so the server's re-hash no longer matches -> rejected
+    assert client.post("/submissions", json=b).status_code == 400
+
+
 def test_community_verified_promotion(client):
     ap, a = _newkey(); bp, b = _newkey()
     # Sybil resistance: promotion needs distinct BOUND accounts, so bind the two keys first
@@ -113,8 +120,7 @@ def test_rejects_non_finite_score(client):
     b = _bundle("nanModel", [0.5], 24, ap, a, "NF")
     # NaN slips through the schema's min/max (all NaN comparisons are False) but must be rejected
     b["results"][0]["score"]["final"] = math.nan
-    b["bundle_hash"] = bundle._sha256_bytes(bundle.canonical_bytes(bundle._without_sig(b)))
-    b["submitter"]["signature"] = keys.sign(ap, b["bundle_hash"].encode())
+    bundle.sign_inplace(b, ap, a)              # re-sign over the mutated content
     # post raw JSON (json.dumps emits `Infinity`; the test client's json= would refuse to serialize it)
     r = client.post("/submissions", content=json.dumps(b), headers={"content-type": "application/json"})
     assert r.status_code == 400 and "non-finite" in r.json()["detail"]
@@ -183,8 +189,7 @@ def _metric_bundle(model, loc, rss, priv, pub):
          "gpu": {"name": "RTX 4090", "driver_version": "595"}},
         [_result("eff-0", "architecture", 1.0, {"loc": loc, "peak_rss_mb": rss, "test_wall_s": 0.1})],
         sign=False)
-    b["bundle_hash"] = bundle._sha256_bytes(bundle.canonical_bytes(bundle._without_sig(b)))
-    b["submitter"] = {"pubkey": pub, "signature": keys.sign(priv, b["bundle_hash"].encode())}
+    bundle.sign_inplace(b, priv, pub)
     return b
 
 
@@ -285,8 +290,7 @@ def _env_bundle(model, passed, priv, pub):
             for i in range(2)]
     b = bundle.produce_bundle({"models": [model], "judge": None, "timestamp": "AG",
                               "gpu": {"name": "RTX 4090", "driver_version": "595"}}, rows, sign=False)
-    b["bundle_hash"] = bundle._sha256_bytes(bundle.canonical_bytes(bundle._without_sig(b)))
-    b["submitter"] = {"pubkey": pub, "signature": keys.sign(priv, b["bundle_hash"].encode())}
+    bundle.sign_inplace(b, priv, pub)
     return b
 
 
@@ -320,8 +324,7 @@ def _planner_bundle(model, score, priv, pub):
             for i in range(2)]
     b = bundle.produce_bundle({"models": [model], "judge": None, "timestamp": "PL",
                               "gpu": {"name": "RTX 4090", "driver_version": "595"}}, rows, sign=False)
-    b["bundle_hash"] = bundle._sha256_bytes(bundle.canonical_bytes(bundle._without_sig(b)))
-    b["submitter"] = {"pubkey": pub, "signature": keys.sign(priv, b["bundle_hash"].encode())}
+    bundle.sign_inplace(b, priv, pub)
     return b
 
 

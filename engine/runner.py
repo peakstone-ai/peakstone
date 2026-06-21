@@ -26,7 +26,7 @@ from .extract import extract_files
 from .judge import judge_solution
 from .provider import LLMClient
 from .report import write_report
-from .sandbox import run_tests
+from .sandbox import effective_sandbox, run_tests
 from .scoring import compute_score
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -489,7 +489,7 @@ def main(argv=None):
     meta = {
         "timestamp": stamp, "models": models, "n_challenges": len(chs),
         "judge": (judge_model if use_judge else None),
-        "sandbox": run_cfg.get("sandbox", "subprocess"), "reference": args.reference,
+        "sandbox": effective_sandbox(run_cfg.get("sandbox")), "reference": args.reference,
         "gpu": _gpu_info(), "retries": args.retries,
         "agents_md": bool(agents_md),
     }
@@ -528,7 +528,7 @@ def run_planner(args, chs, host, ports, run_cfg):
     outdir.mkdir(parents=True, exist_ok=True)
     avg = sum(r["final_score"] for r in results) / len(results)
     meta = {"timestamp": stamp, "models": [planner], "n_challenges": len(results), "judge": None,
-            "sandbox": run_cfg.get("sandbox", "subprocess"), "reference": False,
+            "sandbox": effective_sandbox(run_cfg.get("sandbox")), "reference": False,
             "gpu": _gpu_info(), "coder_model": coder}
     print(f"\nPlanner {planner} (coder {coder}): mean downstream {avg:.3f} over {len(results)} tasks. "
           f"-> {outdir}")
@@ -873,7 +873,7 @@ def run_exec_plans(args, chs, host, ports, run_cfg, use_judge, judge_model, judg
     meta = {
         "timestamp": stamp, "models": [planner], "n_challenges": len(results),
         "judge": (judge_model if use_judge else None),
-        "sandbox": run_cfg.get("sandbox", "subprocess"), "reference": False,
+        "sandbox": effective_sandbox(run_cfg.get("sandbox")), "reference": False,
         "gpu": _gpu_info(), "retries": 0, "agents_md": False,
         "mode": "planner", "planner_model": planner, "coder_model": coder,
     }

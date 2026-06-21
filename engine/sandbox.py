@@ -26,6 +26,22 @@ from . import metrics as _metrics
 _REPO = Path(__file__).resolve().parent.parent
 _TIME_BIN = "/usr/bin/time" if os.path.exists("/usr/bin/time") else None
 
+# the isolation mechanism run_tests actually implements. `sandbox="docker"` in config is NOT wired
+# into the test runner (only the env providers use real docker), so bundles must record the truth.
+SANDBOX_MECHANISM = "subprocess"
+_sandbox_warned = False
+
+
+def effective_sandbox(requested: str | None = None) -> str:
+    """The sandbox mechanism that actually ran — never a value the runner only *claims*."""
+    global _sandbox_warned
+    if requested and requested != SANDBOX_MECHANISM and not _sandbox_warned:
+        import sys
+        print(f"[sandbox] config requested {requested!r} but only {SANDBOX_MECHANISM!r} is "
+              f"implemented; recording the actual mechanism in the bundle", file=sys.stderr)
+        _sandbox_warned = True
+    return SANDBOX_MECHANISM
+
 
 @dataclass
 class RunResult:

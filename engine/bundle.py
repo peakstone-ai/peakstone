@@ -47,9 +47,7 @@ def _sha256_bytes(b: bytes) -> str:
 
 
 def _sha256_file_cached(path: Path) -> str:
-    """SHA-256 of a (possibly huge) file, cached by (path, size, mtime) under PEAKSTONE_HOME."""
-    if os.environ.get("PEAKSTONE_SKIP_FILE_HASH"):
-        return "(skipped)"
+    """SHA-256 of a (possibly huge) file, cached by (path, size, mtime-ns) under PEAKSTONE_HOME."""
     st = path.stat()
     cache_file = keys.KEY_DIR / "filehash-cache.json"
     cache = {}
@@ -58,7 +56,8 @@ def _sha256_file_cached(path: Path) -> str:
             cache = json.loads(cache_file.read_text())
         except Exception:  # noqa: BLE001
             cache = {}
-    key = f"{path.resolve()}|{st.st_size}|{int(st.st_mtime)}"
+    # nanosecond mtime: a same-second rebuild at the same size must not return a stale hash
+    key = f"{path.resolve()}|{st.st_size}|{st.st_mtime_ns}"
     if key in cache:
         return cache[key]
     h = hashlib.sha256()
@@ -68,22 +67,28 @@ def _sha256_file_cached(path: Path) -> str:
     digest = h.hexdigest()
     cache[key] = digest
     keys.KEY_DIR.mkdir(parents=True, exist_ok=True)
-    cache_file.write_text(json.dumps(cache))
+    tmp = cache_file.with_suffix(".json.tmp")     # atomic write — concurrent runs can't corrupt it
+    tmp.write_text(json.dumps(cache))
+    tmp.replace(cache_file)
     return digest
 
 
-def _model_file_hash(file_path: Path) -> str:
-    """Hash a model file; for a split GGUF (NNNNN-of-NNNNN), hash all parts -> combined digest."""
+def _model_file_hash(file_path: Path) -> tuple[str, bool]:
+    """Hash a model file → (digest, verified). For a split GGUF (NNNNN-of-NNNNN) hash all parts.
+    `verified` is False for any sentinel (skipped/missing/incomplete) so the bundle never passes off
+    a placeholder as a real reproducibility anchor."""
+    if os.environ.get("PEAKSTONE_SKIP_FILE_HASH"):
+        return "(skipped)", False
     if not file_path.exists():
-        return "(missing)"
+        return "(missing)", False
     m = re.search(r"-(\d{5})-of-(\d{5})\.gguf$", file_path.name)
     if not m:
-        return _sha256_file_cached(file_path)
+        return _sha256_file_cached(file_path), True
     total = int(m.group(2))
     parts = sorted(file_path.parent.glob(re.sub(r"-\d{5}-of-\d{5}\.gguf$", "-*-of-*.gguf", file_path.name)))
     if len(parts) != total:
-        return _sha256_file_cached(file_path)  # incomplete; fall back to part 1
-    return _sha256_bytes("".join(_sha256_file_cached(p) for p in parts).encode())
+        return "(incomplete-split)", False     # don't silently hash only part 1
+    return _sha256_bytes("".join(_sha256_file_cached(p) for p in parts).encode()), True
 
 
 def _hash_challenge_dir(d: Path) -> str:
@@ -194,15 +199,18 @@ def model_identity(model_name: str, run_cfg: dict) -> dict:
     if not cfg:  # reference run or model not in the local registry
         return {
             "family": model_name, "artifact": "(unregistered)", "hf_repo": "(local/unknown)",
-            "file_sha256": "(none)", "engine": {"name": "unknown", "version": "unknown"},
+            "file_sha256": "(none)", "file_sha256_verified": False,
+            "engine": {"name": "unknown", "version": "unknown"},
             "sampling": _sampling("", run_cfg),
         }
     file = cfg.get("file", "")
+    sha, verified = _model_file_hash(ROOT / file) if file else ("(none)", False)
     return {
         "family": model_name,
         "artifact": _quant_from_filename(file),
         "hf_repo": cfg.get("repo", "(unknown)"),
-        "file_sha256": _model_file_hash(ROOT / file) if file else "(none)",
+        "file_sha256": sha,
+        "file_sha256_verified": verified,
         "context": cfg.get("ctx"),
         "serve_flags": cfg.get("flags", ""),
         "engine": _engine_info(),
@@ -296,18 +304,33 @@ def produce_bundle(meta: dict, results: list[dict], *, harness_version: str = "0
     if meta.get("coder_model"):
         bundle["harness"]["coder_model"] = meta["coder_model"]
 
-    # content-address (signature omitted) + sign
-    bundle["bundle_hash"] = _sha256_bytes(canonical_bytes(_without_sig(bundle)))
+    # content-address + sign
     if sign:
         priv, pub = keys.load_or_create_keypair()
-        bundle["submitter"] = {"pubkey": pub, "signature": keys.sign(priv, bundle["bundle_hash"].encode())}
+        sign_inplace(bundle, priv, pub)
+    else:
+        bundle["bundle_hash"] = _sha256_bytes(canonical_bytes(_without_sig(bundle)))
 
     _validate(bundle)
     return bundle
 
 
+def sign_inplace(bundle: dict, priv, pub: str) -> dict:
+    """Set submitter.pubkey, content-address (only `signature` excluded → the hash BINDS the pubkey),
+    then sign. The canonical way to (re)sign a bundle; reuse it so the pubkey can't be swapped after
+    signing to re-attribute someone else's run."""
+    bundle["submitter"] = {"pubkey": pub}
+    bundle["bundle_hash"] = _sha256_bytes(canonical_bytes(_without_sig(bundle)))
+    bundle["submitter"]["signature"] = keys.sign(priv, bundle["bundle_hash"].encode())
+    return bundle
+
+
 def _without_sig(bundle: dict) -> dict:
-    b = {k: v for k, v in bundle.items() if k not in ("submitter", "bundle_hash")}
+    """The hashed view: drop `bundle_hash` and only `submitter.signature` — submitter.pubkey/handle
+    stay in, so they're bound by the content-address."""
+    b = {k: v for k, v in bundle.items() if k != "bundle_hash"}
+    if isinstance(b.get("submitter"), dict):
+        b["submitter"] = {k: v for k, v in b["submitter"].items() if k != "signature"}
     return b
 
 
