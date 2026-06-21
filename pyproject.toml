@@ -13,7 +13,6 @@ authors = [{ name = "The Peakstone Authors" }]
 keywords = ["llm", "benchmark", "evaluation", "reproducibility", "coding", "agents", "gpu"]
 classifiers = [
     "Development Status :: 3 - Alpha",
-    "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
