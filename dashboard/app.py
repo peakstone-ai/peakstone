@@ -247,11 +247,12 @@ class ModelsScreen(ModalScreen):
     #models-tbl { height: 1fr; }
     #dl-bar { margin-top: 1; }
     """
-    BINDINGS = [("escape", "dismiss", "Close"), ("a", "add", "Add"), ("d", "download", "Download")]
+    BINDINGS = [("escape", "dismiss", "Close"), ("a", "add", "Add"),
+                ("d", "download", "Download"), ("r", "run", "Run")]
 
     def compose(self) -> ComposeResult:
         with Vertical(id="models"):
-            yield Static("[b]Local models[/b] (serve/models.toml)  ·  a add  ·  d download  ·  Esc close")
+            yield Static("[b]Local models[/b] (serve/models.toml)  ·  r run  ·  a add  ·  d download  ·  Esc close")
             yield DataTable(id="models-tbl", cursor_type="row", zebra_stripes=True)
             yield ProgressBar(id="dl-bar", show_eta=False)
 
@@ -270,12 +271,23 @@ class ModelsScreen(ModalScreen):
     def action_add(self) -> None:
         self.app.push_screen(AddModelScreen(), lambda _ok: self.refresh_models())
 
-    def action_download(self) -> None:
+    def _selected(self) -> str | None:
         t = self.query_one("#models-tbl", DataTable)
-        if t.row_count == 0:
-            return
-        name = str(t.get_row_at(t.cursor_row)[0])
-        self.download_model(name)
+        if t.row_count == 0 or t.cursor_row is None:
+            return None
+        return str(t.get_row_at(t.cursor_row)[0])
+
+    def action_download(self) -> None:
+        name = self._selected()
+        if name:
+            self.download_model(name)
+
+    def action_run(self) -> None:
+        """Benchmark the selected model locally (download if needed) → a real, submittable run. No
+        published baseline since this isn't a leaderboard row; press `s` in the run view to submit."""
+        name = self._selected()
+        if name:
+            self.app.push_screen(ReproduceScreen(name, None, self.app.base_url))
 
     @work(thread=True, exclusive=True)
     def download_model(self, name: str) -> None:

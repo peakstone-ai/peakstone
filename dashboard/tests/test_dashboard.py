@@ -197,6 +197,28 @@ def test_reproduce_screen_shows_result_and_records_history(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_models_screen_run_opens_reproduce(monkeypatch):
+    from dashboard import history
+    from dashboard import reproduce as R
+    from dashboard.app import Dashboard, ModelsScreen, ReproduceScreen
+    monkeypatch.setattr(R, "reproduce", lambda model, **k: R.ReproduceResult(model, True, your_tps=70.0, note="done"))
+    monkeypatch.setattr(history, "append", lambda e: None)
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await app.push_screen(ModelsScreen())   # the real registry has models -> a selectable row
+            await pilot.pause()
+            await pilot.press("r")                   # run the selected model
+            await pilot.pause()
+            assert isinstance(app.screen, ReproduceScreen)
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+    asyncio.run(scenario())
+
+
 def test_app_handles_api_down(monkeypatch):
     def boom(*a, **k):
         raise client.APIError("connection refused")

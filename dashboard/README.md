@@ -19,7 +19,7 @@ for the public instance.
 | `s` | cycle the sort axis (code / agentic / planner / tok-s) |
 | `⏎` | **reproduce** the selected model on your hardware (serve → bench → your tok/s vs published) |
 | `s` | (in the reproduce view) **submit** the reproduced run to the leaderboard |
-| `m` | **models** — list local models, `a` add (HF repo + file), `d` download (live progress bar) |
+| `m` | **models** — list local models; `r` run (bench it locally → real, submittable data), `a` add (HF repo + file), `d` download (live progress bar) |
 | `h` | **history** — past reproduce runs (your tok/s vs published, code score) |
 | `r` | refresh the leaderboard |
 | `q` | quit |
