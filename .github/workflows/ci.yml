@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# cancel superseded runs on the same ref
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install (client + dev)
+        run: pip install -e ".[dashboard,dev]"
+      - name: Run the dependency-light suites
+        # The pure-Python suites (engine/dashboard/api units + capability matching). The docker
+        # (env) and KVM (firecracker) integration tests are intentionally excluded — they need a
+        # Docker daemon / /dev/kvm and run locally, not in CI.
+        run: |
+          python -m pytest -q \
+            peakstone/engine/tests \
+            peakstone/dashboard/tests \
+            peakstone/api/tests \
+            peakstone/engine/env/tests/test_capabilities.py
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Build sdist + wheel and check metadata
+        run: |
+          pip install build "twine>=6.1" "packaging>=24.2"
+          python -m build
+          twine check dist/*
+      - name: Assert the wheel is client-only (no server, schema shipped)
+        run: |
+          python - <<'PY'
+          import glob, zipfile, sys
+          whl = sorted(glob.glob("dist/*.whl"))[-1]
+          names = zipfile.ZipFile(whl).namelist()
+          tops = {n.split("/")[0] for n in names}
+          assert tops <= {"peakstone"} | {t for t in tops if "dist-info" in t}, tops
+          assert not any(n.startswith("peakstone/api/") for n in names), "server leaked into the wheel"
+          assert any(n == "peakstone/engine/schema/result-bundle.schema.json" for n in names), "schema missing"
+          assert any(n == "peakstone/engine/config.toml" for n in names), "config missing"
+          print("wheel OK:", whl)
+          PY

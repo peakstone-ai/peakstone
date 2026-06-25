@@ -9,3 +9,4 @@ peakstone.db
 infra/.env
 /build/
 *.egg-info/
+/dist/
