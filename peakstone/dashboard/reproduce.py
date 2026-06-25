@@ -2,7 +2,7 @@
 serve it → bench it → compare your tok/s to the published number.
 
 The external steps (serve / health / bench / stop) are injectable so the orchestration is testable
-without a GPU; the real path uses serve/serve.sh + engine.runner on a host with llama-server.
+without a GPU; the real path uses serve/serve.sh + peakstone.engine.runner on a host with llama-server.
 """
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ def wait_healthy(port: int, *, timeout: float = 180, opener=urllib.request.urlop
 
 def bench(name: str, ids: list[str], *, runner=subprocess.run, out_dir: Path | None = None) -> dict | None:
     out = Path(out_dir) if out_dir else (REPO / "results" / f"repro-{name}")
-    runner(["python", "-m", "engine.runner", "--models", name, "--ids", ",".join(ids),
+    runner(["python", "-m", "peakstone.engine.runner", "--models", name, "--ids", ",".join(ids),
             "--no-judge", "--bundle", "--out", str(out)],
            cwd=str(REPO), capture_output=True, text=True, timeout=1800)
     bundle = out / "bundle.json"

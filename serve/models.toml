@@ -1,5 +1,9 @@
 # Model registry for llama-server.
-# One model loaded at a time (24GB VRAM). serve.sh reads this.
+# One model loaded at a time. serve.sh reads this. The roster below was tuned for a 24GB NVIDIA
+# card; the flags (-fa, --cache-type-k/v, --n-cpu-moe, -ngl) are backend-agnostic and work on a
+# macOS Metal build of llama.cpp too. On Apple Silicon memory is UNIFIED (weights + KV share system
+# RAM), so pick a model that fits your RAM with headroom — e.g. on a 16GB Mac use vibethinker-3b
+# (3.3GB) or phi-4-mini (~9GB); the 22GB roster needs a 32GB+ machine.
 # ctx kept modest so KV-cache + weights fit alongside the GGUF.
 #
 # Roster trimmed to 7 distinct contestants. Tested & removed:

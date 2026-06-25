@@ -21,6 +21,7 @@ import platform
 import re
 import shutil
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -127,13 +128,18 @@ def capture_env(gpu_meta: dict | None) -> dict:
     env["gpu"] = gpu_meta.get("name", "unknown")
     if gpu_meta.get("driver_version"):
         env["driver"] = gpu_meta["driver_version"]
-    # CPU model name (prettier than platform.processor() on Linux)
+    # CPU model name (prettier than platform.processor() on Linux/macOS)
     cpu = platform.processor() or "unknown"
     try:
-        for line in Path("/proc/cpuinfo").read_text().splitlines():
-            if line.startswith("model name"):
-                cpu = line.split(":", 1)[1].strip()
-                break
+        if sys.platform == "darwin":
+            out = subprocess.run(["sysctl", "-n", "machdep.cpu.brand_string"],
+                                 capture_output=True, text=True, timeout=5)
+            cpu = out.stdout.strip() or cpu
+        else:
+            for line in Path("/proc/cpuinfo").read_text().splitlines():
+                if line.startswith("model name"):
+                    cpu = line.split(":", 1)[1].strip()
+                    break
     except Exception:  # noqa: BLE001
         pass
     env["cpu"] = cpu
@@ -141,11 +147,16 @@ def capture_env(gpu_meta: dict | None) -> dict:
         env["ram_gb"] = round(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9, 1)
     except Exception:  # noqa: BLE001
         pass
-    # total GPU memory — the "fits in <=X GB VRAM" leaderboard facet keys on this
+    # total GPU memory — the "fits in <=X GB VRAM" leaderboard facet keys on this. On Apple Silicon
+    # memory is unified, so the GPU's budget is the machine's total RAM (== ram_gb above).
     try:
-        out = subprocess.run(["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
-                             capture_output=True, text=True, timeout=10)
-        env["vram_gb"] = round(int(out.stdout.split("\n")[0]) / 1024, 1)
+        if sys.platform == "darwin":
+            out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5)
+            env["vram_gb"] = round(int(out.stdout.strip()) / 1024**3, 1)
+        else:
+            out = subprocess.run(["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+                                 capture_output=True, text=True, timeout=10)
+            env["vram_gb"] = round(int(out.stdout.split("\n")[0]) / 1024, 1)
     except Exception:  # noqa: BLE001
         pass
     env["os"] = platform.platform()
@@ -154,7 +165,8 @@ def capture_env(gpu_meta: dict | None) -> dict:
 
 def _engine_info() -> dict:
     """Best-effort llama.cpp version (the only served engine today)."""
-    binary = os.environ.get("LLAMA_SERVER") or str(Path.home() / "llama.cpp" / "build" / "bin" / "llama-server")
+    binary = (os.environ.get("LLAMA_SERVER") or shutil.which("llama-server")
+              or str(Path.home() / "llama.cpp" / "build" / "bin" / "llama-server"))
     info = {"name": "llama.cpp", "version": "unknown"}
     if shutil.which(binary) or Path(binary).exists():
         try:

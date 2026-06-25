@@ -50,6 +50,35 @@ Each run records full per-challenge transcripts and the model/environment metada
 reproduce it. See `peakstone/engine/runner.py --help` for filters (`--lang`, `--type`, `--difficulty`,
 `--ids`) and modes (judge, retries, agents-md, planner eval).
 
+### Running on macOS (Apple Silicon)
+
+The harness, dashboard, and serving all run on macOS. The engine auto-detects the platform —
+hardware stats come from `sysctl`/`ioreg`/`vm_stat` (the dashboard shows the unified-memory GPU
+live), and it uses GNU `time` only when present. One-time toolchain setup:
+
+```bash
+# Python: engine deps + the optional library-challenge references + the dashboard TUI
+pip install jsonschema cryptography pytest numpy pandas pydantic networkx more-itertools \
+            python-dateutil sortedcontainers "textual>=0.60"
+
+# JS/TS challenges: install the jsenv libs, plus tsx + typescript on PATH (the TS runner needs them)
+( cd peakstone/engine/jsenv && npm install )
+npm install -g tsx typescript
+
+# Serving (optional — only to run a model): a Metal build of llama.cpp
+brew install llama.cpp        # serve.sh finds `llama-server` on PATH automatically
+```
+
+On Apple Silicon, memory is **unified** (weights + KV share system RAM), so pick a model that fits
+your RAM with headroom — on a 16 GB Mac, `vibethinker-3b` (3.3 GB) or `phi-4-mini` (~9 GB) rather
+than the 22 GB roster tuned for a 24 GB NVIDIA card.
+
+For the multi-machine agentic env challenges, the **local** provider works everywhere, and the
+**docker** provider gives full isolation *plus network shaping* (`tc` latency / `iptables` link
+partitions) on macOS too — those run inside Docker Desktop's Linux VM, so start Docker Desktop and
+use `--env-provider docker`. Only **firecracker** is genuinely Linux-only (it needs `/dev/kvm`,
+which Apple Silicon does not provide).
+
 ## Dashboard (TUI)
 
 A Textual terminal UI shows your **local GPU/CPU/RAM** live, next to the leaderboard **filtered to

@@ -231,8 +231,15 @@ class DockerComposeProvider(EnvironmentProvider):
     def available(self) -> bool:
         if not shutil.which("docker"):
             return False
-        r = subprocess.run(["docker", "compose", "version"], capture_output=True)
-        return r.returncode == 0
+        # `docker compose version` only proves the CLI plugin exists; it returns 0 even with the
+        # daemon down. `docker info` actually contacts the daemon, so it fails fast when Docker
+        # Desktop isn't running (common on macOS) — letting callers cleanly fall back to local.
+        try:
+            if subprocess.run(["docker", "compose", "version"], capture_output=True).returncode != 0:
+                return False
+            return subprocess.run(["docker", "info"], capture_output=True, timeout=10).returncode == 0
+        except (OSError, subprocess.SubprocessError):
+            return False
 
     def capabilities(self) -> Capabilities:
         return PROVIDER_CAPS["docker"]

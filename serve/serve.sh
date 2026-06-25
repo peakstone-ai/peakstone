@@ -9,7 +9,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-LLAMA_SERVER="${LLAMA_SERVER:-$HOME/llama.cpp/build/bin/llama-server}"
+# Prefer a llama-server on PATH (e.g. Homebrew's Metal build on macOS: `brew install llama.cpp`),
+# then fall back to a locally-built tree. Override with $LLAMA_SERVER.
+LLAMA_SERVER="${LLAMA_SERVER:-$(command -v llama-server || echo "$HOME/llama.cpp/build/bin/llama-server")}"
 
 if [ "${1:-}" = "--list" ] || [ -z "${1:-}" ]; then
   echo "Available models (serve/models.toml):"
@@ -46,7 +48,9 @@ if [ ! -f "$FILE" ]; then
   echo "model file not found: $FILE  (run serve/download_models.sh $NAME)"; exit 1
 fi
 
+# LAN IP: `hostname -I` is Linux-only; macOS falls back to the primary interface address.
 LANIP=$(hostname -I 2>/dev/null | awk '{print $1}')
+[ -z "${LANIP:-}" ] && LANIP=$(ipconfig getifaddr en0 2>/dev/null || ipconfig getifaddr en1 2>/dev/null || true)
 echo ">>> serving '$NAME' on http://0.0.0.0:$PORT/v1  (LAN: http://${LANIP:-<ip>}:$PORT/v1)"
 echo ">>> ctx=$CTX  file=$FILE"
 

@@ -24,7 +24,28 @@ from pathlib import Path
 from . import metrics as _metrics
 
 _PKG_DIR = Path(__file__).resolve().parent   # the engine package (jsenv/ ships alongside)
-_TIME_BIN = "/usr/bin/time" if os.path.exists("/usr/bin/time") else None
+
+
+def _gnu_time_bin() -> str | None:
+    """A `time` binary that supports GNU `-v` (peak-RSS reporting). Linux ships GNU time at
+    /usr/bin/time; macOS ships BSD time there, which *rejects* `-v` and aborts the wrapped command
+    before it ever runs — so we must not use it. `brew install gnu-time` provides `gtime` (GNU).
+    Returns None when no GNU-compatible binary exists, so _run_measured falls back to a plain run
+    and simply omits the peak-RSS metric rather than failing every test."""
+    for cand in ("/usr/bin/time", "gtime"):
+        path = shutil.which(cand)
+        if not path:
+            continue
+        try:
+            probe = subprocess.run([path, "-v", "true"], capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if "illegal option" not in (probe.stderr or ""):   # BSD time prints this for -v
+            return path
+    return None
+
+
+_TIME_BIN = _gnu_time_bin()
 
 # the isolation mechanism run_tests actually implements. `sandbox="docker"` in config is NOT wired
 # into the test runner (only the env providers use real docker), so bundles must record the truth.

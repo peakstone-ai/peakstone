@@ -41,7 +41,7 @@ class HardwarePanel(Static):
             lines.append(f"[b]GPU{g.index}[/b] {g.name}  ([b]{g.vram_gb:g} GB[/b])")
             lines.append(f"  VRAM {_bar(g.mem_used_mib, g.mem_total_mib)} MiB   util {g.util_pct}%")
         if not s.gpus:
-            lines.append("[yellow]No NVIDIA GPU detected — CPU only[/yellow]")
+            lines.append("[yellow]No GPU detected — CPU only[/yellow]")
         lines.append(f"[b]CPU[/b]  {s.cpu_pct:5.1f}%  ({s.cores} cores)")
         lines.append(f"[b]RAM[/b]  {_bar(s.ram_used_mib, s.ram_total_mib)} MiB")
         self.update("\n".join(lines))
