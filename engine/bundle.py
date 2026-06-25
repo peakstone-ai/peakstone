@@ -26,10 +26,9 @@ from pathlib import Path
 
 import jsonschema
 
-from . import keys
+from . import keys, paths
 
-ROOT = Path(__file__).resolve().parent.parent
-SCHEMA_PATH = ROOT / "schema" / "result-bundle.schema.json"
+SCHEMA_PATH = paths.schema_path()
 BUNDLE_VERSION = "1.0"
 SAFETY_SCORINGS = {"injection", "refusal", "hallucination", "secure-code", "adherence"}
 
@@ -192,7 +191,7 @@ def _sampling(flags: str, run_cfg: dict) -> dict:
 def model_identity(model_name: str, run_cfg: dict) -> dict:
     """Assemble the model block from serve/models.toml + file hash + engine version (best-effort)."""
     try:
-        reg = tomllib.loads((ROOT / "serve" / "models.toml").read_text())
+        reg = tomllib.loads(paths.models_toml().read_text())
     except Exception:  # noqa: BLE001
         reg = {}
     cfg = reg.get(model_name)
@@ -204,7 +203,7 @@ def model_identity(model_name: str, run_cfg: dict) -> dict:
             "sampling": _sampling("", run_cfg),
         }
     file = cfg.get("file", "")
-    sha, verified = _model_file_hash(ROOT / file) if file else ("(none)", False)
+    sha, verified = _model_file_hash(paths.repo_root() / file) if file else ("(none)", False)
     return {
         "family": model_name,
         "artifact": _quant_from_filename(file),
@@ -278,12 +277,12 @@ def produce_bundle(meta: dict, results: list[dict], *, harness_version: str = "0
     """Assemble a schema-valid, content-addressed, (optionally) signed result bundle."""
     run_cfg = {}
     try:
-        run_cfg = tomllib.loads((ROOT / "engine" / "config.toml").read_text()).get("run", {})
+        run_cfg = tomllib.loads(paths.config_path().read_text()).get("run", {})
     except Exception:  # noqa: BLE001
         pass
 
     model_name = (meta.get("planner_model") or (meta.get("models") or ["unknown"])[0])
-    chash = challenge_hashes(ROOT / "challenges")
+    chash = challenge_hashes(paths.challenges_dir())
 
     bundle_results = [_result(r, chash, meta.get("judge")) for r in results]
     # hash the sorted list as canonical JSON (self-delimiting) — bare concatenation is ambiguous

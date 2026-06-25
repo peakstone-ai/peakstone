@@ -20,7 +20,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-from . import keys
+from . import keys, paths
 from .bundle import _sha256_bytes, canonical_bytes
 from .challenges import load_challenges
 from .sandbox import run_tests
@@ -58,7 +58,7 @@ def _content_hash(p: dict) -> str:
 
 
 def _load_cfg() -> dict:
-    cfg_path = Path(__file__).resolve().parent / "config.toml"
+    cfg_path = paths.config_path()
     if cfg_path.exists():
         try:
             return tomllib.loads(cfg_path.read_text())

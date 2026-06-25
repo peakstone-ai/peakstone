@@ -15,9 +15,8 @@ import tomllib
 from collections import defaultdict
 from pathlib import Path
 
+from . import paths
 from .provider import LLMClient
-
-ROOT = Path(__file__).resolve().parent.parent
 
 
 def _avg(xs):
@@ -102,7 +101,7 @@ def main(argv=None):
     ap.add_argument("engine")
     ap.add_argument("--model", default="qwen3-coder")
     ap.add_argument("--out", default=None)
-    ap.add_argument("--config", default=str(ROOT / "engine" / "config.toml"))
+    ap.add_argument("--config", default=str(paths.config_path()))
     args = ap.parse_args(argv)
     bench = Path(args.bench)
     out = Path(args.out) if args.out else bench / "recommendations.html"
@@ -111,7 +110,7 @@ def main(argv=None):
 
     cfg = tomllib.loads(Path(args.config).read_text())
     host = cfg["server"]["host"]
-    mt = tomllib.loads((ROOT / "serve" / "models.toml").read_text())
+    mt = tomllib.loads(paths.models_toml().read_text())
     port = mt.get(args.model, {}).get("port")
 
     html = None

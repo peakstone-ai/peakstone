@@ -13,9 +13,12 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-# repo root (editable install): dashboard/ is a sibling of serve/ and models/. Override for other layouts.
-REPO = Path(os.environ.get("PEAKSTONE_REPO", Path(__file__).resolve().parents[1]))
-MODELS_TOML = REPO / "serve" / "models.toml"
+from engine import paths
+
+# Both the registry and the GGUF store live in the repo workspace. engine.paths is the single
+# resolver (honours PEAKSTONE_REPO / PEAKSTONE_MODELS_TOML); reproduce/serve need a checkout anyway.
+REPO = paths.repo_root()
+MODELS_TOML = paths.models_toml()
 
 
 @dataclass

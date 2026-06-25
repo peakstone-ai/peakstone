@@ -7,9 +7,8 @@ COPY requirements.txt ./requirements.txt
 COPY api/requirements.txt ./api/requirements.txt
 RUN pip install --no-cache-dir -r api/requirements.txt
 
-# the API reuses engine/ (bundle hashing + keys) and schema/ (bundle validation)
+# the API reuses engine/ for bundle hashing + keys + the bundled schema (engine/schema/)
 COPY engine/ ./engine/
-COPY schema/ ./schema/
 COPY api/ ./api/
 COPY alembic.ini ./alembic.ini   # `alembic upgrade head` on deploy (script_location -> api/alembic)
 

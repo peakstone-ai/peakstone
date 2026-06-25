@@ -19,7 +19,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-from . import adherence, global_rules, honesty
+from . import adherence, global_rules, honesty, paths
 from .agentic import run_agentic_task
 from .challenges import filter_challenges, load_challenges
 from .extract import extract_files
@@ -29,7 +29,7 @@ from .report import write_report
 from .sandbox import effective_sandbox, run_tests
 from .scoring import compute_score
 
-ROOT = Path(__file__).resolve().parent.parent
+ROOT = paths.repo_root()   # results land here; data files resolve via engine.paths
 SYSTEM_PROMPT = (
     "You are an expert programmer. Solve the task exactly as specified. "
     "Output your solution as fenced code blocks using the required file name(s) and the "
@@ -126,8 +126,8 @@ def main(argv=None):
                          "challenges and score a deterministic 'global adherence' axis on each "
                          "(separate from correctness). Bare flag uses the built-in default; pass a "
                          "FILE to override. Helps reasoning models reach a complete answer.")
-    ap.add_argument("--config", default=str(ROOT / "engine" / "config.toml"))
-    ap.add_argument("--challenges-dir", default=str(ROOT / "challenges"))
+    ap.add_argument("--config", default=str(paths.config_path()))
+    ap.add_argument("--challenges-dir", default=str(paths.challenges_dir()))
     ap.add_argument("--out", default=None)
     ap.add_argument("--bundle", action="store_true",
                     help="also emit a signed, schema-valid Peakstone result bundle (bundle.json) "
@@ -158,7 +158,7 @@ def main(argv=None):
     # model -> port: serve/models.toml is the source of truth; config [models] can override.
     ports = {}
     try:
-        mt = tomllib.loads((ROOT / "serve" / "models.toml").read_text())
+        mt = tomllib.loads(paths.models_toml().read_text())
         ports = {name: m["port"] for name, m in mt.items() if "port" in m}
     except Exception:  # noqa: BLE001
         pass
@@ -192,6 +192,11 @@ def main(argv=None):
 
     use_judge = jcfg.get("enabled", True) and not args.no_judge and not args.reference
 
+    try:
+        paths.require(Path(args.challenges_dir), "challenge corpus")
+    except paths.DataNotFound as e:
+        print(f"!! {e}", file=sys.stderr)
+        return 2
     chs = filter_challenges(
         load_challenges(Path(args.challenges_dir)),
         langs=_csv(args.lang),

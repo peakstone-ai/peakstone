@@ -13,11 +13,10 @@ import json
 import sys
 from pathlib import Path
 
+from . import paths
 from .challenges import load_challenges
 from .extract import extract_files
 from .runner import _load_results
-
-ROOT = Path(__file__).resolve().parent.parent
 
 
 def main(argv=None):
@@ -26,7 +25,7 @@ def main(argv=None):
     ap.add_argument("--out", default=None)
     ap.add_argument("--models", default=None)
     ap.add_argument("--ids", default=None)
-    ap.add_argument("--challenges-dir", default=str(ROOT / "challenges"))
+    ap.add_argument("--challenges-dir", default=str(paths.challenges_dir()))
     args = ap.parse_args(argv)
 
     rows = _load_results(Path(args.results))

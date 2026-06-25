@@ -35,7 +35,7 @@ change.
 ## Validating a bundle
 
 ```bash
-# any JSON Schema validator, e.g. python jsonschema:
-python -c "import json,jsonschema; jsonschema.validate(json.load(open('bundle.json')), json.load(open('schema/result-bundle.schema.json')))"
+# any JSON Schema validator, e.g. python jsonschema (the schema ships inside the engine package):
+python -c "import json,jsonschema; from engine import paths; jsonschema.validate(json.load(open('bundle.json')), json.load(paths.schema_path().open()))"
 ```
 The engine's `produce_bundle()` validates against this schema before writing.

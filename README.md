@@ -17,10 +17,12 @@ Early. **P1 (reproducible coding leaderboard)** is in progress. What exists toda
 - **`engine/`** — the test harness: serves a model over an OpenAI-compatible API, runs a suite of
   **verifiable** challenges (deterministic tests), scores them, and (soon) emits a signed
   **result bundle**. Also supports LLM-judge grading, self-repair (`--retries`), a global-rules
-  output contract (`--agents-md`), tool-calling/agentic/injection modes, and a planner eval.
-- **`challenges/`** — the challenge corpus (`spec.md` + `tests/` + `reference/` per challenge).
-- **`schema/`** — the **result-bundle JSON Schema** (the reproducibility contract) + capability
-  taxonomy.
+  output contract (`--agents-md`), tool-calling/agentic/injection modes, and a planner eval. Ships
+  the **result-bundle JSON Schema** (the reproducibility contract) + capability taxonomy as packaged
+  data in `engine/schema/`, so a bare `pip install` can produce and validate bundles.
+- **`challenges/`** — the challenge corpus (`spec.md` + `tests/` + `reference/` per challenge). Part
+  of the repo workspace, not the PyPI wheel; running the suite needs a checkout (set `PEAKSTONE_REPO`
+  if the package and corpus live apart).
 - **`serve/`** — local model-serving helpers (run your own GGUF models to test).
 
 - **`api/`** — the submission/leaderboard API (FastAPI + Postgres) that runs on peakstone.ai. Validates

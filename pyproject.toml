@@ -44,8 +44,14 @@ Source = "https://github.com/peakstone-ai/peakstone"
 include = ["engine*", "dashboard*"]
 exclude = ["api*", "web*", "*.tests", "*.tests.*"]
 
-# NOTE (pre-PyPI): the engine currently resolves schema/, challenges/, serve/ and config.toml
-# relative to the repo root, so `pip install -e .` (editable, in-repo) works today but a built wheel
-# would not ship those data files. Before publishing: move schema/taxonomy data into the package as
-# package-data, decide how challenges/ ship (bundled vs fetched), and namespace the import packages
-# (engine -> peakstone.engine) to avoid top-level name collisions on PyPI.
+# Packaged data that must travel in the wheel: the bundle JSON Schema (the reproducibility contract)
+# and the run config. With these, a bare `pip install` can produce + validate signed bundles. The
+# challenge corpus and serve/ helpers are intentionally NOT shipped — running the suite needs a
+# checkout anyway (reference solutions, the JS sandbox's node_modules, serve.sh, GGUF weights), so
+# engine.paths resolves them from $PEAKSTONE_REPO and errors clearly if absent.
+[tool.setuptools.package-data]
+engine = ["config.toml", "schema/*.json", "schema/*.md"]
+
+# NOTE (pre-PyPI): still to do before publishing — namespace the import packages
+# (engine -> peakstone.engine, dashboard -> peakstone.dashboard) to avoid top-level name collisions
+# on PyPI.
