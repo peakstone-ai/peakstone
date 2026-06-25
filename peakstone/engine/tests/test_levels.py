@@ -50,8 +50,8 @@ def test_capabilities_and_relevance(tmp_path):
     full = model_capabilities("full", reg)
     small = model_capabilities("small", reg)
     restricted = model_capabilities("restricted", reg)
-    unknown = model_capabilities("ghost", reg)         # not in registry -> full
-    assert "tools" in full and "agentic" in full and unknown == full
+    unknown = model_capabilities("ghost", reg)         # not in registry -> full gating
+    assert {"tools", "agentic"} <= full and {"tools", "agentic"} <= unknown
     assert "tools" in small and "agentic" not in small
     assert "tools" not in restricted and "agentic" not in restricted
 

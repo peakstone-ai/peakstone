@@ -185,7 +185,8 @@ def leaderboard(db: Session = Depends(get_session), suite: str | None = None,
             continue
         fam = db.get(models.ModelFamily, art.family_id)
         summ = _summarize(s, fam)
-        row = {"family": fam.name, "release_date": fam.release_date, **summ,
+        row = {"family": fam.name, "release_date": fam.release_date,
+               "observed_capabilities": sorted((fam.capabilities or {}).keys()), **summ,
                "run": _run_info(db, s, art)}
         val = _sort_value(row, sort)
         if val is None:
@@ -219,6 +220,7 @@ def model_page(family: str, db: Session = Depends(get_session)):
         runs.append({**_summarize(s, fam), "run": _run_info(db, s, art),
                      "suite": f"{s.suite_name}@{s.suite_version}"})
     return {"family": fam.name, "vendor": fam.vendor, "release_date": fam.release_date,
+            "observed_capabilities": sorted((fam.capabilities or {}).keys()),
             "n_runs": len(runs), "runs": runs}
 
 

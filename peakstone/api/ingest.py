@@ -170,6 +170,14 @@ def ingest_bundle(db, b: dict) -> models.Submission:
                 verification=r.get("verification"), seed_difficulty=r.get("difficulty"),
                 content_hash=r.get("challenge_hash")))
 
+    # observed capabilities (positives) from this run -> union into the family (so others can import
+    # a classification without re-testing). Mirrors engine.capabilities.observe on bundle-shaped rows.
+    from ..engine import capabilities as caps_mod
+    obs = caps_mod.observe([{"category": r.get("category"), "verification": r.get("verification"),
+                             "final_score": (r.get("score") or {}).get("final", 0)} for r in b["results"]])
+    if obs:
+        family.capabilities = {**(family.capabilities or {}), **{k: True for k in obs}}
+
     _recompute_trust(db, submission)
     db.commit()
     db.refresh(submission)

@@ -358,3 +358,21 @@ def test_efficiency_metrics_aggregation_and_sort(client):
     assert fams2 == ["bloatModel", "leanModel"], fams2
     # the axes are advertised in facets
     assert any(a["key"] == "loc" for a in client.get("/facets").json()["sort_axes"])
+
+
+def test_observed_capabilities_from_runs(client):
+    """A bundle whose results show tool engagement + an agentic resolve -> family.observed_capabilities."""
+    ap, a = _newkey()
+    rows = [
+        {"model": "capM", "challenge": "tool-1", "type": "tool-calling", "scoring": "tool_calls",
+         "final_score": 1.0, "passed": 1, "total": 1, "response": "x"},
+        {"model": "capM", "challenge": "agent-1", "type": "goal-state-env",
+         "verification": "goal-state-env", "scoring": "goal-state", "final_score": 1.0,
+         "passed": 1, "total": 1, "response": "x", "env": {"provider": "docker"}},
+    ]
+    b = bundle.produce_bundle({"models": ["capM"], "judge": None, "timestamp": "C",
+                               "gpu": {"name": "RTX 4090", "driver_version": "595"}}, rows, sign=False)
+    bundle.sign_inplace(b, ap, a)
+    assert client.post("/submissions", json=b).status_code == 201
+    obs = client.get("/models/capM").json()["observed_capabilities"]
+    assert "tools" in obs and "agentic" in obs

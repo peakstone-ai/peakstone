@@ -15,11 +15,12 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import json
+import os
 import sys
 import tomllib
 from pathlib import Path
 
-from . import adherence, global_rules, honesty, matheval, paths
+from . import adherence, capabilities, global_rules, honesty, matheval, paths
 from .levels import GATED_CAP, load_levels, model_capabilities, relevant, resolve as resolve_level
 from .agentic import run_agentic_task
 from .challenges import filter_challenges, load_challenges
@@ -120,6 +121,12 @@ def main(argv=None):
     ap.add_argument("--level", help="run a named test level (smoke|quick|standard|deep|max) — a "
                     "budget-scaled, reproducible selection + settings; see --list-levels")
     ap.add_argument("--list-levels", action="store_true", help="list available test levels and exit")
+    ap.add_argument("--classify", action="store_true",
+                    help="probe --models for capabilities (tools/agentic/reasoner), cache them, and exit")
+    ap.add_argument("--import-capabilities", action="store_true",
+                    help="pull observed capabilities for --models from the API into the local cache")
+    ap.add_argument("--api", default=os.environ.get("PEAKSTONE_API", "http://localhost:8000"),
+                    help="API base URL (for --import-capabilities)")
     ap.add_argument("--prebuilt", action="store_true",
                     help="for repo-patch: use each instance's prebuilt per-instance Docker image "
                          "(full fidelity) instead of a generic clone+install")
@@ -206,6 +213,32 @@ def main(argv=None):
         for n, l in lv.items():
             flags = "".join(c for c, on in [("J", l.judge), ("A", l.agent), ("P", l.prebuilt)] if on)
             print(f"  {n:9} {l.time_hint:28} [{flags or '-'}]  {l.description}")
+        return 0
+
+    if args.classify:
+        for m in (_csv(args.models) or []):
+            if m not in ports:
+                print(f"!! {m} not in registry (serve/models.toml)", file=sys.stderr); continue
+            client = LLMClient(f"http://{host}:{ports[m]}")
+            if not client.health():
+                print(f"!! {m} endpoint not reachable; is serve.sh {m} running?", file=sys.stderr); continue
+            print(f"classifying {m} …")
+            caps = capabilities.classify(m, client, run_cfg)
+            print(f"  probed:    {caps}")
+            print(f"  effective: {sorted(capabilities.effective_capabilities(m))}")
+        return 0
+
+    if args.import_capabilities:
+        import urllib.request
+        for m in (_csv(args.models) or []):
+            try:
+                with urllib.request.urlopen(f"{args.api}/models/{m}", timeout=15) as r:
+                    obs = json.load(r).get("observed_capabilities") or []
+            except Exception as e:  # noqa: BLE001
+                print(f"  {m}: {e}", file=sys.stderr); continue
+            if obs:
+                capabilities.update_cache(m, {c: True for c in obs}, "observed-api")
+            print(f"  {m}: imported {obs}")
         return 0
 
     if args.judge_only:
@@ -621,6 +654,11 @@ def main(argv=None):
     }
     write_report(results, outdir, meta)
     print(f"\nReport: {outdir / 'leaderboard.md'}")
+    if not args.reference:   # refine each model's capability cache from what it demonstrated (positives)
+        for m in models:
+            obs = capabilities.observe([r for r in results if r.get("model") == m])
+            if obs:
+                capabilities.update_cache(m, obs, "observed")
     if args.bundle and not args.reference:
         _emit_bundle(meta, results, outdir)
     return 0

@@ -32,6 +32,9 @@ class ModelFamily(Base):
     # view; the official held-out metric uses release_date (unforgeable). See engine/contamination.py.
     training_cutoff: Mapped[str | None] = mapped_column(String)
     modality: Mapped[str] = mapped_column(String, default="text")
+    # Capabilities OBSERVED across this family's submitted runs (positives only: e.g. it engaged tools
+    # or resolved an agentic task). Lets others import a classification without re-testing.
+    capabilities: Mapped[dict | None] = mapped_column(JSONv)
     artifacts: Mapped[list[ModelArtifact]] = relationship(back_populates="family")
 
 
