@@ -102,7 +102,8 @@ def _summarize(sub: models.Submission, fam: models.ModelFamily | None = None) ->
     # capability axes, kept separate: coding ability, safety/honesty, agentic (goal-state-env,
     # multi-machine), and planning (planner plans → fixed coder executes → tests). A planner/agent
     # isn't a "coder" and vice-versa.
-    agent = [r.final for r in rs if (r.verification or "") == "goal-state-env"]
+    agent_rs = [r for r in rs if (r.verification or "") == "goal-state-env"]
+    agent = [r.final for r in agent_rs]
     planner = [r.final for r in rs if (r.category or "") == "planner"]
     math_rs = [r for r in rs if (r.category or "") == "math"]   # answer-match — its own axis
     code_rs = [r for r in rs if (r.category or "") not in SAFETY
@@ -120,6 +121,7 @@ def _summarize(sub: models.Submission, fam: models.ModelFamily | None = None) ->
         "math_held_out": _held_out(math_rs, fam)["held_out"],
         "safety_score": _avg(safety),
         "agent_score": _avg(agent),
+        "agent_held_out": _held_out(agent_rs, fam)["held_out"],   # SWE-bench-Live etc.: contamination-adjusted
         "planner_score": _avg(planner),
         "solved": sum(1 for x in code if x >= 0.999),
         "n_code": len(code),

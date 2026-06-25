@@ -416,6 +416,31 @@ def main(argv=None):
                 print(f"{label}  {'ok ' if ok else '!! '} answer expect={ch.expect} got={got}")
                 continue
 
+            if ch.scoring == "repo-patch":
+                # SWE-bench-style: set up the repo in Docker, apply the gold (--reference) or the
+                # model's one-shot patch + the test patch, run the target tests, check "resolved".
+                from . import swebench
+                inst_path = ch.dir / "instance.json"
+                if not inst_path.exists():
+                    print(f"{label}  ERROR no instance.json"); continue
+                inst = json.loads(inst_path.read_text())
+                res = swebench.run_repo_patch_task(inst, client=client, model=model, run_cfg=run_cfg,
+                                                   reference=args.reference, timeout=ch.timeout)
+                results.append({
+                    "model": model, "challenge": ch.id, "language": ch.language,
+                    "difficulty": ch.difficulty, "category": ch.category, "type": ch.ctype,
+                    "scoring": ch.scoring, "final_score": res["final"], "test_score": res["final"],
+                    "judge_score": 0.0, "passed": res["passed"], "total": res["total"],
+                    "tok_per_s": None, "latency_s": res["env"].get("duration_s"),
+                    "vram_mib": model_vram, "verification": "goal-state-env",
+                    "env": res["env"], "response": res["transcript"], "stdout": "",
+                    "stderr": res.get("error") or "", "note": "repo-patch"})
+                flag = "ok " if res["resolved"] else ("!! " if res.get("error") else "   ")
+                print(f"{label}  {flag} repo-patch resolved={res['resolved']} "
+                      f"f2p={res['passed']}/{res['total']}"
+                      + (f" ({res['error']})" if res.get("error") else ""))
+                continue
+
             if ch.scoring == "adherence":
                 rules = adherence.load_rules(ch.dir)
                 agent_md = (ch.dir / "agent.md").read_text() if (ch.dir / "agent.md").exists() else ""

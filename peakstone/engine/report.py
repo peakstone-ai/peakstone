@@ -276,6 +276,42 @@ def _math_section(rows, models) -> list:
     return lines
 
 
+def _agent_section(rows, models) -> list:
+    """Agentic axis (repo-patch / goal-state-env, e.g. SWE-bench-Live) per model, with a held-out
+    (post-release) view. Skipped when there are no agentic results."""
+    ag = [r for r in rows if r.get("verification") == "goal-state-env"]
+    if not ag:
+        return []
+    try:
+        pub = challenge_publication(paths.challenges_dir())
+    except Exception:  # noqa: BLE001
+        pub = {}
+    dates = _model_dates()
+    by_model = defaultdict(list)
+    for r in ag:
+        by_model[r["model"]].append(r)
+    lines = ["# Agentic (repo-patch / goal-state)", "",
+             "Repo-level tasks resolved end-to-end (e.g. SWE-bench-Live: apply a patch, the repo's "
+             "tests must pass). Held-out = mean over tasks published after the model's release_date.", "",
+             "| Model | Agentic | Resolved | Held-out | clean | contaminated |",
+             "|---|---|---|---|---|---|"]
+    for m in models:
+        rs = by_model.get(m, [])
+        if not rs:
+            continue
+        score = _avg([r["final_score"] for r in rs])
+        resolved = sum(1 for r in rs if r["final_score"] >= 0.999)
+        rel = dates.get(m, (None, None))[0]
+        ho = contamination.held_out_score(
+            [{"published_at": pub.get(r["challenge"], {}).get("published_at"),
+              "score": {"final": r["final_score"]}} for r in rs], rel)
+        held = f"**{ho.score:.3f}**" if ho.score is not None else "—"
+        lines.append(f"| {m} | {score:.3f} | {resolved}/{len(rs)} | {held} | "
+                     f"{ho.n_clean} | {ho.n_contaminated} |")
+    lines.append("")
+    return lines
+
+
 def _leaderboard_md(results, meta) -> str:
     # Two roles share one results set: coder rows (model wrote code directly) and planner rows
     # (model wrote a plan that a fixed coder executed, tagged mode="planner").
@@ -301,7 +337,8 @@ def _leaderboard_md(results, meta) -> str:
         # ability. A strong agentic coder can be a weak injection-resister (e.g. qwen3-coder-next) —
         # don't let that drag down — or inflate — the headline coding number.
         SAFETY = {"injection", "refusal", "hallucination", "secure-code"}
-        NONCODE = SAFETY | {"answer-match"}   # answer-match (math) is its own axis, not coding
+        # answer-match (math) + repo-patch/goal-state (agentic) are their own axes, not coding.
+        NONCODE = SAFETY | {"answer-match", "repo-patch", "goal-state"}
         code_rows = lambda rs: [r for r in rs if r.get("scoring") not in NONCODE]
         safety_rows = lambda rs: [r for r in rs if r.get("scoring") in SAFETY]
         ranked = sorted(by_model.items(),
@@ -350,6 +387,7 @@ def _leaderboard_md(results, meta) -> str:
         lines.append("")
         lines += _contamination_section(code_rows(coder_rows), coder_models)
         lines += _math_section(coder_rows, coder_models)
+        lines += _agent_section(coder_rows, coder_models)
         lines += _detail_matrix("Per-challenge detail — coder", coder_rows, coder_models)
 
     if planner_rows:
