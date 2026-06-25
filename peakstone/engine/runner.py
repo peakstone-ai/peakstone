@@ -111,6 +111,11 @@ def main(argv=None):
                     "humaneval,bigcodebench,livecodebench,python,go,...")
     ap.add_argument("--published-after", help="keep challenges with published_at on/after YYYY-MM-DD")
     ap.add_argument("--published-before", help="keep challenges with published_at on/before YYYY-MM-DD")
+    ap.add_argument("--agent", action="store_true",
+                    help="for repo-patch (SWE-bench) challenges, drive a multi-turn agent that edits "
+                         "the live repo via tools instead of one-shot oracle patching")
+    ap.add_argument("--max-turns", type=int, default=25,
+                    help="max agent turns for --agent repo-patch runs (default 25)")
     ap.add_argument("--reference", action="store_true",
                     help="use reference/ solutions instead of calling a model (suite sanity check)")
     ap.add_argument("--no-judge", action="store_true", help="disable LLM judge scoring")
@@ -425,7 +430,8 @@ def main(argv=None):
                     print(f"{label}  ERROR no instance.json"); continue
                 inst = json.loads(inst_path.read_text())
                 res = swebench.run_repo_patch_task(inst, client=client, model=model, run_cfg=run_cfg,
-                                                   reference=args.reference, timeout=ch.timeout)
+                                                   reference=args.reference, agent=args.agent,
+                                                   max_turns=args.max_turns, timeout=ch.timeout)
                 results.append({
                     "model": model, "challenge": ch.id, "language": ch.language,
                     "difficulty": ch.difficulty, "category": ch.category, "type": ch.ctype,

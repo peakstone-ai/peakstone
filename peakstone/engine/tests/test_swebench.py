@@ -44,6 +44,49 @@ def test_resolved():
     assert not sb.resolved({}, [], p2p)                                                       # no f2p
 
 
+import json
+
+
+class _FakeAgentClient:
+    """Scripted tool-calling model: turn 1 fixes the file, turn 2 calls done."""
+    def __init__(self, write):
+        self._write = write
+        self.n = 0
+
+    def chat_tools(self, model, msgs, tools, **kw):
+        self.n += 1
+        if self.n == 1:
+            tc = {"id": "1", "function": {"name": "write_file", "arguments": json.dumps(self._write)}}
+        else:
+            tc = {"id": "2", "function": {"name": "done", "arguments": "{}"}}
+        return {"message": {"role": "assistant", "tool_calls": [tc]}, "error": None}
+
+
+class _FakeSandbox:
+    def __init__(self):
+        self.files = {}
+
+    def exec(self, cmd, **kw):
+        return subprocess.CompletedProcess(cmd, 0, "", "")
+
+    def read(self, path, **kw):
+        return self.files.get(path, "stub contents")
+
+    def write(self, path, content, **kw):
+        self.files[path] = content
+        return subprocess.CompletedProcess("write", 0, "", "")
+
+
+def test_agent_loop_drives_tools_and_stops_on_done():
+    fake = _FakeSandbox()
+    client = _FakeAgentClient({"path": "mymod.py", "content": "def add(a, b):\n    return a + b\n"})
+    inst = {"problem_statement": "add() is wrong"}
+    transcript = sb._run_agent(fake, inst, client, "m", {}, max_turns=10, log=[])
+    assert fake.files["mymod.py"].endswith("a + b\n")     # the agent's edit landed
+    assert "write_file" in transcript and "done" in transcript
+    assert client.n == 2                                # stopped right after done, didn't run all turns
+
+
 def _docker_ok() -> bool:
     if not shutil.which("docker"):
         return False
@@ -67,4 +110,20 @@ def test_synthetic_reference_resolves():
         "FAIL_TO_PASS": ["test_mod.py::test_add"], "PASS_TO_PASS": [],
     }
     res = sb.run_repo_patch_task(inst, reference=True, timeout=600)
+    assert res["resolved"] is True and res["final"] == 1.0, res.get("error") or res["transcript"][-500:]
+
+
+@pytest.mark.skipif(not _docker_ok(), reason="docker not available")
+def test_synthetic_agent_resolves():
+    """The agent loop (scripted client) edits the live container repo and the failing test then passes."""
+    inst = {
+        "instance_id": "synthetic-add-agent",
+        "fixtures": {"mymod.py": "def add(a, b):\n    return a - b\n",
+                     "test_mod.py": "from mymod import add\n\n\ndef test_add():\n    assert add(2, 3) == 5\n"},
+        "setup_cmds": ["pip install -q pytest"],
+        "test_patch": "", "test_cmds": ["python -m pytest"],
+        "FAIL_TO_PASS": ["test_mod.py::test_add"], "PASS_TO_PASS": [],
+    }
+    client = _FakeAgentClient({"path": "mymod.py", "content": "def add(a, b):\n    return a + b\n"})
+    res = sb.run_repo_patch_task(inst, client=client, model="m", run_cfg={}, agent=True, timeout=600)
     assert res["resolved"] is True and res["final"] == 1.0, res.get("error") or res["transcript"][-500:]

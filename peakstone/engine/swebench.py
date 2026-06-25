@@ -15,6 +15,7 @@ Setup modes (from the instance):
 """
 from __future__ import annotations
 
+import json
 import re
 import shlex
 import subprocess
@@ -198,10 +199,112 @@ def args_max_tokens(run_cfg) -> int:
     return max(run_cfg.get("max_tokens", 6144), 8192)
 
 
+# --------------------------------------------------------------------------- #
+# agent loop (multi-turn tools over the live repo) — replaces the one-shot oracle step
+# --------------------------------------------------------------------------- #
+AGENT_SYSTEM = (
+    "You are an expert software engineer fixing a bug in the Python repository checked out at the "
+    "current directory. Use the tools to explore the code and edit the SOURCE files (do not edit the "
+    "test suite). You may run commands to inspect or test. When the fix is complete, call `done`.")
+
+AGENT_TOOLS = [
+    {"type": "function", "function": {"name": "ls", "description": "List a directory in the repo.",
+        "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}},
+    {"type": "function", "function": {"name": "read_file", "description": "Read a file, optionally a line range.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"}, "start": {"type": "integer"}, "end": {"type": "integer"}},
+            "required": ["path"]}}},
+    {"type": "function", "function": {"name": "grep", "description": "Search the repo (regex); returns file:line matches.",
+        "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}}},
+    {"type": "function", "function": {"name": "write_file", "description": "Overwrite a source file with new content.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
+    {"type": "function", "function": {"name": "run", "description": "Run a shell command in the repo (e.g. to run a test).",
+        "parameters": {"type": "object", "properties": {"cmd": {"type": "string"}}, "required": ["cmd"]}}},
+    {"type": "function", "function": {"name": "done", "description": "Signal the fix is complete.",
+        "parameters": {"type": "object", "properties": {}}}},
+]
+
+
+def _short(x) -> str:
+    s = x if isinstance(x, str) else json.dumps(x)
+    return s if len(s) <= 200 else s[:200] + "…"
+
+
+def _agent_dispatch(sb: RepoSandbox, fn: str, a: dict) -> dict:
+    if fn == "ls":
+        r = sb.exec(f"ls -la {shlex.quote(a.get('path', '.'))}", timeout=30)
+        return {"output": (r.stdout or r.stderr)[:2000]}
+    if fn == "read_file":
+        content = sb.read(a.get("path", ""))
+        if content is None:
+            return {"error": f"cannot read {a.get('path')!r}"}
+        lines = content.splitlines()
+        s, e = a.get("start"), a.get("end")
+        if isinstance(s, int) or isinstance(e, int):
+            lines = lines[(s or 1) - 1: (e or len(lines))]
+        return {"content": "\n".join(lines)[:12000]}
+    if fn == "grep":
+        r = sb.exec(f"grep -rn -E {shlex.quote(a.get('pattern', ''))} . 2>/dev/null | head -60", timeout=60)
+        return {"matches": (r.stdout or "")[:3000] or "(no matches)"}
+    if fn == "write_file":
+        wr = sb.write(a.get("path", ""), a.get("content", ""))
+        return {"ok": wr.returncode == 0} if wr.returncode == 0 else {"error": wr.stderr[-300:]}
+    if fn == "run":
+        r = sb.exec(a.get("cmd", ""), timeout=180)
+        return {"rc": r.returncode, "output": ((r.stdout or "") + (r.stderr or ""))[-2500:]}
+    if fn == "done":
+        return {"done": True}
+    return {"error": f"unknown tool {fn}"}
+
+
+def _run_agent(sb, inst, client, model, run_cfg, max_turns, log) -> str:
+    """Drive the model over the live repo via tools until `done` / no-tool / max_turns. Edits land
+    in the working tree; the caller grafts the graded tests on top and scores."""
+    msgs = [{"role": "system", "content": AGENT_SYSTEM},
+            {"role": "user", "content": (inst.get("problem_statement", "")
+             + "\n\nFix the bug in the source, then call done.")}]
+    transcript: list[str] = []
+    turn = 0
+    for turn in range(1, max_turns + 1):
+        res = client.chat_tools(model, msgs, AGENT_TOOLS,
+                                temperature=run_cfg.get("temperature", 0.2),
+                                max_tokens=run_cfg.get("max_tokens", 4096),
+                                timeout=run_cfg.get("request_timeout", 600))
+        if res.get("error"):
+            transcript.append(f"[t{turn}] model error: {res['error'][:150]}")
+            break
+        msg = res["message"]
+        tcs = msg.get("tool_calls") or []
+        if not tcs:
+            transcript.append(f"[t{turn}] no tool call — stop")
+            break
+        msgs.append(msg)
+        stop = False
+        for tc in tcs:
+            fn = (tc.get("function") or {}).get("name", "")
+            raw = (tc.get("function") or {}).get("arguments") or "{}"
+            try:
+                a = json.loads(raw) if isinstance(raw, str) else raw
+            except json.JSONDecodeError:
+                a = {}
+            out = _agent_dispatch(sb, fn, a)
+            transcript.append(f"[t{turn}] {fn}({_short(a)}) -> {_short(out)}")
+            msgs.append({"role": "tool", "tool_call_id": tc.get("id", ""), "name": fn,
+                         "content": json.dumps(out)[:3000]})
+            if fn == "done":
+                stop = True
+        if stop:
+            break
+    log.append(f"agent turns={turn}")
+    return "AGENT TRANSCRIPT:\n" + "\n".join(transcript)
+
+
 def run_repo_patch_task(inst: dict, *, client=None, model="", run_cfg=None, reference=False,
-                        timeout=1800) -> dict:
-    """Set up the repo, apply the gold (reference) or model (oracle) patch + the test_patch, run the
-    target tests, and check 'resolved'. Returns a result dict for the runner."""
+                        agent=False, max_turns=25, timeout=1800) -> dict:
+    """Set up the repo, produce a fix (gold patch if `reference`; an agent loop editing the live repo
+    if `agent`; else a one-shot oracle patch), graft the graded test_patch on top, run the target
+    tests, and check 'resolved'. Returns a result dict for the runner."""
     run_cfg = run_cfg or {}
     log: list[str] = []
     f2p = list(inst.get("FAIL_TO_PASS") or [])
@@ -214,12 +317,26 @@ def run_repo_patch_task(inst: dict, *, client=None, model="", run_cfg=None, refe
             digest = sb.digest()
             if not _setup(sb, inst, log):
                 return _fail("repo setup failed", log, image, digest, f2p, t0)
-            # candidate patch first, then the test patch (so tests target the fixed code)
-            patch = inst.get("patch", "") if reference else _oracle_patch(sb, inst, client, model, run_cfg, log)
-            if not _apply(sb, patch, "fix", log):
-                return _fail("patch did not apply", log, image, digest, f2p, t0, transcript=patch)
+
+            # Produce the candidate fix (the one swappable step).
+            head = ""
+            if reference:
+                if not _apply(sb, inst.get("patch", ""), "fix", log):
+                    return _fail("gold patch did not apply", log, image, digest, f2p, t0)
+            elif agent:
+                head = _run_agent(sb, inst, client, model, run_cfg, max_turns, log)
+                # the agent must not tamper with the graded tests — revert its edits to those files
+                for fpath in patched_files(inst.get("test_patch", "")):
+                    sb.exec(f"git checkout -- {shlex.quote(fpath)} 2>/dev/null || true")
+            else:  # one-shot oracle
+                patch = _oracle_patch(sb, inst, client, model, run_cfg, log)
+                head = "PATCH:\n" + patch[:2000]
+                if not _apply(sb, patch, "fix", log):
+                    return _fail("patch did not apply", log, image, digest, f2p, t0, transcript=patch)
+
+            # graft the graded tests on top, then run
             if inst.get("test_patch"):
-                _apply(sb, inst["test_patch"], "test", log)    # may legitimately no-op for synthetic
+                _apply(sb, inst["test_patch"], "test", log)
             node_ids = " ".join(shlex.quote(t) for t in (f2p + p2p))
             base = (inst.get("test_cmds") or ["python -m pytest"])[0]
             if base.startswith("pytest"):     # use the module form so it works without the console script
@@ -237,7 +354,7 @@ def run_repo_patch_task(inst: dict, *, client=None, model="", run_cfg=None, refe
             return {
                 "resolved": res_ok, "final": 1.0 if res_ok else 0.0,
                 "passed": n_f2p, "total": len(f2p) or 1, "error": err,
-                "transcript": ("PATCH:\n" + patch[:2000] + "\n\nLOG:\n" + "\n".join(log))[-8000:],
+                "transcript": (head + "\n\nLOG:\n" + "\n".join(log))[-8000:],
                 "env": {"provider": "docker", "image": image, "image_digest": digest,
                         "setup": ("synthetic" if inst.get("fixtures") else
                                   "prebuilt" if inst.get("image") else "generic"),
