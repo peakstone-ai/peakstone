@@ -33,6 +33,11 @@ def get_facets(base_url: str, *, timeout: float = 10) -> dict:
     return _get(base_url, "/facets", {}, timeout)
 
 
+def get_model(base_url: str, family: str, *, timeout: float = 10) -> dict:
+    """All runs (no collapsing) for a family — the per-quant comparison data."""
+    return _get(base_url, f"/models/{urllib.parse.quote(family, safe='')}", {}, timeout)
+
+
 def submit_bundle(base_url: str, bundle: dict, *, timeout: float = 30) -> tuple[int, str]:
     """POST a signed result bundle. Returns (http_status, detail); 201 ok, 409 already submitted,
     400 rejected. Raises APIError only if the server is unreachable."""

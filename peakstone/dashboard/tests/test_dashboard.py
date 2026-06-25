@@ -320,6 +320,70 @@ def test_level_screen_estimates_and_runs(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_get_model_client(monkeypatch):
+    from peakstone.dashboard import client
+
+    class FakeResp:
+        def read(self):
+            return b'{"family":"f","runs":[{"run":{"artifact":"Q4"}}]}'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    captured = {}
+    monkeypatch.setattr(client.urllib.request, "urlopen",
+                        lambda url, timeout=10: captured.update(url=url) or FakeResp())
+    d = client.get_model("http://x", "qwen3-coder")
+    assert "/models/qwen3-coder" in captured["url"] and d["runs"][0]["run"]["artifact"] == "Q4"
+
+
+_QUANT_RUNS = {"family": "qwen3-coder", "runs": [
+    {"suite": "level-standard@2026.06", "code_score": 0.70, "held_out_score": 0.50, "agent_score": 0.30,
+     "math_score": 0.60, "tok_per_s": 90, "run": {"artifact": "UD-Q4_K_XL", "vram_gb": 22, "trust_tier": "self-reported"}},
+    {"suite": "level-standard@2026.06", "code_score": 0.75, "held_out_score": 0.55, "agent_score": 0.30,
+     "math_score": 0.62, "tok_per_s": 60, "run": {"artifact": "UD-Q6_K", "vram_gb": 30, "trust_tier": "self-reported"}},
+]}
+
+
+def test_quant_screen_renders(monkeypatch):
+    from peakstone.dashboard import client
+    from peakstone.dashboard.app import Dashboard, QuantScreen
+    from textual.widgets import DataTable
+    monkeypatch.setattr(client, "get_model", lambda url, fam, **k: _QUANT_RUNS)
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            await app.push_screen(QuantScreen("qwen3-coder", "http://x"))
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            t = app.screen.query_one("#q-tbl", DataTable)
+            assert t.row_count == 2
+            assert {str(t.get_row_at(i)[0]) for i in range(2)} == {"UD-Q4_K_XL", "UD-Q6_K"}
+
+    asyncio.run(scenario())
+
+
+def test_dashboard_q_opens_quants(monkeypatch):
+    from peakstone.dashboard.app import Dashboard, QuantScreen
+    monkeypatch.setattr(client, "get_leaderboard", lambda *a, **k: _FAKE)
+    monkeypatch.setattr(client, "get_model", lambda url, fam, **k: {"runs": []})
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            await pilot.press("v")                       # quants for the selected (row 0) family
+            await pilot.pause()
+            assert isinstance(app.screen, QuantScreen) and app.screen.family == "qwen3-coder"
+
+    asyncio.run(scenario())
+
+
 def test_app_handles_api_down(monkeypatch):
     def boom(*a, **k):
         raise client.APIError("connection refused")

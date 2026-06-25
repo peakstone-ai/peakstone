@@ -20,6 +20,8 @@
 #                                    # after this date. The x-axis of the evolution chart.
 #   training_cutoff = "2024-10-01"   # claimed knowledge cutoff; tighter but self-reported, so it
 #                                    # backs only a secondary "claimed-clean" view. Omit if unknown.
+#   family          = "qwen3-coder"  # group quant variants (e.g. -q4/-q6 entries) under one family
+#                                    # so the TUI Quants view compares them. Defaults to the entry name.
 #   capabilities    = ["tools", "agentic"]  # gated axes this model can attempt. Omit = inferred
 #                                    # (tools+agentic, minus agentic for small ctx). List WITHOUT
 #                                    # "tools"/"agentic" to skip tool-calling / repo-agentic suites.

@@ -236,7 +236,9 @@ def model_identity(model_name: str, run_cfg: dict) -> dict:
     file = cfg.get("file", "")
     sha, verified = _model_file_hash(paths.repo_root() / file) if file else ("(none)", False)
     model = {
-        "family": model_name,
+        # `family` groups quant variants for comparison; declare a shared family in models.toml to
+        # compare e.g. UD-Q4_K_XL vs UD-Q6_K of the same model. Defaults to the registry name.
+        "family": cfg.get("family") or model_name,
         "artifact": _quant_from_filename(file),
         "hf_repo": cfg.get("repo", "(unknown)"),
         "file_sha256": sha,

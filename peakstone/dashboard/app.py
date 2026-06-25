@@ -64,6 +64,7 @@ class Dashboard(App):
         ("s", "cycle_sort", "Sort axis"),
         ("enter", "reproduce", "Reproduce"),
         ("c", "challenges", "Peakstones"),
+        ("v", "quants", "Quants"),
         ("m", "models", "Models"),
         ("h", "history", "History"),
     ]
@@ -110,6 +111,15 @@ class Dashboard(App):
     def action_challenges(self) -> None:
         self.push_screen(ChallengesScreen())
 
+    def action_quants(self) -> None:
+        table = self.query_one(DataTable)
+        i = table.cursor_row
+        if not self._board_rows or i is None or i >= len(self._board_rows):
+            return
+        fam = self._board_rows[i].get("family")
+        if fam:
+            self.push_screen(QuantScreen(fam, self.base_url))
+
     def run_ids(self) -> list[str]:
         """Challenges to run: the user's Challenges-screen selection, else the quick default set."""
         return self.selected_ids or REPRODUCE_IDS
@@ -142,7 +152,7 @@ class Dashboard(App):
         scope = f"fits ≤{max_vram:g} GB" if max_vram else "all hardware"
         sel = f"  ·  ▶ {len(self.selected_ids)} peakstones selected" if self.selected_ids else ""
         self.sub_title = (f"{self.base_url}  ·  {scope}  ·  sort: {self.SORTS[self.sort_i]}  ·  "
-                          f"⏎ reproduce  c peakstones  m models{sel}")
+                          f"⏎ reproduce  v quants  c peakstones  m models{sel}")
         rows = data.get("leaderboard", [])
         self._board_rows = rows
         for r in rows:
@@ -465,6 +475,59 @@ class ChallengesScreen(ModalScreen):
         self.notify(f"{len(ids)} peakstones selected — pick a model to run")
         self.dismiss()
         self.app.push_screen(ModelsScreen())
+
+
+class QuantScreen(ModalScreen):
+    """Compare a family's quant variants side by side: score axes vs speed vs VRAM. Pulls every run
+    (no collapsing) from the API; rows that share a suite are directly comparable."""
+    CSS = """
+    QuantScreen { align: center middle; }
+    #quants { width: 110; height: 24; border: thick $accent; background: $surface; padding: 1; }
+    #q-tbl { height: 1fr; }
+    #q-note { height: auto; padding-top: 1; }
+    """
+    BINDINGS = [("escape", "dismiss", "Close")]
+
+    def __init__(self, family: str, base_url: str):
+        super().__init__()
+        self.family = family
+        self.base_url = base_url
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="quants"):
+            yield Static(f"[b]Quants[/b] for {self.family}  ·  Esc close")
+            yield DataTable(id="q-tbl", zebra_stripes=True)
+            yield Static("loading…", id="q-note")
+
+    def on_mount(self) -> None:
+        self.query_one("#q-tbl", DataTable).add_columns(
+            "Quant", "Suite", "Code", "Held-out", "Agent", "Math", "TPS", "VRAM", "Trust")
+        self.load_quants()
+
+    @work(thread=True, exclusive=True)
+    def load_quants(self) -> None:
+        try:
+            data = client.get_model(self.base_url, self.family)
+        except client.APIError as e:
+            self.app.call_from_thread(self._note, f"API unreachable: {e}")
+            return
+        self.app.call_from_thread(self._fill, data.get("runs", []))
+
+    def _fill(self, runs) -> None:
+        t = self.query_one("#q-tbl", DataTable)
+        t.clear()
+        for r in sorted(runs, key=lambda r: (r.get("run", {}).get("artifact", ""), r.get("suite", ""))):
+            run = r.get("run", {})
+            t.add_row(run.get("artifact", "?"), r.get("suite", ""),
+                      _fmt(r.get("code_score")), _fmt(r.get("held_out_score")),
+                      _fmt(r.get("agent_score")), _fmt(r.get("math_score")),
+                      _fmt(r.get("tok_per_s"), "{:.0f}"),
+                      f"{run.get('vram_gb', '?')} GB", (run.get("trust_tier") or "").replace("-", " "))
+        self._note(f"{len(runs)} run(s). Same suite across quants = comparable (score vs tps vs VRAM)."
+                   if runs else "No runs for this family yet.")
+
+    def _note(self, msg: str) -> None:
+        self.query_one("#q-note", Static).update(msg)
 
 
 class LevelScreen(ModalScreen):
