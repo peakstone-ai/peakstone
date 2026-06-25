@@ -16,3 +16,4 @@ infra/.env
 /challenges/humaneval/
 /challenges/bigcodebench/
 /challenges/livecodebench/
+/challenges/codeforces/
