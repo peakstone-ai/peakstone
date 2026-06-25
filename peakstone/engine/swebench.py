@@ -371,11 +371,15 @@ def run_repo_patch_task(inst: dict, *, client=None, model="", run_cfg=None, refe
             # graft the graded tests on top, then run
             if inst.get("test_patch"):
                 _apply(sb, inst["test_patch"], "test", log)
-            node_ids = " ".join(shlex.quote(t) for t in (f2p + p2p))
+            # Target the test FILES (not every node id): instances with hundreds of PASS_TO_PASS
+            # would otherwise blow the command-line length. -rA still prints per-test status, which
+            # parse_pytest maps back to the specific f2p/p2p node ids.
+            targets = sorted({t.split("::", 1)[0] for t in (f2p + p2p) if "::" in t}) or list(f2p + p2p)
+            tgt = " ".join(shlex.quote(t) for t in targets)
             base = (inst.get("test_cmds") or ["python -m pytest"])[0]
             if base.startswith("pytest"):     # use the module form so it works without the console script
                 base = "python -m " + base
-            cmd = f"{base} -rA -p no:cacheprovider {node_ids}" if node_ids else f"{base} -rA"
+            cmd = f"{base} -rA -p no:cacheprovider {tgt}" if tgt else f"{base} -rA"
             r = sb.exec(cmd, timeout=timeout)
             results = parse_pytest((r.stdout or "") + "\n" + (r.stderr or ""))
             res_ok = resolved(results, f2p, p2p)
