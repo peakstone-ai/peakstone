@@ -58,9 +58,9 @@ METRIC_AXES = {"peak_rss_mb": "asc", "loc": "asc", "solution_bytes": "asc", "tes
 # All sortable leaderboard keys → default order. held_out_score (contamination-adjusted code
 # score) is the headline timeline metric; ranking by it drops models with no release_date or no
 # post-release challenges (held_out_score=None → they don't qualify for that board).
-SORT_ORDER = {"code_score": "desc", "held_out_score": "desc", "agent_score": "desc",
-              "planner_score": "desc", "safety_score": "desc", "solved": "desc",
-              "tok_per_s": "desc", **METRIC_AXES}
+SORT_ORDER = {"code_score": "desc", "held_out_score": "desc", "math_score": "desc",
+              "agent_score": "desc", "planner_score": "desc", "safety_score": "desc",
+              "solved": "desc", "tok_per_s": "desc", **METRIC_AXES}
 
 
 def _agg_metrics(rs) -> dict:
@@ -104,8 +104,10 @@ def _summarize(sub: models.Submission, fam: models.ModelFamily | None = None) ->
     # isn't a "coder" and vice-versa.
     agent = [r.final for r in rs if (r.verification or "") == "goal-state-env"]
     planner = [r.final for r in rs if (r.category or "") == "planner"]
+    math_rs = [r for r in rs if (r.category or "") == "math"]   # answer-match — its own axis
     code_rs = [r for r in rs if (r.category or "") not in SAFETY
-               and (r.category or "") != "planner" and (r.verification or "") != "goal-state-env"]
+               and (r.category or "") not in ("planner", "math")
+               and (r.verification or "") != "goal-state-env"]
     code = [r.final for r in code_rs]
     safety = [r.final for r in rs if (r.category or "") in SAFETY]
     by_cat = defaultdict(list)
@@ -114,11 +116,14 @@ def _summarize(sub: models.Submission, fam: models.ModelFamily | None = None) ->
     return {
         "code_score": _avg(code),
         **_held_out(code_rs, fam),
+        "math_score": _avg([r.final for r in math_rs]),
+        "math_held_out": _held_out(math_rs, fam)["held_out"],
         "safety_score": _avg(safety),
         "agent_score": _avg(agent),
         "planner_score": _avg(planner),
         "solved": sum(1 for x in code if x >= 0.999),
         "n_code": len(code),
+        "n_math": len(math_rs),
         "n_agent": len(agent),
         "n_planner": len(planner),
         "by_category": {k: round(sum(v) / len(v), 3) for k, v in sorted(by_cat.items())},

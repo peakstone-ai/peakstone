@@ -240,6 +240,42 @@ def _contamination_section(rows, models) -> list:
     return lines
 
 
+def _math_section(rows, models) -> list:
+    """Answer-match (math, e.g. AIME) score per model, with a held-out (post-release) view —
+    a separate axis from coding. Skipped when there are no answer-match results."""
+    math_rows = [r for r in rows if r.get("scoring") == "answer-match"]
+    if not math_rows:
+        return []
+    try:
+        pub = challenge_publication(paths.challenges_dir())
+    except Exception:  # noqa: BLE001
+        pub = {}
+    dates = _model_dates()
+    by_model = defaultdict(list)
+    for r in math_rows:
+        by_model[r["model"]].append(r)
+    lines = ["# Math (answer-match)", "",
+             "Deterministic integer-answer problems (e.g. AIME); a separate axis from coding. "
+             "Held-out = mean over problems published after the model's release_date.", "",
+             "| Model | Math | Solved | Held-out | clean | contaminated |",
+             "|---|---|---|---|---|---|"]
+    for m in models:
+        rs = by_model.get(m, [])
+        if not rs:
+            continue
+        score = _avg([r["final_score"] for r in rs])
+        solved = sum(1 for r in rs if r["final_score"] >= 0.999)
+        rel = dates.get(m, (None, None))[0]
+        ho = contamination.held_out_score(
+            [{"published_at": pub.get(r["challenge"], {}).get("published_at"),
+              "score": {"final": r["final_score"]}} for r in rs], rel)
+        held = f"**{ho.score:.3f}**" if ho.score is not None else "—"
+        lines.append(f"| {m} | {score:.3f} | {solved}/{len(rs)} | {held} | "
+                     f"{ho.n_clean} | {ho.n_contaminated} |")
+    lines.append("")
+    return lines
+
+
 def _leaderboard_md(results, meta) -> str:
     # Two roles share one results set: coder rows (model wrote code directly) and planner rows
     # (model wrote a plan that a fixed coder executed, tagged mode="planner").
@@ -265,7 +301,8 @@ def _leaderboard_md(results, meta) -> str:
         # ability. A strong agentic coder can be a weak injection-resister (e.g. qwen3-coder-next) —
         # don't let that drag down — or inflate — the headline coding number.
         SAFETY = {"injection", "refusal", "hallucination", "secure-code"}
-        code_rows = lambda rs: [r for r in rs if r.get("scoring") not in SAFETY]
+        NONCODE = SAFETY | {"answer-match"}   # answer-match (math) is its own axis, not coding
+        code_rows = lambda rs: [r for r in rs if r.get("scoring") not in NONCODE]
         safety_rows = lambda rs: [r for r in rs if r.get("scoring") in SAFETY]
         ranked = sorted(by_model.items(),
                         key=lambda kv: _avg([r["final_score"] for r in code_rows(kv[1])]),
@@ -312,6 +349,7 @@ def _leaderboard_md(results, meta) -> str:
             lines.append("| " + " | ".join(cells) + " |")
         lines.append("")
         lines += _contamination_section(code_rows(coder_rows), coder_models)
+        lines += _math_section(coder_rows, coder_models)
         lines += _detail_matrix("Per-challenge detail — coder", coder_rows, coder_models)
 
     if planner_rows:

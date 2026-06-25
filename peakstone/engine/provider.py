@@ -15,6 +15,7 @@ from dataclasses import dataclass
 @dataclass
 class ChatResult:
     text: str
+    reasoning: str = ""          # reasoning_content (chain-of-thought) when the server exposes it
     prompt_tokens: int = 0
     completion_tokens: int = 0
     latency_s: float = 0.0
@@ -59,7 +60,9 @@ class LLMClient:
         dt = time.time() - t0
 
         try:
-            text = body["choices"][0]["message"]["content"] or ""
+            msg = body["choices"][0]["message"]
+            text = msg.get("content") or ""
+            reasoning = msg.get("reasoning_content") or ""
         except (KeyError, IndexError):
             return ChatResult(text="", error=f"unexpected response: {str(body)[:400]}")
         usage = body.get("usage", {}) or {}
@@ -67,6 +70,7 @@ class LLMClient:
         tps = (ct / dt) if (dt > 0 and ct) else 0.0
         return ChatResult(
             text=text,
+            reasoning=reasoning,
             prompt_tokens=int(usage.get("prompt_tokens", 0)),
             completion_tokens=ct,
             latency_s=round(dt, 2),

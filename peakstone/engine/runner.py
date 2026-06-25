@@ -19,7 +19,7 @@ import sys
 import tomllib
 from pathlib import Path
 
-from . import adherence, global_rules, honesty, paths
+from . import adherence, global_rules, honesty, matheval, paths
 from .agentic import run_agentic_task
 from .challenges import filter_challenges, load_challenges
 from .extract import extract_files
@@ -383,6 +383,37 @@ def main(argv=None):
                     print(f"{label}  {'ok ' if sec >= 0.999 else '   '} secure {passed}/{total}"
                           + (f" (insecure: {', '.join(bad)})" if bad else ""))
                 results.append(row)
+                continue
+
+            if ch.scoring == "answer-match":
+                # math/reasoning: the model emits a final integer answer (e.g. AIME); we extract it
+                # and compare to the gold answer stored in meta `expect`. No code is executed.
+                if args.reference:
+                    print(f"{label}  SKIP (answer-match needs a live model)")
+                    continue
+                res = client.chat(model, [
+                    {"role": "system", "content": "You are a careful mathematician. Reason step by "
+                     "step, then give ONLY the final answer on the last line as \\boxed{ANSWER}."},
+                    {"role": "user", "content": ch.spec}],
+                    temperature=run_cfg.get("temperature", 0.2),
+                    # math reasoning needs room; reasoning models can spend the whole budget thinking.
+                    max_tokens=args.max_tokens or max(run_cfg.get("max_tokens", 6144), 16384),
+                    timeout=run_cfg.get("request_timeout", 600))
+                if res.error:
+                    print(f"{label}  ERROR {res.error[:70]}"); continue
+                # extract from the answer (content); fall back to the chain-of-thought (reasoning_content)
+                # when a reasoning model spent its budget thinking and emitted empty content.
+                got = matheval.extract_answer(res.text) or matheval.extract_answer(res.reasoning)
+                ok = matheval.answers_match(got, ch.expect)
+                results.append({
+                    "model": model, "challenge": ch.id, "language": ch.language,
+                    "difficulty": ch.difficulty, "category": ch.category, "type": ch.ctype,
+                    "scoring": ch.scoring, "final_score": float(ok), "test_score": float(ok),
+                    "judge_score": 0.0, "passed": int(ok), "total": 1, "expect": ch.expect,
+                    "answer_got": got, "tok_per_s": res.tok_per_s, "latency_s": res.latency_s,
+                    "vram_mib": model_vram, "response": (res.text or res.reasoning)[:4000],
+                    "stdout": "", "stderr": "", "note": "answer-match"})
+                print(f"{label}  {'ok ' if ok else '!! '} answer expect={ch.expect} got={got}")
                 continue
 
             if ch.scoring == "adherence":
