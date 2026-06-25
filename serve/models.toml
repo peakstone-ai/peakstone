@@ -25,6 +25,7 @@
 repo  = "unsloth/GLM-4.7-Flash-GGUF"
 file  = "models/glm-4.7-flash/GLM-4.7-Flash-UD-Q4_K_XL.gguf"
 port  = 8081
+release_date = "2026-01-19"   # HF zai-org/GLM-4.7-Flash createdAt (earliest public availability)
 # Was capped at 32K, but GLM-4.7-Flash's native window is ~198K and the 18GB MoE fits with room:
 # measured the FULL native 192K context all-GPU at ~180 tok/s / 22.9GB (q8 KV) — no offload, no
 # speed loss. So context bumped 32K->192K for free. (-fa on + q8 KV added vs the old config.)
@@ -38,6 +39,7 @@ flags = "--temp 0.6 --top-p 0.95 -fa on --cache-type-k q8_0 --cache-type-v q8_0 
 repo  = "unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF"
 file  = "models/qwen3-coder/Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf"
 port  = 8082
+release_date = "2025-07-31"   # HF Qwen/Qwen3-Coder-30B-A3B-Instruct createdAt
 ctx   = 196608
 # Max context that fits ENTIRELY in 24GB VRAM (measured): 192K with q4 KV cache -> ~22.4GB,
 # full GPU speed. (256K OOMs on-GPU. For better KV fidelity at less context, use q8 KV which
@@ -48,6 +50,7 @@ flags = "--temp 0.7 --top-p 0.8 --top-k 20 --repeat-penalty 1.05 -fa on --cache-
 repo  = "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF"
 file  = "models/devstral/Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf"
 port  = 8083
+release_date = "2025-12-09"   # Mistral Devstral 2 announcement; "2512" = 2025-12
 ctx   = 32768
 flags = "--temp 0.15"
 
@@ -56,6 +59,8 @@ flags = "--temp 0.15"
 repo  = "unsloth/Phi-4-mini-instruct-GGUF"
 file  = "models/phi-4-mini/Phi-4-mini-instruct-Q6_K.gguf"
 port  = 8085
+release_date    = "2025-02-19"   # HF microsoft/Phi-4-mini-instruct createdAt
+training_cutoff = "2024-06-01"   # stated on the model card ("June 2024"); the only model here that publishes one
 ctx   = 32768
 flags = "--temp 0.2"
 
@@ -66,6 +71,7 @@ flags = "--temp 0.2"
 repo  = "unsloth/Qwen3.6-27B-GGUF"
 file  = "models/qwen3.6-27b/Qwen3.6-27B-UD-Q4_K_XL.gguf"
 port  = 8089
+release_date = "2026-04-21"   # HF Qwen/Qwen3.6-27B createdAt
 ctx   = 32768
 flags = "--temp 0.6 --top-p 0.95 -fa on --cache-type-k q8_0 --cache-type-v q8_0 --reasoning-budget 0"
 
@@ -79,6 +85,7 @@ flags = "--temp 0.6 --top-p 0.95 -fa on --cache-type-k q8_0 --cache-type-v q8_0 
 repo  = "unsloth/Qwen3.6-35B-A3B-GGUF"
 file  = "models/qwen3.6-35b-a3b/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
 port  = 8091
+release_date = "2026-04-15"   # HF Qwen/Qwen3.6-35B-A3B createdAt
 ctx   = 65536
 flags = "--temp 0.6 --top-p 0.95 -fa on --cache-type-k q8_0 --cache-type-v q8_0 --reasoning-budget 0"
 
@@ -89,6 +96,7 @@ flags = "--temp 0.6 --top-p 0.95 -fa on --cache-type-k q8_0 --cache-type-v q8_0 
 repo  = "unsloth/Qwen3.5-9B-GGUF"
 file  = "models/qwen3.5-9b/Qwen3.5-9B-UD-Q6_K_XL.gguf"
 port  = 8092
+release_date = "2026-02-27"   # HF Qwen/Qwen3.5-9B createdAt
 ctx   = 262144
 flags = "--temp 0.2 -fa on --cache-type-k q8_0 --cache-type-v q8_0 --reasoning-budget 0"
 
@@ -103,6 +111,7 @@ flags = "--temp 0.2 -fa on --cache-type-k q8_0 --cache-type-v q8_0 --reasoning-b
 repo  = "bms22/VibeThinker-3B-Q8_0-GGUF"
 file  = "models/vibethinker-3b/vibethinker-3b-q8_0.gguf"
 port  = 8094
+release_date = "2026-06-12"   # HF WeiboAI/VibeThinker-3B createdAt
 ctx   = 65536
 flags = "--temp 1.0 --top-p 0.95 --top-k -1 -fa on"
 
@@ -116,6 +125,7 @@ flags = "--temp 1.0 --top-p 0.95 --top-k -1 -fa on"
 repo  = "unsloth/Qwen3-Coder-Next-GGUF"
 file  = "models/qwen3-coder-next/Qwen3-Coder-Next-UD-Q4_K_XL.gguf"
 port  = 8095
+release_date = "2026-01-30"   # HF Qwen/Qwen3-Coder-Next createdAt
 ctx   = 262144
 # Tuned hybrid offload (measured on the 4090): `--n-cpu-moe 34` keeps 14 of ~48 expert layers on
 # the GPU (rest in CPU RAM), filling VRAM to ~23GB and giving ~59 tok/s at the FULL 256K context
@@ -137,5 +147,6 @@ flags = "-fit off --n-cpu-moe 34 --parallel 1 -fa on --temp 0.7 --top-p 0.8 --to
 repo  = "unsloth/GLM-4.7-Flash-GGUF"
 file  = "models/glm-4.7-flash/GLM-4.7-Flash-UD-Q4_K_XL.gguf"
 port  = 8093
+release_date = "2026-01-19"   # same weights as glm-4.7-flash
 ctx   = 131072
 flags = "--temp 0.6 --top-p 0.95 -fa on --cache-type-k q8_0 --cache-type-v q8_0"
