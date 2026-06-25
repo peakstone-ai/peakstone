@@ -20,6 +20,10 @@
 #                                    # after this date. The x-axis of the evolution chart.
 #   training_cutoff = "2024-10-01"   # claimed knowledge cutoff; tighter but self-reported, so it
 #                                    # backs only a secondary "claimed-clean" view. Omit if unknown.
+#   capabilities    = ["tools", "agentic"]  # gated axes this model can attempt. Omit = inferred
+#                                    # (tools+agentic, minus agentic for small ctx). List WITHOUT
+#                                    # "tools"/"agentic" to skip tool-calling / repo-agentic suites.
+#                                    # code/math/safety are always attempted regardless.
 
 ["glm-4.7-flash"]
 repo  = "unsloth/GLM-4.7-Flash-GGUF"
@@ -112,6 +116,7 @@ repo  = "bms22/VibeThinker-3B-Q8_0-GGUF"
 file  = "models/vibethinker-3b/vibethinker-3b-q8_0.gguf"
 port  = 8094
 release_date = "2026-06-12"   # HF WeiboAI/VibeThinker-3B createdAt
+capabilities = ["code", "math"]   # authors: NOT trained on tool-calling/agentic -> skip those axes
 ctx   = 65536
 flags = "--temp 1.0 --top-p 0.95 --top-k -1 -fa on"
 

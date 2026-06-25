@@ -13,9 +13,39 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from . import paths
 from .challenges import filter_challenges
 
 LEVELS_PATH = Path(os.environ.get("PEAKSTONE_LEVELS") or Path(__file__).resolve().parent / "levels.toml")
+
+# Axes that need a specific model capability to be meaningful. Coding/math/safety are plain chat and
+# any instruct model attempts them; only tool-use and repo-level agentic genuinely gate participation.
+GATED_CAP = {"tool-calling": "tools", "injection": "tools", "swebench": "agentic", "env": "agentic"}
+# Repo-level agentic needs room for files/transcripts; below this context we don't infer it.
+_MIN_CTX_FOR_AGENTIC = 16384
+
+
+def model_capabilities(model_name: str, models_toml: Path | None = None) -> set[str]:
+    """The gated capabilities a model has. Explicit `capabilities` in serve/models.toml wins; else
+    inferred — full (tools+agentic), minus agentic for small-context models. Unknown model -> full."""
+    try:
+        reg = tomllib.loads((models_toml or paths.models_toml()).read_text())
+    except Exception:  # noqa: BLE001
+        reg = {}
+    cfg = reg.get(model_name) or {}
+    if "capabilities" in cfg:
+        return set(cfg["capabilities"])
+    caps = {"tools", "agentic"}
+    ctx = cfg.get("ctx")
+    if isinstance(ctx, int) and ctx < _MIN_CTX_FOR_AGENTIC:
+        caps.discard("agentic")
+    return caps
+
+
+def relevant(family: str, capabilities) -> bool:
+    """Whether a model with these capabilities should attempt this family's axis."""
+    cap = GATED_CAP.get(family)
+    return cap is None or cap in (capabilities or set())
 
 
 @dataclass

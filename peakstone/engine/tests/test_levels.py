@@ -40,6 +40,30 @@ def test_resolve_caps_filters_and_is_deterministic():
     assert all(not c for c in out if c.startswith("py-3") or c.startswith("py-4"))
 
 
+def test_capabilities_and_relevance(tmp_path):
+    from peakstone.engine.levels import GATED_CAP, model_capabilities, relevant
+    reg = tmp_path / "models.toml"
+    reg.write_text(
+        '["full"]\nctx=200000\n\n'
+        '["small"]\nctx=8192\n\n'                      # small ctx -> agentic inferred off
+        '["restricted"]\nctx=200000\ncapabilities=["code","math"]\n')
+    full = model_capabilities("full", reg)
+    small = model_capabilities("small", reg)
+    restricted = model_capabilities("restricted", reg)
+    unknown = model_capabilities("ghost", reg)         # not in registry -> full
+    assert "tools" in full and "agentic" in full and unknown == full
+    assert "tools" in small and "agentic" not in small
+    assert "tools" not in restricted and "agentic" not in restricted
+
+    # baseline axes always attempted; gated axes follow capability
+    for fam in ("livecodebench", "aime", "refusal"):
+        assert relevant(fam, restricted) and relevant(fam, small)
+    assert not relevant("tool-calling", restricted) and not relevant("swebench", restricted)
+    assert relevant("tool-calling", small) and not relevant("swebench", small)   # tools yes, agentic no
+    assert relevant("swebench", full) and relevant("tool-calling", full)
+    assert GATED_CAP["swebench"] == "agentic"
+
+
 def test_resolve_dedups_across_axes():
     level = Level("t", select=[{"family": "aime"}, {"family": "aime", "limit": 1}])
     out = resolve(level, CORPUS)

@@ -20,7 +20,7 @@ import tomllib
 from pathlib import Path
 
 from . import adherence, global_rules, honesty, matheval, paths
-from .levels import load_levels, resolve as resolve_level
+from .levels import GATED_CAP, load_levels, model_capabilities, relevant, resolve as resolve_level
 from .agentic import run_agentic_task
 from .challenges import filter_challenges, load_challenges
 from .extract import extract_files
@@ -294,8 +294,13 @@ def main(argv=None):
                 continue
             model_vram = _gpu_mem_used()  # footprint of the one loaded model
 
+        caps = model_capabilities(model)   # gated axes (tools/agentic) this model can attempt
         for ch in chs:
             label = f"{model:>18} | {ch.id:<28}"
+
+            if not relevant(ch.family, caps):
+                print(f"{label}  SKIP (model lacks '{GATED_CAP.get(ch.family)}')")
+                continue
 
             if ch.scoring in ("tool_calls", "injection"):
                 if args.reference:
