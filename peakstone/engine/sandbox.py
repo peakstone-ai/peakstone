@@ -229,14 +229,38 @@ def _write_solution(workdir: Path, files: dict[str, str]) -> None:
 # --------------------------------------------------------------------------- #
 # per-language runners
 # --------------------------------------------------------------------------- #
+def _python_for(ch, cfg) -> str:
+    """Interpreter that runs this challenge's pytest. Library-heavy suites (e.g.
+    BigCodeBench) pin their own versions in a separate env; `[run.envs]` in
+    config.toml maps a suite (the directory name under challenges/) to its python.
+    Suites with no entry — and stdlib-only ones like HumanEval — use the base
+    `python`, preserving prior behaviour."""
+    suite = ch.dir.parent.name
+    pybin = (cfg.get("envs") or {}).get(suite)
+    if pybin:
+        pybin = os.path.expanduser(pybin)
+        if os.path.exists(pybin):
+            return pybin
+        import sys
+        print(f"[sandbox] [run.envs].{suite} -> {pybin} not found; using base python",
+              file=sys.stderr)
+    return "python"
+
+
 def _run_python(workdir, ch, files, timeout, cfg):
     _write_solution(workdir, files)
     _place_tests(workdir, ch.dir, at_root=True)
     env = _sanitized_environ()
     env["PYTHONPATH"] = str(workdir) + os.pathsep + env.get("PYTHONPATH", "")
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    pybin = _python_for(ch, cfg)
+    if pybin != "python":
+        # Suites pinned to their own interpreter also pin their runtime to match how the
+        # benchmark was authored (its Docker image runs UTC); this fixes timezone-dependent
+        # tasks. Native challenges keep the host's local time.
+        env["TZ"] = "UTC"
     rc, out, err, dur, _, rss = _run_measured(
-        ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider", "--no-header"],
+        [pybin, "-m", "pytest", "-q", "-p", "no:cacheprovider", "--no-header"],
         workdir, timeout, env,
     )
     text = out + "\n" + err

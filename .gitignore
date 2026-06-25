@@ -10,3 +10,9 @@ infra/.env
 /build/
 *.egg-info/
 /dist/
+
+# Imported benchmark corpora — regenerable via peakstone.engine.importers.* (kept out of
+# git for size, and because LiveCodeBench problems are scraped from coding platforms).
+/challenges/humaneval/
+/challenges/bigcodebench/
+/challenges/livecodebench/

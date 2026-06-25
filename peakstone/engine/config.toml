@@ -26,3 +26,11 @@ max_tokens    = 6144
 request_timeout = 600   # seconds per model call
 sandbox       = "subprocess"   # subprocess | docker
 node_bin      = "~/opt/node/bin"   # prepended to PATH for js/ts runners
+
+[run.envs]
+# Per-suite python interpreter for running tests, keyed by the directory name under
+# challenges/. Library-heavy benchmarks pin their own versions in an isolated env so
+# reference solutions run against the libraries they were authored for (e.g. BigCodeBench
+# needs pandas<3 / numpy<2). Suites omitted here use the base `python` on PATH.
+# Build the BigCodeBench env with ./build_bcb_env.sh (Python 3.10 + its requirements-eval.txt).
+bigcodebench = "~/miniconda3/envs/peakstone-bcb/bin/python"
