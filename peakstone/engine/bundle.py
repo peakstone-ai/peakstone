@@ -119,6 +119,25 @@ def challenge_hashes(challenges_dir: Path) -> dict[str, str]:
     return out
 
 
+def challenge_publication(challenges_dir: Path) -> dict[str, dict]:
+    """Map challenge id -> {published_at, source} from meta.toml. The publish date is the
+    challenge side of the contamination check (compared against model.release_date). Local
+    estimate; the platform overrides with its unforgeable first-seen timestamp per hash."""
+    out: dict[str, dict] = {}
+    for meta in challenges_dir.rglob("meta.toml"):
+        d = meta.parent
+        if any(p[:1] in ("_", ".") for p in d.relative_to(challenges_dir).parts):
+            continue
+        try:
+            m = tomllib.loads(meta.read_text())
+        except Exception:  # noqa: BLE001
+            continue
+        if m.get("published_at"):
+            out[m["id"]] = {"published_at": str(m["published_at"]),
+                            "source": m.get("published_at_source", "author")}
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # environment + model identity
 # --------------------------------------------------------------------------- #
@@ -216,7 +235,7 @@ def model_identity(model_name: str, run_cfg: dict) -> dict:
         }
     file = cfg.get("file", "")
     sha, verified = _model_file_hash(paths.repo_root() / file) if file else ("(none)", False)
-    return {
+    model = {
         "family": model_name,
         "artifact": _quant_from_filename(file),
         "hf_repo": cfg.get("repo", "(unknown)"),
@@ -227,6 +246,14 @@ def model_identity(model_name: str, run_cfg: dict) -> dict:
         "engine": _engine_info(),
         "sampling": _sampling(cfg.get("flags", ""), run_cfg),
     }
+    # Contamination boundary. release_date is the conservative, unforgeable cutoff (the official
+    # held-out metric keys off it); training_cutoff is the optional, self-reported tighter bound.
+    # Both come from serve/models.toml when known — omitted (not guessed) otherwise.
+    if cfg.get("release_date"):
+        model["release_date"] = str(cfg["release_date"])
+    if cfg.get("training_cutoff"):
+        model["training_cutoff"] = str(cfg["training_cutoff"])
+    return model
 
 
 # --------------------------------------------------------------------------- #
@@ -240,7 +267,7 @@ def _verification(row: dict) -> str:
     return "deterministic-tests"
 
 
-def _result(row: dict, chash: dict, judge_model: str | None) -> dict:
+def _result(row: dict, chash: dict, judge_model: str | None, cpub: dict | None = None) -> dict:
     score: dict = {"final": round(float(row.get("final_score", 0.0)), 4)}
     if row.get("total"):
         score["passed"] = row.get("passed", 0)
@@ -251,6 +278,10 @@ def _result(row: dict, chash: dict, judge_model: str | None) -> dict:
         "verification": _verification(row),
         "score": score,
     }
+    pub = (cpub or {}).get(row["challenge"])
+    if pub:
+        r["published_at"] = pub["published_at"]
+        r["published_at_source"] = pub.get("source", "author")
     if row.get("type") or row.get("category"):
         r["category"] = row.get("type") or row.get("category")
     if isinstance(row.get("difficulty"), int) and 1 <= row["difficulty"] <= 5:
@@ -295,8 +326,9 @@ def produce_bundle(meta: dict, results: list[dict], *, harness_version: str = "0
 
     model_name = (meta.get("planner_model") or (meta.get("models") or ["unknown"])[0])
     chash = challenge_hashes(paths.challenges_dir())
+    cpub = challenge_publication(paths.challenges_dir())
 
-    bundle_results = [_result(r, chash, meta.get("judge")) for r in results]
+    bundle_results = [_result(r, chash, meta.get("judge"), cpub) for r in results]
     # hash the sorted list as canonical JSON (self-delimiting) — bare concatenation is ambiguous
     # (["ab","c"] and ["a","bc"] would collide) for a value that pins the exact challenge set.
     suite_hash = _sha256_bytes(canonical_bytes(sorted(r["challenge_hash"] for r in bundle_results)))

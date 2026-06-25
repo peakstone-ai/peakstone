@@ -72,7 +72,8 @@
         "file_sha256_verified": { "type": "boolean", "description": "False if file_sha256 is a placeholder (skipped/missing/incomplete) rather than a real hash — consumers must not treat it as a reproducibility anchor." },
         "params_total": { "type": "string", "description": "e.g. '80B'." },
         "params_active": { "type": "string", "description": "Active params/token for MoE, e.g. '3B'." },
-        "release_date": { "type": "string", "format": "date", "description": "Model release date — the x-axis of the evolution chart." },
+        "release_date": { "type": "string", "format": "date", "description": "Model release date — the x-axis of the evolution chart, and the CONSERVATIVE, unforgeable contamination boundary: a model cannot have trained on a challenge published after it was released. The official held-out score keys off this." },
+        "training_cutoff": { "type": "string", "format": "date", "description": "Claimed knowledge/training-data cutoff. Tighter (more generous to the model) than release_date but self-reported, so it backs only a secondary 'claimed-clean' view, never the official metric. Optional — omit when unknown." },
         "engine": {
           "type": "object",
           "additionalProperties": true,
@@ -119,6 +120,8 @@
       "properties": {
         "challenge_id": { "type": "string" },
         "challenge_hash": { "type": "string", "description": "sha256 of the challenge's content (spec + tests + meta) — pins the exact challenge version scored." },
+        "published_at": { "type": "string", "format": "date", "description": "When this challenge's content first became public. Compared against the model's release_date to decide contamination: clean iff published_at > release_date. Authoritative value is the platform's first-seen timestamp per challenge_hash (unforgeable); this field carries the engine's best local estimate." },
+        "published_at_source": { "type": "string", "enum": ["upstream", "platform-first-seen", "git", "author", "unknown"], "description": "Provenance of published_at, so consumers can weight its trust: 'upstream' = the originating benchmark/contest date, 'platform-first-seen' = the platform notarized this content_hash, 'git' = first commit in the corpus, 'author' = self-declared, 'unknown'." },
         "category": { "type": "string", "description": "Declared capability category (e.g. 'architecture', 'tool-calling'). See taxonomy.json." },
         "capabilities": { "type": "array", "items": { "type": "string" }, "description": "Coarse capability axis required by the challenge." },
         "verification": { "$ref": "#/$defs/verification_method" },

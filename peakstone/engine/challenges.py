@@ -15,6 +15,8 @@ meta.toml schema:
   scoring       = "tests" | "judge" | "both"
   solution_file = "solution.py"        # where the model's code is written
   timeout       = 30                    # seconds for the test run
+  published_at  = "2021-07-07"          # optional: date the content first became public
+  published_at_source = "upstream"      # optional: upstream|platform-first-seen|git|author
   [judge]                               # only for scoring = judge|both
   weight   = 0.3                        # judge fraction of final score (rest = tests)
   criteria = ["correctness", "readability", "efficiency"]
@@ -51,6 +53,8 @@ class Challenge:
     spec: str
     ctype: str = "other"
     expect: str = ""          # for refusal challenges: "answer" | "refuse"
+    published_at: str = ""    # date the challenge content first became public (YYYY-MM-DD)
+    published_at_source: str = ""  # upstream | platform-first-seen | git | author | unknown
     judge_weight: float = 0.3
     judge_criteria: list[str] = field(default_factory=lambda: ["correctness", "readability", "efficiency"])
 
@@ -89,6 +93,8 @@ def load_challenges(root: Path) -> list[Challenge]:
             scoring=m.get("scoring", "tests"), solution_file=m.get("solution_file", ""),
             timeout=int(m.get("timeout", 30)), dir=d, spec=spec, ctype=ctype,
             expect=m.get("expect", ""),
+            published_at=str(m.get("published_at", "")),
+            published_at_source=m.get("published_at_source", ""),
             judge_weight=float(j.get("weight", 0.3)),
             judge_criteria=list(j.get("criteria", ["correctness", "readability", "efficiency"])),
         ))

@@ -107,7 +107,13 @@ def _difficulty(canonical_solution: str, n_libs: int) -> int:
     return min(5, base + (1 if n_libs >= 4 else 0))
 
 
-def _meta(cid: str, title: str, difficulty: int, libs: list[str], timeout: int) -> str:
+# BigCodeBench v0.1 was first released 2024-06; treat that as the public date of its problems
+# (the contamination boundary). Override with --published-at for a more precise per-version date.
+DEFAULT_PUBLISHED_AT = "2024-06-01"
+
+
+def _meta(cid: str, title: str, difficulty: int, libs: list[str], timeout: int,
+          published_at: str) -> str:
     return (
         f"# requires: {', '.join(libs) or 'stdlib only'}\n"
         f'id            = "{cid}"\n'
@@ -119,6 +125,8 @@ def _meta(cid: str, title: str, difficulty: int, libs: list[str], timeout: int) 
         f'scoring       = "tests"\n'
         f'solution_file = "solution.py"\n'
         f"timeout       = {timeout}\n"
+        f'published_at  = "{published_at}"\n'
+        f'published_at_source = "upstream"\n'
     )
 
 
@@ -159,6 +167,7 @@ def import_suite(
     timeout: int,
     require_importable: bool,
     limit: int | None,
+    published_at: str = DEFAULT_PUBLISHED_AT,
 ) -> tuple[int, int]:
     suite_dir = out_root / suite
     if suite_dir.exists():
@@ -185,7 +194,7 @@ def import_suite(
         diff = _difficulty(rec["canonical_solution"], len(libs))
         ident = cid.replace("-", "_")
 
-        (cdir / "meta.toml").write_text(_meta(cid, task_id, diff, libs, timeout))
+        (cdir / "meta.toml").write_text(_meta(cid, task_id, diff, libs, timeout, published_at))
         (cdir / "spec.md").write_text(_spec(rec["complete_prompt"], libs, task_id))
         (cdir / "reference" / "solution.py").write_text(
             rec["complete_prompt"] + rec["canonical_solution"]
@@ -220,6 +229,8 @@ def main(argv=None):
                     help="emit only tasks whose libs all import in the current interpreter")
     ap.add_argument("--timeout", type=int, default=60, help="per-challenge test timeout (s)")
     ap.add_argument("--limit", type=int, default=None, help="cap number of challenges written")
+    ap.add_argument("--published-at", default=DEFAULT_PUBLISHED_AT,
+                    help="public date of these problems (contamination boundary)")
     args = ap.parse_args(argv)
 
     records = _load_records(args.source) if args.source else _fetch_hf_rows(args.version)
@@ -229,6 +240,7 @@ def main(argv=None):
         records=records, out_root=out_root, suite=args.suite, id_prefix=args.id_prefix,
         version=args.version, timeout=args.timeout,
         require_importable=args.require_importable, limit=args.limit,
+        published_at=args.published_at,
     )
     print(f"imported {written} challenges -> {out_root / args.suite}"
           f"  ({skipped} skipped for missing deps)")

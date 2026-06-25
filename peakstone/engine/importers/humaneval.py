@@ -93,6 +93,11 @@ def _ctype(difficulty: int) -> str:
     return "basic" if difficulty <= 2 else "algorithms"
 
 
+# HumanEval was published 2021-07-07 (the "Evaluating LLMs Trained on Code" release). Every
+# problem shares that public date — the contamination boundary for any model trained after it.
+PUBLISHED_AT = "2021-07-07"
+
+
 def _meta(cid: str, title: str, difficulty: int, ctype: str, timeout: int) -> str:
     return (
         f'id            = "{cid}"\n'
@@ -104,6 +109,8 @@ def _meta(cid: str, title: str, difficulty: int, ctype: str, timeout: int) -> st
         f'scoring       = "tests"\n'
         f'solution_file = "solution.py"\n'
         f"timeout       = {timeout}\n"
+        f'published_at  = "{PUBLISHED_AT}"\n'
+        f'published_at_source = "upstream"\n'
     )
 
 

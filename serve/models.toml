@@ -12,6 +12,14 @@
 #   qwen3-8b                  — superseded by qwen3.5-9b (same niche, newer, higher); files deleted.
 #   qwen3.5-9b-coder / -py-coder — community distills that regressed below the base; files deleted.
 # All remain reproducible via the commented lines in download_models.sh.
+#
+# Optional per-model date keys (consumed by the bundle producer for contamination scoring):
+#   release_date    = "2025-02-19"   # public release; the UNFORGEABLE contamination boundary.
+#                                    # A model can't have trained on a challenge published after it,
+#                                    # so the held-out score = mean score on challenges published
+#                                    # after this date. The x-axis of the evolution chart.
+#   training_cutoff = "2024-10-01"   # claimed knowledge cutoff; tighter but self-reported, so it
+#                                    # backs only a secondary "claimed-clean" view. Omit if unknown.
 
 ["glm-4.7-flash"]
 repo  = "unsloth/GLM-4.7-Flash-GGUF"

@@ -88,7 +88,8 @@ def _difficulty(d: str) -> int:
     return {"easy": 3, "medium": 4, "hard": 5}.get((d or "").lower(), 4)
 
 
-def _meta(cid: str, title: str, difficulty: int, platform: str, mode: str, timeout: int) -> str:
+def _meta(cid: str, title: str, difficulty: int, platform: str, mode: str, timeout: int,
+          published_at: str) -> str:
     return (
         f"# {platform} / {mode}\n"
         f'id            = "{cid}"\n'
@@ -100,6 +101,9 @@ def _meta(cid: str, title: str, difficulty: int, platform: str, mode: str, timeo
         f'scoring       = "tests"\n'
         f'solution_file = "solution.py"\n'
         f"timeout       = {timeout}\n"
+        # the real contest date — LiveCodeBench's whole point: the per-problem contamination boundary
+        f'published_at  = "{published_at}"\n'
+        f'published_at_source = "upstream"\n'
     )
 
 
@@ -224,7 +228,7 @@ def import_suite(records, out_root, suite, id_prefix, version, start_date, end_d
 
         (cdir / "meta.toml").write_text(
             _meta(cid, rec["question_title"], _difficulty(rec["difficulty"]),
-                  rec["platform"], mode, timeout))
+                  rec["platform"], mode, timeout, date))
         (cdir / "spec.md").write_text(_spec(rec, mode, len(cases), dropped))
         (cdir / "tests" / "cases.json").write_text(
             json.dumps({"mode": mode, "fn": fn, "cases": cases}))
