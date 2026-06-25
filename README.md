@@ -34,20 +34,20 @@ Early. **P1 (reproducible coding leaderboard)** is in progress. What exists toda
 
 ```bash
 # 0. Sanity-check the suite itself (no model needed): reference solutions must all pass
-python -m engine.runner --reference --models reference
+python -m peakstone.engine.runner --reference --models reference
 
 # 1. Serve a model over an OpenAI-compatible API (any engine works; helper for llama.cpp GGUFs):
 ./serve/serve.sh <model-name>          # see serve/models.toml for the local registry
 
 # 2. Evaluate it
 export PATH="$HOME/opt/node/bin:$PATH"   # JS/TS test runners need this Node
-python -m engine.runner --models <model-name>
-python -m engine.runner --models <model-name> --retries 2 --agents-md   # self-repair + output contract
+python -m peakstone.engine.runner --models <model-name>
+python -m peakstone.engine.runner --models <model-name> --retries 2 --agents-md   # self-repair + output contract
 ```
 
 Scoring: `final = pass_rate` for `tests` challenges; `0.7*pass_rate + 0.3*judge` for `both`.
 Each run records full per-challenge transcripts and the model/environment metadata needed to
-reproduce it. See `engine/runner.py --help` for filters (`--lang`, `--type`, `--difficulty`,
+reproduce it. See `peakstone/engine/runner.py --help` for filters (`--lang`, `--type`, `--difficulty`,
 `--ids`) and modes (judge, retries, agents-md, planner eval).
 
 ## Dashboard (TUI)
@@ -64,7 +64,7 @@ The published package is the **client**: the engine and the dashboard, nothing s
 submission API (`api/`) is the *server* and is deployed from this repo, never installed from PyPI —
 see **Running the server** below.
 
-See **[dashboard/README.md](./dashboard/README.md)**.
+See **[peakstone/dashboard/README.md](./peakstone/dashboard/README.md)**.
 
 ## Running the server (peakstone.ai)
 
@@ -90,12 +90,12 @@ Create `challenges/<lang-or-category>/NN-slug/` with `meta.toml`, `spec.md`, `te
 `reference/` solution, then verify it passes its own tests:
 
 ```bash
-python -m engine.runner --reference --models reference --ids <id>
+python -m peakstone.engine.runner --reference --models reference --ids <id>
 ```
 
 See **[CONTRIBUTING.md](./CONTRIBUTING.md)** for the challenge schema, the corpus → admin-canonized
 suite lifecycle, and the DCO sign-off. Several challenges test **library fluency** with offline-safe
-libs (Python: numpy/pandas/pydantic/networkx/...; JS/TS: lodash/date-fns/zod/mathjs in `engine/jsenv`).
+libs (Python: numpy/pandas/pydantic/networkx/...; JS/TS: lodash/date-fns/zod/mathjs in `peakstone/engine/jsenv`).
 
 ## License
 

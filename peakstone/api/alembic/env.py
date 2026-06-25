@@ -13,11 +13,12 @@ from sqlalchemy import engine_from_config, pool
 
 from alembic import context
 
-# make the repo root importable so `api.*` resolves no matter the cwd
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+# make the repo root importable so `peakstone.*` resolves no matter the cwd
+# env.py is at peakstone/api/alembic/ -> parents[3] is the repo root
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from api.db import Base, DATABASE_URL  # noqa: E402
-from api import models  # noqa: E402,F401  (register mappers on Base.metadata)
+from peakstone.api.db import Base, DATABASE_URL  # noqa: E402
+from peakstone.api import models  # noqa: E402,F401  (register mappers on Base.metadata)
 
 config = context.config
 config.set_main_option("sqlalchemy.url", DATABASE_URL)

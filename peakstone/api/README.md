@@ -6,7 +6,7 @@ hashing + signature verification, and `schema/` for validation.
 ## Run — dev (SQLite, zero infra)
 ```bash
 pip install -r api/requirements.txt
-uvicorn api.main:app --reload            # creates ./peakstone.db on startup
+uvicorn peakstone.api.main:app --reload            # creates ./peakstone.db on startup
 ```
 
 ## Run — prod (Postgres via compose)
@@ -24,7 +24,7 @@ alembic upgrade head                                     # apply schema migratio
 | `GET` | `/facets` | distinct `quants` / `suites` / `trust_tiers` + sortable `sort_axes` for the filter UI |
 | `GET` | `/challenges` | the corpus with empirical pass-rate (calibrated difficulty) |
 | `GET` | `/challenges/{id}` | per-challenge mini-leaderboard (best result per family) |
-| `POST` | `/proposals` | submit a signed challenge proposal (`python -m engine.propose`) to the queue |
+| `POST` | `/proposals` | submit a signed challenge proposal (`python -m peakstone.engine.propose`) to the queue |
 | `GET` | `/proposals` | the moderation queue (`?status=proposed\|approved\|rejected\|all`) |
 | `GET` | `/proposals/{id}` | full proposal (spec + files) for review |
 | `POST` | `/proposals/{id}/review` | admin-signed approve/reject → materializes a published Challenge |
@@ -35,7 +35,7 @@ alembic upgrade head                                     # apply schema migratio
 | `GET` | `/account?pubkey=` | who a key belongs to (user + linked providers) |
 | `GET` | `/healthz` | liveness |
 
-Produce a bundle to submit: `python -m engine.runner --models <m> --bundle` → `bundle.json`, then
+Produce a bundle to submit: `python -m peakstone.engine.runner --models <m> --bundle` → `bundle.json`, then
 `curl -X POST localhost:8000/submissions -H 'content-type: application/json' --data @bundle.json`.
 
 ## Trust chain (ingest)
@@ -59,8 +59,8 @@ sortable axes ("leanest correct solution"). The API averages them per run; sort 
 Anyone proposes a challenge; an admin canonizes it. The API **never executes** the submitted test /
 reference code (it runs on a host holding DB creds) — validation is author-side:
 ```bash
-python -m engine.propose challenges/python/15-foo   # validates the reference locally, signs
-python -m engine.propose --check <dir>              # reviewer re-runs before approving
+python -m peakstone.engine.propose challenges/python/15-foo   # validates the reference locally, signs
+python -m peakstone.engine.propose --check <dir>              # reviewer re-runs before approving
 curl -X POST $API/proposals --data @proposal.json   # queue it
 ```
 Proposals are content-addressed + author-signed (same trust chain as result bundles). **Admins** are

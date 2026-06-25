@@ -13,7 +13,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from engine import paths
+from peakstone.engine import paths
 
 # Both the registry and the GGUF store live in the repo workspace. engine.paths is the single
 # resolver (honours PEAKSTONE_REPO / PEAKSTONE_MODELS_TOML); reproduce/serve need a checkout anyway.

@@ -6,7 +6,7 @@ run on your hardware compare, and at what tok/s.
 
 ```bash
 pip install -e ".[dashboard]"      # or:  pip install peakstone[dashboard]
-peakstone                          # or:  python -m dashboard  [--api URL]
+peakstone                          # or:  python -m peakstone.dashboard  [--api URL]
 ```
 
 By default it talks to `$PEAKSTONE_API_URL` (or `http://localhost:8000`). Pass `--api https://peakstone.ai`

@@ -3,7 +3,7 @@ from pathlib import Path
 
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
-from engine import bundle, keys, sandbox
+from peakstone.engine import bundle, keys, sandbox
 
 
 def test_effective_sandbox_records_truth():

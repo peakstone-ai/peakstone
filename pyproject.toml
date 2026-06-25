@@ -28,30 +28,27 @@ dashboard = ["textual>=0.60"]
 dev = ["pytest>=8", "httpx>=0.27"]
 # NOTE: the submission/leaderboard API (FastAPI + Postgres) is intentionally NOT a PyPI extra.
 # It is the *server* side (deployed to peakstone.ai), not something users install. It ships only
-# from this repo via Docker (see infra/) and pins its deps in api/requirements.txt.
+# from this repo via Docker (see infra/) and pins its deps in peakstone/api/requirements.txt.
 
 [project.scripts]
-peakstone = "dashboard.app:main"
-peakstone-bench = "engine.runner:main"
+peakstone = "peakstone.dashboard.app:main"
+peakstone-bench = "peakstone.engine.runner:main"
 
 [project.urls]
 Homepage = "https://peakstone.ai"
 Source = "https://github.com/peakstone-ai/peakstone"
 
-# The published wheel is the CLIENT only: the engine (harness) + the dashboard (TUI). The server
-# (api/) and the web frontend (web/) are deployed from this repo, never installed from PyPI.
+# Everything imports under the single top-level `peakstone` package (no generic top-level names on
+# PyPI). The published wheel is the CLIENT only: peakstone.engine (harness) + peakstone.dashboard
+# (TUI). The server (peakstone.api) and the web frontend (web/) deploy from this repo, not PyPI.
 [tool.setuptools.packages.find]
-include = ["engine*", "dashboard*"]
-exclude = ["api*", "web*", "*.tests", "*.tests.*"]
+include = ["peakstone*"]
+exclude = ["peakstone.api*", "web*", "*.tests", "*.tests.*"]
 
 # Packaged data that must travel in the wheel: the bundle JSON Schema (the reproducibility contract)
 # and the run config. With these, a bare `pip install` can produce + validate signed bundles. The
 # challenge corpus and serve/ helpers are intentionally NOT shipped — running the suite needs a
 # checkout anyway (reference solutions, the JS sandbox's node_modules, serve.sh, GGUF weights), so
-# engine.paths resolves them from $PEAKSTONE_REPO and errors clearly if absent.
+# peakstone.engine.paths resolves them from $PEAKSTONE_REPO and errors clearly if absent.
 [tool.setuptools.package-data]
-engine = ["config.toml", "schema/*.json", "schema/*.md"]
-
-# NOTE (pre-PyPI): still to do before publishing — namespace the import packages
-# (engine -> peakstone.engine, dashboard -> peakstone.dashboard) to avoid top-level name collisions
-# on PyPI.
+"peakstone.engine" = ["config.toml", "schema/*.json", "schema/*.md"]

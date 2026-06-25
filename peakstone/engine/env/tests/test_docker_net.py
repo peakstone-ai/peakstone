@@ -5,9 +5,9 @@ from __future__ import annotations
 
 import pytest
 
-from engine.env import EnvSpec, NodeSpec, Requirements
-from engine.env.capabilities import Link
-from engine.env.docker import DockerComposeProvider
+from peakstone.engine.env import EnvSpec, NodeSpec, Requirements
+from peakstone.engine.env.capabilities import Link
+from peakstone.engine.env.docker import DockerComposeProvider
 
 pytestmark = pytest.mark.skipif(not DockerComposeProvider().available(),
                                 reason="docker daemon not available")

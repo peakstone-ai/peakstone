@@ -274,7 +274,7 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
   contract; no-uplink bridge → real `egress=blocked`. Verified: two microVMs, client fetches from
   server by name over the bridge, internet unreachable. Its win over docker is *isolation* (real
   kernel boundary for untrusted agent code). 22 tests (real microVM boot+exec, 2-VM bridge comms,
-  docker firewall/netem). **Agent run-mode wired end-to-end:** `python -m engine.runner --env
+  docker firewall/netem). **Agent run-mode wired end-to-end:** `python -m peakstone.engine.runner --env
   --models <m> [--env-provider auto|local|docker|microvm]` runs goal-state-env challenges through the
   agent tool-loop (auto-selecting the cheapest satisfying provider) and emits goal-state-env bundle
   rows. The API scores them as a **separate `agent_score` axis** (not folded into code/safety) and

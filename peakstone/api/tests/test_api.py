@@ -19,9 +19,9 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi.testclient import TestClient
 
-from engine import bundle, keys
-from api import identity, proposals
-from api.main import app
+from peakstone.engine import bundle, keys
+from peakstone.api import identity, proposals
+from peakstone.api.main import app
 
 # canned OAuth accounts, keyed by the fake "code" we pass to /account/bind
 _ACCOUNTS: dict[str, dict] = {}

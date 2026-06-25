@@ -9,13 +9,13 @@ from pathlib import Path
 
 import pytest
 
-from engine.env import (PROVIDER_CAPS, LocalProvider, Requirements, load_env_challenge, match,
+from peakstone.engine.env import (PROVIDER_CAPS, LocalProvider, Requirements, load_env_challenge, match,
                         required_caps, run_reference, select_provider)
-from engine.env.capabilities import (EGRESS_CONTROL, LINK_SHAPING, PUBLIC_IP, Link, NodeNet)
-from engine.env.docker import DockerComposeProvider
-from engine.env.harness import UnsatisfiableEnv
+from peakstone.engine.env.capabilities import (EGRESS_CONTROL, LINK_SHAPING, PUBLIC_IP, Link, NodeNet)
+from peakstone.engine.env.docker import DockerComposeProvider
+from peakstone.engine.env.harness import UnsatisfiableEnv
 
-CH_DIR = Path(__file__).resolve().parents[3] / "challenges" / "env" / "01-file-server"
+CH_DIR = Path(__file__).resolve().parents[4] / "challenges" / "env" / "01-file-server"
 
 
 def test_requirements_reduce_to_capability_keys():
@@ -27,7 +27,7 @@ def test_requirements_reduce_to_capability_keys():
 
 def test_shaping_commands_multi_link():
     # one source, two shaped destinations -> a prio qdisc + per-dst netem child + filter each
-    from engine.env.netshape import shaping_commands
+    from peakstone.engine.env.netshape import shaping_commands
     links = [Link("s", "a", latency_ms=50), Link("s", "b", latency_ms=200, loss=0.01)]
     ips = {"a": "10.0.0.2", "b": "10.0.0.3"}
     cmds = shaping_commands(links, lambda d: ips[d])

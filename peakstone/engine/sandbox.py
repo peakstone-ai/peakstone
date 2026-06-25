@@ -23,7 +23,7 @@ from pathlib import Path
 
 from . import metrics as _metrics
 
-_REPO = Path(__file__).resolve().parent.parent
+_PKG_DIR = Path(__file__).resolve().parent   # the engine package (jsenv/ ships alongside)
 _TIME_BIN = "/usr/bin/time" if os.path.exists("/usr/bin/time") else None
 
 # the isolation mechanism run_tests actually implements. `sandbox="docker"` in config is NOT wired
@@ -189,7 +189,7 @@ def _place_tests(workdir: Path, challenge_dir: Path, at_root: bool) -> None:
 def _link_node_modules(workdir: Path, cfg: dict) -> str | None:
     """Symlink a shared node_modules into the workdir so ES-module imports of installed
     libraries (lodash, date-fns, zod, ...) resolve (NODE_PATH does not work for ESM)."""
-    nm = os.path.expanduser(cfg.get("js_node_modules") or str(_REPO / "engine" / "jsenv" / "node_modules"))
+    nm = os.path.expanduser(cfg.get("js_node_modules") or str(_PKG_DIR / "jsenv" / "node_modules"))
     if os.path.isdir(nm):
         link = workdir / "node_modules"
         if not link.exists():

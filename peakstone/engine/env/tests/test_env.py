@@ -9,14 +9,14 @@ from pathlib import Path
 
 import pytest
 
-from engine import bundle
-from engine.env import (LocalProvider, env_result_row, load_env_challenge, run_once, run_reference)
-from engine.env.docker import DockerComposeProvider
+from peakstone.engine import bundle
+from peakstone.engine.env import (LocalProvider, env_result_row, load_env_challenge, run_once, run_reference)
+from peakstone.engine.env.docker import DockerComposeProvider
 
-CH_DIR = Path(__file__).resolve().parents[3] / "challenges" / "env" / "01-file-server"
+CH_DIR = Path(__file__).resolve().parents[4] / "challenges" / "env" / "01-file-server"
 
 
-GOSSIP_DIR = Path(__file__).resolve().parents[3] / "challenges" / "env" / "02-gossip-max"
+GOSSIP_DIR = Path(__file__).resolve().parents[4] / "challenges" / "env" / "02-gossip-max"
 
 
 @pytest.fixture(scope="module")
@@ -51,7 +51,7 @@ def test_local_reference_reaches_goal_state(challenge):
 
 
 def test_local_write_file_contains_path_traversal():
-    from engine.env import EnvSpec, LocalProvider, NodeSpec
+    from peakstone.engine.env import EnvSpec, LocalProvider, NodeSpec
     with LocalProvider().provision(EnvSpec("trav", nodes=[NodeSpec("a")])) as env:
         n = env.node("a")
         assert "error" in n.write_file("../escape.txt", "x")       # sibling escape rejected
@@ -116,7 +116,7 @@ class _StubClient:
 
 
 def test_agent_loop_drives_env_to_goal_state(challenge):
-    from engine.env.agent import run_env_task
+    from peakstone.engine.env.agent import run_env_task
     res = run_env_task(_StubClient(challenge), "stub", challenge, LocalProvider())
     assert res["passed"] is True
     assert res["turns_to_green"] == 1
@@ -132,7 +132,7 @@ class _ChatStub:
         self.reply = reply
 
     def chat(self, model, messages, **kw):
-        from engine.provider import ChatResult
+        from peakstone.engine.provider import ChatResult
         text = self.reply(messages) if callable(self.reply) else self.reply
         return ChatResult(text=text, completion_tokens=len(text.split()), latency_s=0.1)
 
@@ -140,8 +140,8 @@ class _ChatStub:
 def test_planner_pipeline_plan_then_coder_then_tests():
     # planner emits a (dummy) plan; the fixed coder returns the challenge's reference solution;
     # tests verify -> the plan→code→test pipeline scores as a passing planner run.
-    from engine.challenges import load_challenges
-    from engine.env.planner import planner_result_row, run_planner_task
+    from peakstone.engine.challenges import load_challenges
+    from peakstone.engine.env.planner import planner_result_row, run_planner_task
     ch = next(c for c in load_challenges(Path(CH_DIR).parents[2]) if c.id == "py-02-csv-groupby")
     planner = _ChatStub("PLAN: read csv, group by key, sum values, handle empty input.")
     ref = ch.reference_files()

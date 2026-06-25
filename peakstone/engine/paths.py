@@ -25,8 +25,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-_PKG = Path(__file__).resolve().parent     # .../engine  (real path for editable + normal wheels)
-_REPO_DEFAULT = _PKG.parent                # repo root when running in-repo
+_PKG = Path(__file__).resolve().parent     # .../peakstone/engine  (real path for editable + wheels)
+_REPO_DEFAULT = _PKG.parents[1]            # repo root when running in-repo (peakstone/ -> repo)
 
 
 class DataNotFound(RuntimeError):

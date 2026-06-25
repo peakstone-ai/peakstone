@@ -10,9 +10,9 @@ import os
 
 import pytest
 
-from engine.env import EnvSpec, NodeSpec, get_provider
-from engine.env.capabilities import KERNEL_ISOLATION, PROVIDER_CAPS
-from engine.env.firecracker import (FC_KERNEL, FC_ROOTFS, FirecrackerProvider, UnsupportedHost,
+from peakstone.engine.env import EnvSpec, NodeSpec, get_provider
+from peakstone.engine.env.capabilities import KERNEL_ISOLATION, PROVIDER_CAPS
+from peakstone.engine.env.firecracker import (FC_KERNEL, FC_ROOTFS, FirecrackerProvider, UnsupportedHost,
                                     available_taps, host_prereqs, vm_config)
 
 _CAN_BOOT = FirecrackerProvider().available() and os.path.exists(FC_KERNEL) and os.path.exists(FC_ROOTFS)
@@ -38,7 +38,7 @@ def test_available_tracks_vsock_only_prereqs():
 
 def test_multinode_provision_refuses_without_tap_setup():
     # >1 node needs the bridge + tap pool; without them, refuse with a pointer to the setup script
-    from engine.env.firecracker import available_taps
+    from peakstone.engine.env.firecracker import available_taps
     if available_taps():
         pytest.skip("tap pool is set up; refusal path not exercised")
     spec = EnvSpec("fc-multi", nodes=[NodeSpec("a", needs=["b"]), NodeSpec("b", ports=[80])])
@@ -99,8 +99,8 @@ def test_two_microvms_communicate_over_the_bridge():
 
 @pytest.mark.skipif(not _CAN_NET, reason="needs kvm+artifacts AND the fc bridge/tap pool")
 def test_microvm_firewall_blocks_a_link_in_guest():
-    from engine.env import Requirements
-    from engine.env.capabilities import Link
+    from peakstone.engine.env import Requirements
+    from peakstone.engine.env.capabilities import Link
     req = Requirements(links=[Link("a", "b", firewall="blocked")])
     spec = EnvSpec("fc-fw", nodes=[NodeSpec("a", needs=["b"]), NodeSpec("b", ports=[9000])],
                    requirements=req)

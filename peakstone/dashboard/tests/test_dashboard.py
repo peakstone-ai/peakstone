@@ -6,8 +6,8 @@ import asyncio
 import pytest
 from textual.widgets import DataTable, Static
 
-from dashboard import client, hardware
-from dashboard.app import Dashboard, _bar, _fmt
+from peakstone.dashboard import client, hardware
+from peakstone.dashboard.app import Dashboard, _bar, _fmt
 
 _FAKE = {"count": 2, "leaderboard": [
     {"rank": 1, "family": "qwen3-coder", "code_score": 0.93, "agent_score": None,
@@ -67,7 +67,7 @@ def test_app_renders_filtered_leaderboard(monkeypatch):
 
 
 def test_registry_add_and_list(monkeypatch, tmp_path):
-    from dashboard import models
+    from peakstone.dashboard import models
     toml = tmp_path / "serve" / "models.toml"
     toml.parent.mkdir()
     toml.write_text('["existing"]\nrepo="r"\nfile="models/existing/x.gguf"\nport=8081\nctx=32768\nflags=""\n')
@@ -84,7 +84,7 @@ def test_registry_add_and_list(monkeypatch, tmp_path):
 
 
 def test_download_invokes_hf_with_progress(monkeypatch, tmp_path):
-    from dashboard import models
+    from peakstone.dashboard import models
     monkeypatch.setattr(models, "REPO", tmp_path)
     monkeypatch.setattr(models, "remote_size", lambda repo, fn: 1000)   # known total -> real bar
     monkeypatch.setattr(models.time, "sleep", lambda s: None)
@@ -111,7 +111,7 @@ def test_download_invokes_hf_with_progress(monkeypatch, tmp_path):
 
 
 def test_submit_bundle(monkeypatch):
-    from dashboard import client
+    from peakstone.dashboard import client
 
     class FakeResp:
         status = 201
@@ -131,7 +131,7 @@ def test_submit_bundle(monkeypatch):
 
 
 def test_history_append_load(monkeypatch, tmp_path):
-    from dashboard import history
+    from peakstone.dashboard import history
     monkeypatch.setattr(history, "HOME", tmp_path)
     monkeypatch.setattr(history, "HISTORY_PATH", tmp_path / "h.json")
     assert history.load() == []
@@ -141,7 +141,7 @@ def test_history_append_load(monkeypatch, tmp_path):
 
 
 def test_reproduce_orchestration(monkeypatch):
-    from dashboard import models, reproduce
+    from peakstone.dashboard import models, reproduce
     entry = models.ModelEntry("m", "org/repo", "models/m/x.gguf", 8099, 32768, "")  # not present
     monkeypatch.setattr(models, "load_registry", lambda: {"m": entry})
     bundle = {"results": [
@@ -165,9 +165,9 @@ def test_reproduce_orchestration(monkeypatch):
 
 
 def test_reproduce_screen_shows_result_and_records_history(monkeypatch):
-    from dashboard import history
-    from dashboard import reproduce as R
-    from dashboard.app import Dashboard, ReproduceScreen
+    from peakstone.dashboard import history
+    from peakstone.dashboard import reproduce as R
+    from peakstone.dashboard.app import Dashboard, ReproduceScreen
     monkeypatch.setattr(R, "reproduce", lambda model, **k: R.ReproduceResult(
         model, True, your_tps=80.0, published_tps=100.0, code_score=0.9, passed=9, total=10,
         note="done", bundle={"bundle_version": "1"}))
@@ -187,7 +187,7 @@ def test_reproduce_screen_shows_result_and_records_history(monkeypatch):
             # the run was recorded in history
             assert recorded and recorded[0]["model"] == "qwen3-coder" and recorded[0]["your_tps"] == 80.0
             # pressing 's' submits the bundle
-            from dashboard import client
+            from peakstone.dashboard import client
             monkeypatch.setattr(client, "submit_bundle", lambda url, b, **k: submitted.update(b=b) or (201, "ok"))
             await pilot.press("s")
             await app.workers.wait_for_complete()
@@ -198,9 +198,9 @@ def test_reproduce_screen_shows_result_and_records_history(monkeypatch):
 
 
 def test_models_screen_run_opens_reproduce(monkeypatch):
-    from dashboard import history
-    from dashboard import reproduce as R
-    from dashboard.app import Dashboard, ModelsScreen, ReproduceScreen
+    from peakstone.dashboard import history
+    from peakstone.dashboard import reproduce as R
+    from peakstone.dashboard.app import Dashboard, ModelsScreen, ReproduceScreen
     monkeypatch.setattr(R, "reproduce", lambda model, **k: R.ReproduceResult(model, True, your_tps=70.0, note="done"))
     monkeypatch.setattr(history, "append", lambda e: None)
 

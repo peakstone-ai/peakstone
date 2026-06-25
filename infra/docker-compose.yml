@@ -25,7 +25,7 @@ services:
     environment:
       PEAKSTONE_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-peakstone}:${POSTGRES_PASSWORD:-peakstone}@db:5432/${POSTGRES_DB:-peakstone}
     # apply migrations, then serve. Migrations run before the app so the schema is current on deploy.
-    command: ["sh", "-c", "alembic upgrade head && uvicorn api.main:app --host 0.0.0.0 --port 8000"]
+    command: ["sh", "-c", "alembic upgrade head && uvicorn peakstone.api.main:app --host 0.0.0.0 --port 8000"]
     depends_on:
       db:
         condition: service_healthy

@@ -112,7 +112,7 @@ run_reference(ch, LocalProvider())                    # raises UnsatisfiableEnv 
 
 ## Running a model against env challenges
 ```bash
-python -m engine.runner --env --models <model> [--env-provider auto|local|docker|microvm] [--bundle]
+python -m peakstone.engine.runner --env --models <model> [--env-provider auto|local|docker|microvm] [--bundle]
 ```
 The model drives the tool loop until each challenge's verifier passes. `--env-provider auto` (default)
 picks the cheapest provider that satisfies each challenge's network requirements. Results are
@@ -124,7 +124,7 @@ A planner challenge scores *planning*, not coding: the planner model writes an i
 a **fixed** coder model executes it, and the task's tests verify. The same coder for every planner
 isolates the plan's contribution.
 ```bash
-python -m engine.runner --planner <planner-model> --coder <coder-model> --bundle
+python -m peakstone.engine.runner --planner <planner-model> --coder <coder-model> --bundle
 ```
 Runs over the regular coding challenges; emits `category=planner` rows scored on the **`planner_score`**
 axis (`?sort=planner_score` → "Planner leaderboard"). `engine/env/planner.py` exposes

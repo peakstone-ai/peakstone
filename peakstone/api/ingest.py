@@ -13,8 +13,8 @@ import os
 
 from sqlalchemy import select
 
-from engine import bundle as eng_bundle  # the engine is the source of truth for hashing/validation
-from engine import keys
+from peakstone.engine import bundle as eng_bundle  # the engine is the source of truth for hashing/validation
+from peakstone.engine import keys
 
 from . import models
 

@@ -29,7 +29,7 @@ versioned **suite** (official leaderboards are per-suite). To add one:
 2. Declare its **capability category**, **verification method** (`deterministic-tests` /
    `llm-judge` / `goal-state-env`), and a **seed difficulty** — the platform calibrates the real
    difficulty tier (T0–T4) from submission data over time.
-3. Your `reference/` solution **must pass its own `tests/` in the sandbox** (`python -m engine.runner
+3. Your `reference/` solution **must pass its own `tests/` in the sandbox** (`python -m peakstone.engine.runner
    --reference --models reference --ids <id>`). Reference-verifiable challenges are what make the
    leaderboard trustworthy.
 4. Keep it deterministic where possible. Untrusted code runs sandboxed; resource-heavy or unsafe

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from sqlalchemy import select
 
-from engine.bundle import _sha256_bytes, canonical_bytes
-from engine import keys as eng_keys
+from peakstone.engine.bundle import _sha256_bytes, canonical_bytes
+from peakstone.engine import keys as eng_keys
 
 from . import identity, models
 from .models import _utcnow

@@ -17,7 +17,7 @@ from datetime import timedelta, timezone
 
 from sqlalchemy import select
 
-from engine import keys as eng_keys
+from peakstone.engine import keys as eng_keys
 
 from . import models
 from .models import _utcnow

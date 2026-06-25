@@ -1,6 +1,6 @@
 # Peakstone API dependencies (includes the engine's, since the API reuses engine/ for
 # bundle hashing/validation + signature verification).
--r ../requirements.txt
+-r ../../requirements.txt
 fastapi>=0.115
 uvicorn[standard]>=0.30
 sqlalchemy>=2.0
