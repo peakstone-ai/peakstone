@@ -58,6 +58,13 @@ class Challenge:
     judge_weight: float = 0.3
     judge_criteria: list[str] = field(default_factory=lambda: ["correctness", "readability", "efficiency"])
 
+    @property
+    def family(self) -> str:
+        """The corpus group this challenge belongs to — the directory under challenges/
+        (e.g. 'humaneval', 'bigcodebench', 'livecodebench', 'python'). The unit the TUI and
+        --family filter browse/select by."""
+        return self.dir.parent.name
+
     def reference_files(self) -> dict[str, str]:
         """Return {relative_path: content} from reference/, mapped onto solution layout."""
         ref = self.dir / "reference"
@@ -101,7 +108,19 @@ def load_challenges(root: Path) -> list[Challenge]:
     return out
 
 
-def filter_challenges(chs, langs=None, difficulties=None, ids=None, categories=None, types=None):
+def _date10(s) -> str:
+    """First 10 chars of an ISO date string if well-formed, else "" (ISO dates sort chronologically)."""
+    d = (s or "").strip()[:10]
+    return d if (len(d) == 10 and d[4] == "-" and d[7] == "-") else ""
+
+
+def filter_challenges(chs, langs=None, difficulties=None, ids=None, categories=None, types=None,
+                      families=None, published_after=None, published_before=None):
+    """Keep challenges matching ALL active filters. families filters on Challenge.family; the
+    published_* bounds (YYYY-MM-DD) compare on published_at and EXCLUDE undated challenges when a
+    date bound is active (an unknown date can't be proven in-range)."""
+    after, before = _date10(published_after), _date10(published_before)
+
     def keep(c):
         if langs and c.language not in langs:
             return False
@@ -113,5 +132,15 @@ def filter_challenges(chs, langs=None, difficulties=None, ids=None, categories=N
             return False
         if types and c.ctype not in types:
             return False
+        if families and c.family not in families:
+            return False
+        if after or before:
+            pub = _date10(c.published_at)
+            if not pub:
+                return False
+            if after and pub < after:
+                return False
+            if before and pub > before:
+                return False
         return True
     return [c for c in chs if keep(c)]

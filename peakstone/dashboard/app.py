@@ -9,8 +9,9 @@ from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Footer, Header, Input, ProgressBar, RichLog, Static
+from textual.widgets import Button, DataTable, Footer, Header, Input, ProgressBar, RichLog, Static, Tree
 
+from . import challenges as ch_browse
 from . import client, hardware, history, models, reproduce
 
 # a short, fast challenge set for a reproduce run — enough to measure tok/s + a code score
@@ -58,10 +59,11 @@ class Dashboard(App):
         ("f", "toggle_fit", "Fit filter"),
         ("s", "cycle_sort", "Sort axis"),
         ("enter", "reproduce", "Reproduce"),
+        ("c", "challenges", "Peakstones"),
         ("m", "models", "Models"),
         ("h", "history", "History"),
     ]
-    SORTS = ["code_score", "agent_score", "planner_score", "tok_per_s"]
+    SORTS = ["code_score", "held_out_score", "agent_score", "planner_score", "tok_per_s"]
 
     def __init__(self, base_url: str):
         super().__init__()
@@ -69,6 +71,8 @@ class Dashboard(App):
         self.fit = True          # filter to models that fit my VRAM
         self.sort_i = 0
         self._board_rows: list[dict] = []
+        # peakstones chosen in the Challenges screen; empty = use the quick default repro set.
+        self.selected_ids: list[str] = []
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -99,6 +103,13 @@ class Dashboard(App):
     def action_history(self) -> None:
         self.push_screen(HistoryScreen())
 
+    def action_challenges(self) -> None:
+        self.push_screen(ChallengesScreen())
+
+    def run_ids(self) -> list[str]:
+        """Challenges to run: the user's Challenges-screen selection, else the quick default set."""
+        return self.selected_ids or REPRODUCE_IDS
+
     def action_reproduce(self) -> None:
         table = self.query_one(DataTable)
         i = table.cursor_row
@@ -107,7 +118,8 @@ class Dashboard(App):
         row = self._board_rows[i]
         if not row.get("family"):
             return
-        self.push_screen(ReproduceScreen(row["family"], row.get("tok_per_s"), self.base_url))
+        self.push_screen(ReproduceScreen(row["family"], row.get("tok_per_s"), self.base_url,
+                                         challenge_ids=self.run_ids()))
 
     @work(thread=True, exclusive=True)
     def load_board(self) -> None:
@@ -124,7 +136,9 @@ class Dashboard(App):
         table = self.query_one(DataTable)
         table.clear()
         scope = f"fits ≤{max_vram:g} GB" if max_vram else "all hardware"
-        self.sub_title = f"{self.base_url}  ·  {scope}  ·  sort: {self.SORTS[self.sort_i]}  ·  ⏎ reproduce  m models"
+        sel = f"  ·  ▶ {len(self.selected_ids)} peakstones selected" if self.selected_ids else ""
+        self.sub_title = (f"{self.base_url}  ·  {scope}  ·  sort: {self.SORTS[self.sort_i]}  ·  "
+                          f"⏎ reproduce  c peakstones  m models{sel}")
         rows = data.get("leaderboard", [])
         self._board_rows = rows
         for r in rows:
@@ -154,17 +168,19 @@ class ReproduceScreen(ModalScreen):
     """
     BINDINGS = [("escape", "dismiss", "Close"), ("s", "submit", "Submit")]
 
-    def __init__(self, model: str, published_tps: float | None, base_url: str):
+    def __init__(self, model: str, published_tps: float | None, base_url: str,
+                 challenge_ids: list[str] | None = None):
         super().__init__()
         self.model = model
         self.published_tps = published_tps
         self.base_url = base_url
+        self.challenge_ids = challenge_ids or REPRODUCE_IDS
         self._result: reproduce.ReproduceResult | None = None
 
     def compose(self) -> ComposeResult:
         with Vertical(id="repro"):
-            yield Static(f"[b]Reproduce[/b] {self.model}  ·  published {_fmt(self.published_tps, '{:.0f}')} tok/s",
-                         id="repro-title")
+            yield Static(f"[b]Run[/b] {self.model}  ·  {len(self.challenge_ids)} peakstones  ·  "
+                         f"published {_fmt(self.published_tps, '{:.0f}')} tok/s", id="repro-title")
             yield RichLog(id="repro-log", wrap=True, max_lines=300)
             yield Static("running… (Esc to close)", id="repro-result")
 
@@ -178,7 +194,7 @@ class ReproduceScreen(ModalScreen):
         def emit(s: str) -> None:
             self.app.call_from_thread(log.write, s)
 
-        res = reproduce.reproduce(self.model, challenge_ids=REPRODUCE_IDS,
+        res = reproduce.reproduce(self.model, challenge_ids=self.challenge_ids,
                                   published_tps=self.published_tps, log=emit)
         history.append({"model": res.model, "ok": res.ok, "your_tps": res.your_tps,
                         "published_tps": res.published_tps, "code_score": res.code_score, "note": res.note})
@@ -287,7 +303,8 @@ class ModelsScreen(ModalScreen):
         published baseline since this isn't a leaderboard row; press `s` in the run view to submit."""
         name = self._selected()
         if name:
-            self.app.push_screen(ReproduceScreen(name, None, self.app.base_url))
+            self.app.push_screen(ReproduceScreen(name, None, self.app.base_url,
+                                                 challenge_ids=self.app.run_ids()))
 
     @work(thread=True, exclusive=True)
     def download_model(self, name: str) -> None:
@@ -332,6 +349,95 @@ class HistoryScreen(ModalScreen):
                       _fmt(h.get("code_score")), "ok" if h.get("ok") else (h.get("note") or "fail")[:24])
         if not rows:
             t.add_row("", "(no reproduce runs yet)", "", "", "", "")
+
+
+class ChallengesScreen(ModalScreen):
+    """Browse peakstones by family → month → challenge and pick a set to run. Selecting everything
+    (press `a`) then running is the full-suite run; any subset is just as easy."""
+    CSS = """
+    ChallengesScreen { align: center middle; }
+    #challenges { width: 98; height: 32; border: thick $accent; background: $surface; padding: 1; }
+    #ch-tree { height: 1fr; }
+    #ch-status { height: auto; padding-top: 1; }
+    """
+    BINDINGS = [("escape", "dismiss", "Close"), ("a", "all", "All"),
+                ("c", "clear", "Clear"), ("r", "run", "Run")]
+
+    def __init__(self):
+        super().__init__()
+        self.sel = ch_browse.Selection()
+        self._all_ids: list[str] = []
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="challenges"):
+            yield Static("[b]Peakstones[/b]  ·  ⏎ select  ·  space expand  ·  a all  ·  c clear  ·  r run  ·  Esc close")
+            yield Tree("peakstones", id="ch-tree")
+            yield Static("", id="ch-status")
+
+    def on_mount(self) -> None:
+        tree = self.query_one("#ch-tree", Tree)
+        tree.auto_expand = False   # so ⏎ only selects (no expand side-effect); space expands
+        tree.focus()
+        try:
+            corpus = ch_browse.load_corpus()
+        except Exception as e:  # noqa: BLE001
+            self.query_one("#ch-status", Static).update(f"[red]could not load corpus: {e}[/]")
+            return
+        self._all_ids = [c.id for c in corpus]
+        root = tree.root
+        root.data = {"ids": self._all_ids, "base": f"All peakstones ({len(corpus)})", "kind": "root"}
+        for family, chs in ch_browse.group_by_family(corpus).items():
+            fam = root.add("", data={"ids": [c.id for c in chs], "base": f"{family} ({len(chs)})"})
+            for bucket, dchs in ch_browse.group_by_date(chs).items():
+                fam.add("", data={"ids": [c.id for c in dchs], "base": f"{bucket} ({len(dchs)})",
+                                  "chs": dchs, "filled": False})
+        root.expand()
+        self._refresh()
+
+    def on_tree_node_expanded(self, ev: "Tree.NodeExpanded") -> None:
+        d = ev.node.data or {}
+        if d.get("chs") is not None and not d.get("filled"):   # a date node — fill challenge leaves once
+            for c in d["chs"]:
+                ev.node.add_leaf("", data={"ids": [c.id], "base": f"{c.id} — {c.title}"})
+            d["filled"] = True
+            self._refresh()
+
+    def _walk(self, node):
+        yield node
+        for c in node.children:
+            yield from self._walk(c)
+
+    def _refresh(self) -> None:
+        tree = self.query_one("#ch-tree", Tree)
+        for node in self._walk(tree.root):
+            if node.data:
+                node.set_label(f"{ch_browse.MARKER[self.sel.state(node.data['ids'])]} {node.data['base']}")
+        n, total = len(self.sel.ids), len(self._all_ids)
+        self.query_one("#ch-status", Static).update(
+            f"[b]{n}[/] / {total} selected" + ("  ·  press [b]r[/] to run" if n else ""))
+
+    def on_tree_node_selected(self, ev: "Tree.NodeSelected") -> None:
+        if ev.node.data:                       # ⏎ on any node toggles its whole id-set
+            self.sel.toggle(ev.node.data["ids"])
+            self._refresh()
+
+    def action_all(self) -> None:
+        self.sel.ids = set(self._all_ids)
+        self._refresh()
+
+    def action_clear(self) -> None:
+        self.sel.ids = set()
+        self._refresh()
+
+    def action_run(self) -> None:
+        ids = self.sel.resolve()
+        if not ids:
+            self.notify("select at least one peakstone (space), or press a for all")
+            return
+        self.app.selected_ids = ids
+        self.notify(f"{len(ids)} peakstones selected — pick a model to run")
+        self.dismiss()
+        self.app.push_screen(ModelsScreen())
 
 
 def main() -> None:

@@ -60,9 +60,18 @@ def wait_healthy(port: int, *, timeout: float = 180, opener=urllib.request.urlop
 
 def bench(name: str, ids: list[str], *, runner=subprocess.run, out_dir: Path | None = None) -> dict | None:
     out = Path(out_dir) if out_dir else (REPO / "results" / f"repro-{name}")
-    runner(["python", "-m", "peakstone.engine.runner", "--models", name, "--ids", ",".join(ids),
-            "--no-judge", "--bundle", "--out", str(out)],
-           cwd=str(REPO), capture_output=True, text=True, timeout=1800)
+    out.mkdir(parents=True, exist_ok=True)
+    cmd = ["python", "-m", "peakstone.engine.runner", "--models", name, "--no-judge", "--bundle",
+           "--out", str(out)]
+    if ids:
+        # pass the selection via a file (not --ids) so an arbitrarily large set — e.g. a whole
+        # 1140-challenge family or the full corpus — never hits the command-line argv limit.
+        ids_file = out / "selection.ids"
+        ids_file.write_text("\n".join(ids))
+        cmd += ["--ids-file", str(ids_file)]
+    # a big selection (whole-suite run) can take hours; scale the timeout to the work.
+    timeout = 1800 if (ids and len(ids) <= 50) else 6 * 3600
+    runner(cmd, cwd=str(REPO), capture_output=True, text=True, timeout=timeout)
     bundle = out / "bundle.json"
     return json.loads(bundle.read_text()) if bundle.exists() else None
 

@@ -56,7 +56,7 @@ def test_app_renders_filtered_leaderboard(monkeypatch):
             await pilot.press("s")
             await app.workers.wait_for_complete()
             await pilot.pause()
-            assert captured["sort"] == "agent_score"
+            assert captured["sort"] == "held_out_score"   # SORTS: code_score -> held_out_score -> ...
             # toggling the fit filter off drops the VRAM scope
             await pilot.press("f")
             await app.workers.wait_for_complete()
@@ -215,6 +215,62 @@ def test_models_screen_run_opens_reproduce(monkeypatch):
             assert isinstance(app.screen, ReproduceScreen)
             await app.workers.wait_for_complete()
             await pilot.pause()
+
+    asyncio.run(scenario())
+
+
+def _fake_ch(cid, family, published_at=""):
+    from pathlib import Path
+    from peakstone.engine.challenges import Challenge
+    return Challenge(id=cid, title=cid.upper(), language="python", difficulty=1,
+                     category="code-correctness", scoring="tests", solution_file="solution.py",
+                     timeout=30, dir=Path(f"challenges/{family}/{cid}"), spec="",
+                     published_at=published_at)
+
+
+_FAKE_CORPUS = [
+    _fake_ch("he-000", "humaneval", "2021-07-07"),
+    _fake_ch("lcb-a", "livecodebench", "2025-01-04"),
+    _fake_ch("lcb-b", "livecodebench", "2025-03-22"),
+    _fake_ch("py-1", "python", ""),
+]
+
+
+def test_challenge_grouping_and_selection():
+    from peakstone.dashboard import challenges as cb
+    fam = cb.group_by_family(_FAKE_CORPUS)
+    assert list(fam) == ["livecodebench", "humaneval", "python"]   # largest family first
+    dates = cb.group_by_date(_FAKE_CORPUS)
+    assert list(dates) == ["2021-07", "2025-01", "2025-03", cb.UNDATED]  # chronological, undated last
+
+    sel = cb.Selection()
+    lcb_ids = ["lcb-a", "lcb-b"]
+    assert sel.state(lcb_ids) == "none"
+    sel.toggle(lcb_ids)                       # select the whole family
+    assert sel.state(lcb_ids) == "all" and sel.resolve() == ["lcb-a", "lcb-b"]
+    sel.toggle(["lcb-a"])                     # deselect one -> partial
+    assert sel.state(lcb_ids) == "some" and sel.resolve() == ["lcb-b"]
+    sel.toggle(lcb_ids)                       # not all present -> selects the whole group
+    assert sel.state(lcb_ids) == "all"
+
+
+def test_challenges_screen_selects_and_runs(monkeypatch):
+    from peakstone.dashboard import challenges as cb
+    from peakstone.dashboard.app import Dashboard, ChallengesScreen, ModelsScreen
+    monkeypatch.setattr(cb, "load_corpus", lambda: _FAKE_CORPUS)
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await app.push_screen(ChallengesScreen())
+            await pilot.pause()
+            await pilot.press("a")      # select all
+            await pilot.pause()
+            await pilot.press("r")      # run -> stash selection, open ModelsScreen
+            await pilot.pause()
+            assert app.selected_ids == ["he-000", "lcb-a", "lcb-b", "py-1"]
+            assert isinstance(app.screen, ModelsScreen)
 
     asyncio.run(scenario())
 

@@ -103,8 +103,14 @@ def main(argv=None):
     ap.add_argument("--lang", help="comma list: python,javascript,typescript,go,rust")
     ap.add_argument("--difficulty", help="comma list of 1..5")
     ap.add_argument("--ids", help="comma list of specific challenge ids")
+    ap.add_argument("--ids-file", help="path to a file of challenge ids (newline/comma separated); "
+                    "unioned with --ids. Lets the TUI pass a large selection without argv limits.")
     ap.add_argument("--type", help="comma list of types: basic,algorithms,data,math,"
                     "lib-knowledge,concurrency,data-structures,typing,tool-calling")
+    ap.add_argument("--family", help="comma list of corpus families (challenges/<dir>): "
+                    "humaneval,bigcodebench,livecodebench,python,go,...")
+    ap.add_argument("--published-after", help="keep challenges with published_at on/after YYYY-MM-DD")
+    ap.add_argument("--published-before", help="keep challenges with published_at on/before YYYY-MM-DD")
     ap.add_argument("--reference", action="store_true",
                     help="use reference/ solutions instead of calling a model (suite sanity check)")
     ap.add_argument("--no-judge", action="store_true", help="disable LLM judge scoring")
@@ -197,12 +203,19 @@ def main(argv=None):
     except paths.DataNotFound as e:
         print(f"!! {e}", file=sys.stderr)
         return 2
+    ids = list(_csv(args.ids) or [])
+    if args.ids_file:
+        raw = Path(args.ids_file).read_text().replace(",", "\n")
+        ids += [ln.strip() for ln in raw.splitlines() if ln.strip()]
     chs = filter_challenges(
         load_challenges(Path(args.challenges_dir)),
         langs=_csv(args.lang),
         difficulties=[int(x) for x in _csv(args.difficulty)] if args.difficulty else None,
-        ids=_csv(args.ids),
+        ids=ids or None,
         types=_csv(args.type),
+        families=_csv(args.family),
+        published_after=args.published_after,
+        published_before=args.published_before,
     )
     if not chs:
         print("No challenges matched filters.", file=sys.stderr)
