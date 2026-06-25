@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from collections import defaultdict
 from pathlib import Path
+
+from . import contamination, paths
+from .bundle import challenge_publication
 
 
 def write_report(results: list[dict], outdir: Path, meta: dict) -> Path:
@@ -176,6 +180,66 @@ def _shared_axes(rows, models):
     return lines
 
 
+def _model_dates() -> dict:
+    """{model_name: (release_date, training_cutoff)} from the local registry; missing -> (None, None)."""
+    try:
+        reg = tomllib.loads(paths.models_toml().read_text())
+    except Exception:  # noqa: BLE001
+        return {}
+    return {name: (cfg.get("release_date"), cfg.get("training_cutoff"))
+            for name, cfg in reg.items() if isinstance(cfg, dict)}
+
+
+def _contamination_section(rows, models) -> list:
+    """Held-out (contamination-adjusted) score per model: the mean score on challenges PUBLISHED
+    AFTER the model's release_date — the only scores a model provably couldn't have trained on.
+    Skipped entirely when the corpus carries no publish dates."""
+    try:
+        pub = challenge_publication(paths.challenges_dir())   # {cid: {published_at, source}}
+    except Exception:  # noqa: BLE001
+        pub = {}
+    if not pub:
+        return []
+    dates = _model_dates()
+    by_model = defaultdict(list)
+    for r in rows:
+        by_model[r["model"]].append(r)
+
+    any_release = any(dates.get(m, (None, None))[0] for m in models)
+    any_cutoff = any(dates.get(m, (None, None))[1] for m in models)
+    lines = ["# Held-out (contamination-adjusted)", "",
+             "Mean score on challenges **published after** each model's `release_date` — the scores "
+             "the model provably could not have trained on. This is the headline timeline metric; the "
+             "raw score above blends in challenges the model may have memorised.", ""]
+    if not any_release:
+        lines += ["_No model has a `release_date` set in the registry — add one in "
+                  "`serve/models.toml` to compute held-out scores._", ""]
+        return lines
+
+    head = ["Model", "release_date", "Held-out", "clean", "contaminated", "unknown"]
+    if any_cutoff:
+        head.insert(3, "claimed-clean*")
+    lines += ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
+    for m in models:
+        rel, cut = dates.get(m, (None, None))
+        items = [{"published_at": pub.get(r["challenge"], {}).get("published_at"),
+                  "score": {"final": r["final_score"]}} for r in by_model[m]]
+        v = contamination.held_out_views(items, rel, cut)
+        o = v["official"]
+        held = f"**{o.score:.3f}**" if o.score is not None else "—"
+        cells = [m, rel or "—", held]
+        if any_cutoff:
+            c = v["claimed"]
+            cells.append(f"{c.score:.3f}" if (c and c.score is not None) else "—")
+        cells += [str(o.n_clean), str(o.n_contaminated), str(o.n_unknown)]
+        lines.append("| " + " | ".join(cells) + " |")
+    lines.append("")
+    if any_cutoff:
+        lines += ["\\* claimed-clean uses the self-reported `training_cutoff` (tighter, gameable) — "
+                  "secondary to the release_date number.", ""]
+    return lines
+
+
 def _leaderboard_md(results, meta) -> str:
     # Two roles share one results set: coder rows (model wrote code directly) and planner rows
     # (model wrote a plan that a fixed coder executed, tagged mode="planner").
@@ -247,6 +311,7 @@ def _leaderboard_md(results, meta) -> str:
                       f"{vram / 1024:.1f}" if vram else "-"]
             lines.append("| " + " | ".join(cells) + " |")
         lines.append("")
+        lines += _contamination_section(code_rows(coder_rows), coder_models)
         lines += _detail_matrix("Per-challenge detail — coder", coder_rows, coder_models)
 
     if planner_rows:

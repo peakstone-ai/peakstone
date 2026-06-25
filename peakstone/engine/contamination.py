@@ -84,3 +84,15 @@ def held_out_score(results, boundary) -> HeldOut:
         score=(total / n_clean) if n_clean else None,
         n_clean=n_clean, n_contaminated=n_cont, n_unknown=n_unknown, boundary=b,
     )
+
+
+def held_out_views(results, release_date, training_cutoff=None) -> dict:
+    """Both contamination views for one model:
+      * 'official'  — held-out vs release_date (the unforgeable, headline metric).
+      * 'claimed'   — held-out vs training_cutoff (tighter, self-reported); None if no cutoff.
+    The claimed view is always >= official coverage-wise (cutoff <= release), so a model can only
+    *gain* clean challenges by claiming an earlier cutoff — which is why it's secondary, not official."""
+    return {
+        "official": held_out_score(results, release_date),
+        "claimed": held_out_score(results, training_cutoff) if training_cutoff else None,
+    }
