@@ -131,7 +131,9 @@ def ingest_bundle(db, b: dict) -> models.Submission:
     # 5) upserts
     m, suite, env = b["model"], b["suite"], b["environment"]
     family = _get_or_create(db, models.ModelFamily,
-                            defaults={"release_date": m.get("release_date"), "vendor": m.get("vendor")},
+                            defaults={"release_date": m.get("release_date"),
+                                      "training_cutoff": m.get("training_cutoff"),
+                                      "vendor": m.get("vendor")},
                             name=m["family"])
     artifact = _get_artifact(db, family, m)
     key = _get_or_create(db, models.Key, pubkey=pub)
@@ -158,6 +160,7 @@ def ingest_bundle(db, b: dict) -> models.Submission:
             verification=r.get("verification"), difficulty=r.get("difficulty"),
             final=float(sc.get("final", 0.0)), passed=sc.get("passed"), total=sc.get("total"),
             tok_per_s=r.get("tok_per_s"), latency_s=r.get("latency_s"), metrics=r.get("metrics"),
+            published_at=r.get("published_at"), published_at_source=r.get("published_at_source"),
         ))
         # lazily register the challenge in the corpus
         ch = db.get(models.Challenge, r["challenge_id"])

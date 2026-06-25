@@ -12,7 +12,14 @@ import {
   ZAxis,
 } from "recharts";
 
-export type Point = { family: string; date: number; dateLabel: string; score: number; vram: number | null };
+export type Point = {
+  family: string;
+  date: number;
+  dateLabel: string;
+  score: number;
+  vram: number | null;
+  clean?: number;        // # challenges published after release (the held-out sample size)
+};
 
 export default function EvolutionChart({ points }: { points: Point[] }) {
   return (
@@ -36,7 +43,7 @@ export default function EvolutionChart({ points }: { points: Point[] }) {
           stroke="#78716c"
           tick={{ fontSize: 12 }}
         >
-          <Label value="code score" angle={-90} position="insideLeft" fill="#78716c" />
+          <Label value="held-out code score" angle={-90} position="insideLeft" fill="#78716c" />
         </YAxis>
         <ZAxis range={[80, 80]} />
         <Tooltip
@@ -45,7 +52,8 @@ export default function EvolutionChart({ points }: { points: Point[] }) {
           labelStyle={{ color: "#e7e5e4" }}
           formatter={(_v, _n, p) => {
             const d = p.payload as Point;
-            return [`${d.family} — ${d.score.toFixed(3)} (${d.dateLabel})`, ""];
+            const n = d.clean != null ? ` · ${d.clean} held-out challenges` : "";
+            return [`${d.family} — ${d.score.toFixed(3)}${n} (released ${d.dateLabel})`, ""];
           }}
         />
         <Scatter data={points} fill="#10b981" />

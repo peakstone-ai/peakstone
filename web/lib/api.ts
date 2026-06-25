@@ -13,11 +13,23 @@ export type Run = {
   bundle_hash: string;
 };
 
+export type HeldOut = {
+  score: number | null;          // held-out (contamination-adjusted) code score
+  claimed_score: number | null;  // secondary view vs self-reported training_cutoff
+  boundary: string | null;       // the release_date used as the cutoff
+  n_clean: number;               // challenges published after the boundary (scored)
+  n_contaminated: number;        // published on/before — excluded
+  n_unknown: number;             // no date on one side — excluded
+  coverage: number;              // (clean + contaminated) / total
+};
+
 export type LeaderRow = {
   rank: number;
   family: string;
   release_date: string | null;
   code_score: number | null;
+  held_out_score: number | null;
+  held_out: HeldOut;
   safety_score: number | null;
   agent_score: number | null;
   planner_score: number | null;

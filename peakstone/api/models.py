@@ -28,6 +28,9 @@ class ModelFamily(Base):
     name: Mapped[str] = mapped_column(String, unique=True, index=True)
     vendor: Mapped[str | None] = mapped_column(String)
     release_date: Mapped[str | None] = mapped_column(String)  # ISO date; the evolution-chart x-axis
+    # Claimed knowledge cutoff (self-reported). Backs only the secondary "claimed-clean" held-out
+    # view; the official held-out metric uses release_date (unforgeable). See engine/contamination.py.
+    training_cutoff: Mapped[str | None] = mapped_column(String)
     modality: Mapped[str] = mapped_column(String, default="text")
     artifacts: Mapped[list[ModelArtifact]] = relationship(back_populates="family")
 
@@ -183,4 +186,8 @@ class Result(Base):
     tok_per_s: Mapped[float | None] = mapped_column(Float)
     latency_s: Mapped[float | None] = mapped_column(Float)
     metrics: Mapped[dict | None] = mapped_column(JSONv)    # P2: size/perf/memory efficiency axes
+    # When this challenge's content first became public + where that date came from. Compared
+    # against the model's release_date to decide contamination (engine/contamination.py).
+    published_at: Mapped[str | None] = mapped_column(String)
+    published_at_source: Mapped[str | None] = mapped_column(String)
     submission: Mapped[Submission] = relationship(back_populates="results")

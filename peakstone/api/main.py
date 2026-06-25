@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 
 from . import identity, ingest, models, proposals
 from .db import get_session, init_db
+from ..engine import contamination
 
 # Capability categories that are safety/honesty, not coding ability — scored separately so a strong
 # coder isn't penalised (or flattered) in the headline code score (mirrors the report's split).
@@ -54,9 +55,12 @@ def _avg(xs):
 # No-LLM efficiency axes (engine/metrics.py). "asc" = smaller-is-better. Sortable on the leaderboard
 # alongside code_score; a model can be correct-but-bloated vs correct-and-lean.
 METRIC_AXES = {"peak_rss_mb": "asc", "loc": "asc", "solution_bytes": "asc", "test_wall_s": "asc"}
-# All sortable leaderboard keys → default order.
-SORT_ORDER = {"code_score": "desc", "agent_score": "desc", "planner_score": "desc",
-              "safety_score": "desc", "solved": "desc", "tok_per_s": "desc", **METRIC_AXES}
+# All sortable leaderboard keys → default order. held_out_score (contamination-adjusted code
+# score) is the headline timeline metric; ranking by it drops models with no release_date or no
+# post-release challenges (held_out_score=None → they don't qualify for that board).
+SORT_ORDER = {"code_score": "desc", "held_out_score": "desc", "agent_score": "desc",
+              "planner_score": "desc", "safety_score": "desc", "solved": "desc",
+              "tok_per_s": "desc", **METRIC_AXES}
 
 
 def _agg_metrics(rs) -> dict:
@@ -69,21 +73,47 @@ def _agg_metrics(rs) -> dict:
     return {k: round(sum(v) / len(v), 2) for k, v in buckets.items() if v}
 
 
-def _summarize(sub: models.Submission) -> dict:
+def _held_out(code_rs, fam: models.ModelFamily | None) -> dict:
+    """Contamination-adjusted code score for one run: mean score over code challenges PUBLISHED
+    AFTER the model's release_date (the scores it provably couldn't have trained on), plus the
+    secondary claimed-clean view vs training_cutoff. Same population as code_score, filtered to
+    challenges newer than the boundary."""
+    rel = fam.release_date if fam else None
+    cut = fam.training_cutoff if fam else None
+    items = [{"published_at": r.published_at, "score": {"final": r.final}} for r in code_rs]
+    views = contamination.held_out_views(items, rel, cut)
+    off, clm = views["official"], views["claimed"]
+    return {
+        "held_out_score": off.score,
+        "held_out": {
+            "score": off.score,
+            "claimed_score": clm.score if clm else None,
+            "boundary": off.boundary,
+            "n_clean": off.n_clean,
+            "n_contaminated": off.n_contaminated,
+            "n_unknown": off.n_unknown,
+            "coverage": round(off.coverage, 3),
+        },
+    }
+
+
+def _summarize(sub: models.Submission, fam: models.ModelFamily | None = None) -> dict:
     rs = sub.results
     # capability axes, kept separate: coding ability, safety/honesty, agentic (goal-state-env,
     # multi-machine), and planning (planner plans → fixed coder executes → tests). A planner/agent
     # isn't a "coder" and vice-versa.
     agent = [r.final for r in rs if (r.verification or "") == "goal-state-env"]
     planner = [r.final for r in rs if (r.category or "") == "planner"]
-    code = [r.final for r in rs if (r.category or "") not in SAFETY
-            and (r.category or "") != "planner" and (r.verification or "") != "goal-state-env"]
+    code_rs = [r for r in rs if (r.category or "") not in SAFETY
+               and (r.category or "") != "planner" and (r.verification or "") != "goal-state-env"]
+    code = [r.final for r in code_rs]
     safety = [r.final for r in rs if (r.category or "") in SAFETY]
     by_cat = defaultdict(list)
     for r in rs:
         by_cat[r.category or "other"].append(r.final)
     return {
         "code_score": _avg(code),
+        **_held_out(code_rs, fam),
         "safety_score": _avg(safety),
         "agent_score": _avg(agent),
         "planner_score": _avg(planner),
@@ -147,7 +177,7 @@ def leaderboard(db: Session = Depends(get_session), suite: str | None = None,
         if quant and art.artifact != quant:
             continue
         fam = db.get(models.ModelFamily, art.family_id)
-        summ = _summarize(s)
+        summ = _summarize(s, fam)
         row = {"family": fam.name, "release_date": fam.release_date, **summ,
                "run": _run_info(db, s, art)}
         val = _sort_value(row, sort)
@@ -179,7 +209,7 @@ def model_page(family: str, db: Session = Depends(get_session)):
     runs = []
     for s in subs:
         art = db.get(models.ModelArtifact, s.artifact_id)
-        runs.append({**_summarize(s), "run": _run_info(db, s, art),
+        runs.append({**_summarize(s, fam), "run": _run_info(db, s, art),
                      "suite": f"{s.suite_name}@{s.suite_version}"})
     return {"family": fam.name, "vendor": fam.vendor, "release_date": fam.release_date,
             "n_runs": len(runs), "runs": runs}
