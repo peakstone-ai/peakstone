@@ -204,8 +204,10 @@ def args_max_tokens(run_cfg) -> int:
 # --------------------------------------------------------------------------- #
 AGENT_SYSTEM = (
     "You are an expert software engineer fixing a bug in the Python repository checked out at the "
-    "current directory. Use the tools to explore the code and edit the SOURCE files (do not edit the "
-    "test suite). You may run commands to inspect or test. When the fix is complete, call `done`.")
+    "current directory. Workflow: use `grep`/`read_file` to locate the cause, then change the SOURCE "
+    "with `edit_file` (a precise find-and-replace — preferred) or `write_file` (only for whole/new "
+    "files). Do NOT edit the test suite. Use `run` to inspect or run a quick check. When the fix is "
+    "complete, call `done`. Keep edits minimal and targeted.")
 
 AGENT_TOOLS = [
     {"type": "function", "function": {"name": "ls", "description": "List a directory in the repo.",
@@ -216,7 +218,13 @@ AGENT_TOOLS = [
             "required": ["path"]}}},
     {"type": "function", "function": {"name": "grep", "description": "Search the repo (regex); returns file:line matches.",
         "parameters": {"type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]}}},
-    {"type": "function", "function": {"name": "write_file", "description": "Overwrite a source file with new content.",
+    {"type": "function", "function": {"name": "edit_file",
+        "description": "Replace an exact snippet in a file. `old` must occur verbatim exactly once; "
+                       "include enough surrounding context to make it unique. Preferred over write_file.",
+        "parameters": {"type": "object", "properties": {
+            "path": {"type": "string"}, "old": {"type": "string"}, "new": {"type": "string"}},
+            "required": ["path", "old", "new"]}}},
+    {"type": "function", "function": {"name": "write_file", "description": "Overwrite a whole file (or create one). Prefer edit_file for changes.",
         "parameters": {"type": "object", "properties": {
             "path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]}}},
     {"type": "function", "function": {"name": "run", "description": "Run a shell command in the repo (e.g. to run a test).",
@@ -247,6 +255,20 @@ def _agent_dispatch(sb: RepoSandbox, fn: str, a: dict) -> dict:
     if fn == "grep":
         r = sb.exec(f"grep -rn -E {shlex.quote(a.get('pattern', ''))} . 2>/dev/null | head -60", timeout=60)
         return {"matches": (r.stdout or "")[:3000] or "(no matches)"}
+    if fn == "edit_file":
+        path, old, new = a.get("path", ""), a.get("old", ""), a.get("new", "")
+        if not old:
+            return {"error": "`old` must be the exact non-empty text to replace"}
+        content = sb.read(path)
+        if content is None:
+            return {"error": f"cannot read {path!r}"}
+        n = content.count(old)
+        if n == 0:
+            return {"error": "`old` not found verbatim — read_file and copy the exact text"}
+        if n > 1:
+            return {"error": f"`old` matches {n} places — add surrounding context to make it unique"}
+        wr = sb.write(path, content.replace(old, new, 1))
+        return {"ok": wr.returncode == 0, "replaced": 1} if wr.returncode == 0 else {"error": wr.stderr[-300:]}
     if fn == "write_file":
         wr = sb.write(a.get("path", ""), a.get("content", ""))
         return {"ok": wr.returncode == 0} if wr.returncode == 0 else {"error": wr.stderr[-300:]}
@@ -265,11 +287,12 @@ def _run_agent(sb, inst, client, model, run_cfg, max_turns, log) -> str:
             {"role": "user", "content": (inst.get("problem_statement", "")
              + "\n\nFix the bug in the source, then call done.")}]
     transcript: list[str] = []
+    edits = nudges = 0
     turn = 0
     for turn in range(1, max_turns + 1):
         res = client.chat_tools(model, msgs, AGENT_TOOLS,
                                 temperature=run_cfg.get("temperature", 0.2),
-                                max_tokens=run_cfg.get("max_tokens", 4096),
+                                max_tokens=max(run_cfg.get("max_tokens", 4096), 8192),
                                 timeout=run_cfg.get("request_timeout", 600))
         if res.get("error"):
             transcript.append(f"[t{turn}] model error: {res['error'][:150]}")
@@ -277,6 +300,15 @@ def _run_agent(sb, inst, client, model, run_cfg, max_turns, log) -> str:
         msg = res["message"]
         tcs = msg.get("tool_calls") or []
         if not tcs:
+            # the model replied with prose instead of acting; nudge it back to tools a couple of times
+            # (only while it hasn't edited anything) before giving up — don't let chatter end the run.
+            if edits == 0 and nudges < 2:
+                nudges += 1
+                msgs.append(msg)
+                msgs.append({"role": "user", "content": "Make the change with edit_file/write_file, "
+                             "then call done. Use the tools — don't just describe the fix."})
+                transcript.append(f"[t{turn}] no tool call — nudged ({nudges})")
+                continue
             transcript.append(f"[t{turn}] no tool call — stop")
             break
         msgs.append(msg)
@@ -289,6 +321,8 @@ def _run_agent(sb, inst, client, model, run_cfg, max_turns, log) -> str:
             except json.JSONDecodeError:
                 a = {}
             out = _agent_dispatch(sb, fn, a)
+            if fn in ("edit_file", "write_file") and out.get("ok"):
+                edits += 1
             transcript.append(f"[t{turn}] {fn}({_short(a)}) -> {_short(out)}")
             msgs.append({"role": "tool", "tool_call_id": tc.get("id", ""), "name": fn,
                          "content": json.dumps(out)[:3000]})
@@ -296,8 +330,8 @@ def _run_agent(sb, inst, client, model, run_cfg, max_turns, log) -> str:
                 stop = True
         if stop:
             break
-    log.append(f"agent turns={turn}")
-    return "AGENT TRANSCRIPT:\n" + "\n".join(transcript)
+    log.append(f"agent turns={turn} edits={edits}")
+    return f"AGENT TRANSCRIPT (turns={turn}, edits={edits}):\n" + "\n".join(transcript)
 
 
 def run_repo_patch_task(inst: dict, *, client=None, model="", run_cfg=None, reference=False,

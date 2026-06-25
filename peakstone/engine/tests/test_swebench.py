@@ -87,6 +87,44 @@ def test_agent_loop_drives_tools_and_stops_on_done():
     assert client.n == 2                                # stopped right after done, didn't run all turns
 
 
+def test_edit_file_dispatch():
+    fake = _FakeSandbox()
+    fake.files["m.py"] = "def f():\n    return 1\n"
+    ok = sb._agent_dispatch(fake, "edit_file", {"path": "m.py", "old": "return 1", "new": "return 2"})
+    assert ok.get("ok") and fake.files["m.py"] == "def f():\n    return 2\n"
+    nf = sb._agent_dispatch(fake, "edit_file", {"path": "m.py", "old": "return 9", "new": "x"})
+    assert "not found" in nf.get("error", "")
+    fake.files["d.py"] = "a\na\n"
+    amb = sb._agent_dispatch(fake, "edit_file", {"path": "d.py", "old": "a", "new": "b"})
+    assert "matches" in amb.get("error", "")
+
+
+class _ChatThenAct:
+    """Replies with prose first (no tool call), then write_file, then done."""
+    def __init__(self):
+        self.n = 0
+
+    def chat_tools(self, model, msgs, tools, **kw):
+        self.n += 1
+        if self.n == 1:
+            return {"message": {"role": "assistant", "content": "I'll fix it by editing mymod.py."},
+                    "error": None}
+        if self.n == 2:
+            tc = {"id": "1", "function": {"name": "write_file",
+                  "arguments": json.dumps({"path": "m.py", "content": "fixed"})}}
+            return {"message": {"role": "assistant", "tool_calls": [tc]}, "error": None}
+        return {"message": {"role": "assistant",
+                "tool_calls": [{"id": "2", "function": {"name": "done", "arguments": "{}"}}]}, "error": None}
+
+
+def test_agent_nudges_on_prose_then_acts():
+    fake = _FakeSandbox()
+    client = _ChatThenAct()
+    t = sb._run_agent(fake, {"problem_statement": "x"}, client, "m", {}, max_turns=6, log=[])
+    assert "nudged" in t and fake.files.get("m.py") == "fixed"
+    assert client.n == 3                          # nudged past the prose turn, then acted + done
+
+
 def _docker_ok() -> bool:
     if not shutil.which("docker"):
         return False
