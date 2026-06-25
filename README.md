@@ -23,7 +23,10 @@ Early. **P1 (reproducible coding leaderboard)** is in progress. What exists toda
   taxonomy.
 - **`serve/`** — local model-serving helpers (run your own GGUF models to test).
 
-Not yet built: the submission API, Postgres store, and web leaderboards (P1.3–P1.5 in PLAN.md).
+- **`api/`** — the submission/leaderboard API (FastAPI + Postgres) that runs on peakstone.ai. Validates
+  signed result bundles, serves faceted leaderboards, and moderates the open challenge corpus.
+  Deployed from this repo via Docker (see **Running the server** below); not part of the PyPI client.
+- **`web/`** — the Next.js leaderboard frontend.
 
 ## Quickstart — run the engine against a local model
 
@@ -51,11 +54,33 @@ A Textual terminal UI shows your **local GPU/CPU/RAM** live, next to the leaderb
 what fits your hardware** — so you can see how models that actually run on your machine compare:
 
 ```bash
-pip install -e ".[dashboard]"
+pip install peakstone[dashboard]            # client only — engine (harness) + dashboard (TUI)
 peakstone --api https://peakstone.ai        # or default http://localhost:8000
 ```
 
-See **[dashboard/README.md](./dashboard/README.md)**. (Reproduce-a-run + submit-from-TUI are the next slices.)
+The published package is the **client**: the engine and the dashboard, nothing server-side. The
+submission API (`api/`) is the *server* and is deployed from this repo, never installed from PyPI —
+see **Running the server** below.
+
+See **[dashboard/README.md](./dashboard/README.md)**.
+
+## Running the server (peakstone.ai)
+
+The leaderboard API + Postgres + automatic-HTTPS proxy run as one Docker stack (`infra/`). On a
+Linux box reachable on a public IP:
+
+```bash
+git clone https://github.com/peakstone-ai/peakstone && cd peakstone
+cp infra/.env.example infra/.env        # set PEAKSTONE_DOMAIN + a strong POSTGRES_PASSWORD
+./infra/deploy.sh                        # build, migrate (alembic), start db + api + caddy
+```
+
+[Caddy](https://caddyserver.com) provisions and renews the TLS cert for `PEAKSTONE_DOMAIN`
+automatically — point its DNS A record at the box and open ports 80 + 443; there's no certbot to
+manage. **To update:** `git pull && ./infra/deploy.sh`. Migrations (`alembic upgrade head`) run on
+every deploy before the app starts. Postgres is internal-only (not published to the host); only the
+proxy is exposed. For a local self-signed smoke test, leave `PEAKSTONE_DOMAIN=localhost` and run
+`docker compose -f infra/docker-compose.yml up --build`.
 
 ## Add a challenge
 

@@ -1,0 +1,12 @@
+# Peakstone reverse proxy + automatic HTTPS.
+#
+# {$PEAKSTONE_DOMAIN} is set in the environment (see docker-compose.yml / .env). Caddy provisions
+# and renews a Let's Encrypt certificate for it automatically — no certbot, no cron.
+#
+# Defaults to `localhost`, which makes Caddy mint a local self-signed cert so the whole stack also
+# works on your laptop with no public DNS. For the real deploy set PEAKSTONE_DOMAIN=peakstone.ai
+# (DNS A record -> the server's public IP, ports 80 + 443 reachable) and Caddy does the rest.
+{$PEAKSTONE_DOMAIN:localhost} {
+	encode zstd gzip
+	reverse_proxy api:8000
+}

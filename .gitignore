@@ -6,3 +6,6 @@ __pycache__/
 node_modules/
 peakstone.db
 *.db
+infra/.env
+/build/
+*.egg-info/

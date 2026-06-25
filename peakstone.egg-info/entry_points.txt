@@ -1,3 +1,0 @@
-[console_scripts]
-peakstone = dashboard.app:main
-peakstone-bench = engine.runner:main

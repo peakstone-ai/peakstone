@@ -1,15 +1,19 @@
-# Peakstone — Postgres + API. Run from repo root:  docker compose -f infra/docker-compose.yml up
+# Peakstone server stack — Postgres + API + Caddy (auto-HTTPS).
+#
+# Local smoke test (self-signed cert, https://localhost):
+#     docker compose -f infra/docker-compose.yml up --build
+# Production (peakstone.ai):  set the values in infra/.env (see infra/.env.example), then
+#     ./infra/deploy.sh
 services:
   db:
     image: postgres:16
     environment:
-      POSTGRES_USER: peakstone
-      POSTGRES_PASSWORD: peakstone
-      POSTGRES_DB: peakstone
-    ports: ["5432:5432"]
+      POSTGRES_USER: ${POSTGRES_USER:-peakstone}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-peakstone}
+      POSTGRES_DB: ${POSTGRES_DB:-peakstone}
     volumes: ["pgdata:/var/lib/postgresql/data"]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U peakstone"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-peakstone}"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -19,11 +23,27 @@ services:
       context: ..
       dockerfile: infra/Dockerfile
     environment:
-      PEAKSTONE_DATABASE_URL: postgresql+psycopg://peakstone:peakstone@db:5432/peakstone
-    ports: ["8000:8000"]
+      PEAKSTONE_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-peakstone}:${POSTGRES_PASSWORD:-peakstone}@db:5432/${POSTGRES_DB:-peakstone}
+    # apply migrations, then serve. Migrations run before the app so the schema is current on deploy.
+    command: ["sh", "-c", "alembic upgrade head && uvicorn api.main:app --host 0.0.0.0 --port 8000"]
     depends_on:
       db:
         condition: service_healthy
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    environment:
+      PEAKSTONE_DOMAIN: ${PEAKSTONE_DOMAIN:-localhost}
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data        # certificates (persist across restarts to avoid LE rate limits)
+      - caddy_config:/config
+    depends_on: [api]
+    restart: unless-stopped
 
 volumes:
   pgdata:
+  caddy_data:
+  caddy_config:

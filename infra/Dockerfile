@@ -11,6 +11,8 @@ RUN pip install --no-cache-dir -r api/requirements.txt
 COPY engine/ ./engine/
 COPY schema/ ./schema/
 COPY api/ ./api/
+COPY alembic.ini ./alembic.ini   # `alembic upgrade head` on deploy (script_location -> api/alembic)
 
 EXPOSE 8000
+# compose overrides this to run migrations first; kept here for a bare `docker run`.
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

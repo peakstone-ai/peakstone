@@ -23,17 +23,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# the submission/leaderboard API (Postgres + FastAPI). The engine itself needs neither.
-api = [
-    "fastapi>=0.115",
-    "uvicorn[standard]>=0.30",
-    "sqlalchemy>=2.0",
-    "alembic>=1.13",
-    "psycopg[binary]>=3.1",
-]
 # the local hardware dashboard (Textual TUI). Reads the public API; runs the engine to reproduce.
 dashboard = ["textual>=0.60"]
 dev = ["pytest>=8", "httpx>=0.27"]
+# NOTE: the submission/leaderboard API (FastAPI + Postgres) is intentionally NOT a PyPI extra.
+# It is the *server* side (deployed to peakstone.ai), not something users install. It ships only
+# from this repo via Docker (see infra/) and pins its deps in api/requirements.txt.
 
 [project.scripts]
 peakstone = "dashboard.app:main"
@@ -43,9 +38,11 @@ peakstone-bench = "engine.runner:main"
 Homepage = "https://peakstone.ai"
 Source = "https://github.com/peakstone-ai/peakstone"
 
+# The published wheel is the CLIENT only: the engine (harness) + the dashboard (TUI). The server
+# (api/) and the web frontend (web/) are deployed from this repo, never installed from PyPI.
 [tool.setuptools.packages.find]
-include = ["engine*", "api*", "dashboard*"]
-exclude = ["*.tests", "*.tests.*"]
+include = ["engine*", "dashboard*"]
+exclude = ["api*", "web*", "*.tests", "*.tests.*"]
 
 # NOTE (pre-PyPI): the engine currently resolves schema/, challenges/, serve/ and config.toml
 # relative to the repo root, so `pip install -e .` (editable, in-repo) works today but a built wheel
