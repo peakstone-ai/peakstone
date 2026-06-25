@@ -58,19 +58,24 @@ def wait_healthy(port: int, *, timeout: float = 180, opener=urllib.request.urlop
     return False
 
 
-def bench(name: str, ids: list[str], *, runner=subprocess.run, out_dir: Path | None = None) -> dict | None:
+def bench(name: str, ids: list[str] | None = None, *, level: str | None = None,
+          runner=subprocess.run, out_dir: Path | None = None) -> dict | None:
     out = Path(out_dir) if out_dir else (REPO / "results" / f"repro-{name}")
     out.mkdir(parents=True, exist_ok=True)
-    cmd = ["python", "-m", "peakstone.engine.runner", "--models", name, "--no-judge", "--bundle",
-           "--out", str(out)]
-    if ids:
-        # pass the selection via a file (not --ids) so an arbitrarily large set — e.g. a whole
-        # 1140-challenge family or the full corpus — never hits the command-line argv limit.
-        ids_file = out / "selection.ids"
-        ids_file.write_text("\n".join(ids))
-        cmd += ["--ids-file", str(ids_file)]
-    # a big selection (whole-suite run) can take hours; scale the timeout to the work.
-    timeout = 1800 if (ids and len(ids) <= 50) else 6 * 3600
+    cmd = ["python", "-m", "peakstone.engine.runner", "--models", name, "--bundle", "--out", str(out)]
+    if level:
+        # the runner resolves the level's selection + settings (judge/agent/prebuilt); stream-prune
+        # so prebuilt image disk stays bounded.
+        cmd += ["--level", level, "--prune-images"]
+        timeout = 14 * 24 * 3600   # levels span minutes..weeks; let it run
+    else:
+        cmd += ["--no-judge"]
+        if ids:
+            # pass the selection via a file (not --ids) so an arbitrarily large set never hits argv.
+            ids_file = out / "selection.ids"
+            ids_file.write_text("\n".join(ids))
+            cmd += ["--ids-file", str(ids_file)]
+        timeout = 1800 if (ids and len(ids) <= 50) else 6 * 3600
     runner(cmd, cwd=str(REPO), capture_output=True, text=True, timeout=timeout)
     bundle = out / "bundle.json"
     return json.loads(bundle.read_text()) if bundle.exists() else None
@@ -87,7 +92,8 @@ def stop(proc) -> None:
                 pass
 
 
-def reproduce(name: str, *, challenge_ids: list[str], published_tps: float | None = None,
+def reproduce(name: str, *, challenge_ids: list[str] | None = None, level: str | None = None,
+              published_tps: float | None = None,
               log=lambda s: None, _serve=serve, _wait=wait_healthy, _bench=bench, _stop=stop,
               _download=models.download) -> ReproduceResult:
     entry = models.load_registry().get(name)
@@ -103,8 +109,8 @@ def reproduce(name: str, *, challenge_ids: list[str], published_tps: float | Non
         if not _wait(entry.port):
             return ReproduceResult(name, False, published_tps=published_tps,
                                    note="model never became healthy (is llama-server installed?)")
-        log("benchmarking …")
-        bundle = _bench(name, challenge_ids)
+        log(f"benchmarking ({'level ' + level if level else 'selection'}) …")
+        bundle = _bench(name, challenge_ids, level=level) if level else _bench(name, challenge_ids)
     finally:
         _stop(proc)
         log("stopped serving")

@@ -13,7 +13,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
-from peakstone.engine import paths
+from peakstone.engine import bandwidth, paths
 
 # Both the registry and the GGUF store live in the repo workspace. engine.paths is the single
 # resolver (honours PEAKSTONE_REPO / PEAKSTONE_MODELS_TOML); reproduce/serve need a checkout anyway.
@@ -106,6 +106,7 @@ def download(entry: ModelEntry, log=lambda s: None, *, progress=None,
     log(f"downloading {entry.repo} / {filename} → {local_dir} …")
     total = remote_size(entry.repo, filename) if progress is not None else None
     env = {**os.environ, "HF_HUB_ENABLE_HF_TRANSFER": "1"}
+    t0 = time.monotonic()
     proc = popen(["hf", "download", entry.repo, filename, "--local-dir", str(local_dir)],
                  env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
     while proc.poll() is None:
@@ -117,5 +118,6 @@ def download(entry: ModelEntry, log=lambda s: None, *, progress=None,
     if proc.returncode != 0:
         log(f"download failed (rc={proc.returncode})")
         return False
+    bandwidth.record(_dir_size(local_dir), time.monotonic() - t0, "hf")  # calibrate run estimates
     log(f"downloaded {entry.name} ({entry.size_gb} GB)")
     return entry.present

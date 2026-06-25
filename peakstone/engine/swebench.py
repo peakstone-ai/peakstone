@@ -20,9 +20,40 @@ import re
 import shlex
 import subprocess
 import time
+import urllib.request
+
+from . import bandwidth, keys
 
 WORK = "/testbed"
 GENERIC_IMAGE = "python:3.12"
+_IMG_SIZE_CACHE = keys.KEY_DIR / "imagesizes.json"
+
+
+def image_size(image: str) -> int | None:
+    """Compressed download size (bytes) of a Docker image tag via Docker Hub's API. Cached. Used for
+    bandwidth-aware estimates (no pull needed) and to record throughput after a real pull."""
+    try:
+        cache = json.loads(_IMG_SIZE_CACHE.read_text())
+    except (OSError, ValueError):
+        cache = {}
+    if image in cache:
+        return cache[image]
+    repo, _, tag = image.partition(":")
+    ns_name = repo if "/" in repo else f"library/{repo}"
+    try:
+        with urllib.request.urlopen(  # noqa: S310 (trusted host)
+                f"https://hub.docker.com/v2/repositories/{ns_name}/tags/{tag or 'latest'}", timeout=8) as r:
+            full = json.load(r).get("full_size")
+    except Exception:  # noqa: BLE001
+        full = None
+    if full:
+        cache[image] = int(full)
+        _IMG_SIZE_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            _IMG_SIZE_CACHE.write_text(json.dumps(cache))
+        except OSError:
+            pass
+    return int(full) if full else None
 
 
 def _docker(*args, timeout=120, stdin=None):
@@ -36,6 +67,13 @@ class RepoSandbox:
     def __init__(self, image: str, *, network: bool, prune: bool = False):
         self.image = image
         self.prune = prune              # remove the image after teardown (stream one-at-a-time, bounded disk)
+        # pull explicitly (when absent) so we can time it and record a bandwidth sample for estimates.
+        if _docker("image", "inspect", image, "-f", "{{.Id}}", timeout=30).returncode != 0:
+            t0 = time.monotonic()
+            if _docker("pull", image, timeout=1800).returncode == 0:
+                sz = image_size(image)
+                if sz:
+                    bandwidth.record(sz, time.monotonic() - t0, "docker")
         net = [] if network else ["--network", "none"]
         r = _docker("run", "-d", "--rm", *net, image, "sleep", "infinity", timeout=900)
         if r.returncode != 0:

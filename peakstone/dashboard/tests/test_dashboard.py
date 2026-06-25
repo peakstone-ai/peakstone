@@ -275,6 +275,51 @@ def test_challenges_screen_selects_and_runs(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_models_screen_shows_caps(monkeypatch):
+    from peakstone.dashboard.app import Dashboard, ModelsScreen
+    from textual.widgets import DataTable
+    monkeypatch.setattr("peakstone.engine.capabilities.effective_capabilities",
+                        lambda m, **k: {"tools", "agentic"})
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await app.push_screen(ModelsScreen())
+            await pilot.pause()
+            t = app.screen.query_one("#models-tbl", DataTable)
+            assert t.row_count > 0
+            assert "Caps" in [str(c.label) for c in t.columns.values()]
+            assert any(str(t.get_row_at(i)[5]) == "TA" for i in range(t.row_count))  # caps col
+
+    asyncio.run(scenario())
+
+
+def test_level_screen_estimates_and_runs(monkeypatch):
+    from peakstone.dashboard import reproduce as R
+    from peakstone.dashboard.app import Dashboard, LevelScreen, ReproduceScreen
+    from textual.widgets import DataTable
+    monkeypatch.setattr("peakstone.engine.estimate.estimate", lambda level, model: {
+        "level": level, "model": model, "n_challenges": 42, "by_family": {"humaneval": 42},
+        "gen_min": 10.0, "exec_min": 1.0, "download_gb": 0.0, "download_min": 0.0,
+        "total_min": 11.0, "tps": 90, "mbps": 50, "unknowns": [], "settings": {}})
+    monkeypatch.setattr(R, "reproduce", lambda model, **k: R.ReproduceResult(model, True, your_tps=80.0))
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await app.push_screen(LevelScreen("qwen3-coder", "http://x"))
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert app.screen.query_one("#lvl-tbl", DataTable).row_count >= 5   # smoke..max
+            await pilot.press("r")                                              # run selected level
+            await pilot.pause()
+            assert isinstance(app.screen, ReproduceScreen) and app.screen.level is not None
+
+    asyncio.run(scenario())
+
+
 def test_app_handles_api_down(monkeypatch):
     def boom(*a, **k):
         raise client.APIError("connection refused")

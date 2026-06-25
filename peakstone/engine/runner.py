@@ -121,6 +121,8 @@ def main(argv=None):
     ap.add_argument("--level", help="run a named test level (smoke|quick|standard|deep|max) — a "
                     "budget-scaled, reproducible selection + settings; see --list-levels")
     ap.add_argument("--list-levels", action="store_true", help="list available test levels and exit")
+    ap.add_argument("--estimate", action="store_true",
+                    help="with --level/--models: print a time/data estimate and exit (no run)")
     ap.add_argument("--classify", action="store_true",
                     help="probe --models for capabilities (tools/agentic/reasoner), cache them, and exit")
     ap.add_argument("--import-capabilities", action="store_true",
@@ -213,6 +215,14 @@ def main(argv=None):
         for n, l in lv.items():
             flags = "".join(c for c, on in [("J", l.judge), ("A", l.agent), ("P", l.prebuilt)] if on)
             print(f"  {n:9} {l.time_hint:28} [{flags or '-'}]  {l.description}")
+        return 0
+
+    if args.estimate:
+        if not args.level:
+            print("--estimate needs --level", file=sys.stderr); return 2
+        from . import estimate as estimate_mod
+        for m in (_csv(args.models) or []):
+            print(estimate_mod.format_estimate(estimate_mod.estimate(args.level, m)))
         return 0
 
     if args.classify:
