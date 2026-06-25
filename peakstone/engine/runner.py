@@ -20,6 +20,7 @@ import tomllib
 from pathlib import Path
 
 from . import adherence, global_rules, honesty, matheval, paths
+from .levels import load_levels, resolve as resolve_level
 from .agentic import run_agentic_task
 from .challenges import filter_challenges, load_challenges
 from .extract import extract_files
@@ -116,6 +117,9 @@ def main(argv=None):
                          "the live repo via tools instead of one-shot oracle patching")
     ap.add_argument("--max-turns", type=int, default=25,
                     help="max agent turns for --agent repo-patch runs (default 25)")
+    ap.add_argument("--level", help="run a named test level (smoke|quick|standard|deep|max) — a "
+                    "budget-scaled, reproducible selection + settings; see --list-levels")
+    ap.add_argument("--list-levels", action="store_true", help="list available test levels and exit")
     ap.add_argument("--prebuilt", action="store_true",
                     help="for repo-patch: use each instance's prebuilt per-instance Docker image "
                          "(full fidelity) instead of a generic clone+install")
@@ -196,6 +200,14 @@ def main(argv=None):
             return None
         return LLMClient(f"http://{host}:{ports[judge_model]}")
 
+    if args.list_levels:
+        version, lv = load_levels()
+        print(f"Test levels (manifest {version}):")
+        for n, l in lv.items():
+            flags = "".join(c for c, on in [("J", l.judge), ("A", l.agent), ("P", l.prebuilt)] if on)
+            print(f"  {n:9} {l.time_hint:28} [{flags or '-'}]  {l.description}")
+        return 0
+
     if args.judge_only:
         return run_judge_only(args, judge_model, make_judge_client())
 
@@ -214,20 +226,41 @@ def main(argv=None):
     except paths.DataNotFound as e:
         print(f"!! {e}", file=sys.stderr)
         return 2
-    ids = list(_csv(args.ids) or [])
-    if args.ids_file:
-        raw = Path(args.ids_file).read_text().replace(",", "\n")
-        ids += [ln.strip() for ln in raw.splitlines() if ln.strip()]
-    chs = filter_challenges(
-        load_challenges(Path(args.challenges_dir)),
-        langs=_csv(args.lang),
-        difficulties=[int(x) for x in _csv(args.difficulty)] if args.difficulty else None,
-        ids=ids or None,
-        types=_csv(args.type),
-        families=_csv(args.family),
-        published_after=args.published_after,
-        published_before=args.published_before,
-    )
+    all_ch = load_challenges(Path(args.challenges_dir))
+    level_meta: dict = {}
+    if args.level:
+        version, lvls = load_levels()
+        level = lvls.get(args.level)
+        if not level:
+            print(f"!! unknown level {args.level!r}; run --list-levels", file=sys.stderr)
+            return 2
+        sel = set(resolve_level(level, all_ch))
+        chs = [c for c in all_ch if c.id in sel]
+        # apply level settings — explicit CLI flags still win (they only ever turn things ON here).
+        if not level.judge:
+            use_judge = False
+        args.agent = args.agent or level.agent
+        args.prebuilt = args.prebuilt or level.prebuilt
+        if level.retries and not args.retries:
+            args.retries = level.retries
+        level_meta = {"suite_id": f"level-{args.level}", "suite_version": version}
+        print(f"Level {args.level}@{version}: {len(chs)} challenges"
+              f"  (judge={use_judge} agent={args.agent} prebuilt={args.prebuilt})")
+    else:
+        ids = list(_csv(args.ids) or [])
+        if args.ids_file:
+            raw = Path(args.ids_file).read_text().replace(",", "\n")
+            ids += [ln.strip() for ln in raw.splitlines() if ln.strip()]
+        chs = filter_challenges(
+            all_ch,
+            langs=_csv(args.lang),
+            difficulties=[int(x) for x in _csv(args.difficulty)] if args.difficulty else None,
+            ids=ids or None,
+            types=_csv(args.type),
+            families=_csv(args.family),
+            published_after=args.published_after,
+            published_before=args.published_before,
+        )
     if not chs:
         print("No challenges matched filters.", file=sys.stderr)
         return 1
@@ -579,6 +612,7 @@ def main(argv=None):
         "sandbox": effective_sandbox(run_cfg.get("sandbox")), "reference": args.reference,
         "gpu": _gpu_info(), "retries": args.retries,
         "agents_md": bool(agents_md),
+        **level_meta,
     }
     write_report(results, outdir, meta)
     print(f"\nReport: {outdir / 'leaderboard.md'}")
