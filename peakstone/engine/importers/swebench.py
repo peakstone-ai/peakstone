@@ -46,6 +46,12 @@ def _fetch(split: str) -> list[dict]:
         off += 100
 
 
+def image_name(instance_id: str, namespace: str = "starryzhang") -> str:
+    """SWE-bench-Live prebuilt image: <namespace>/sweb.eval.x86_64.<id with __ -> _1776_>
+    (Docker repo names disallow '__', so SWE-bench encodes it as '_1776_')."""
+    return f"{namespace}/sweb.eval.x86_64.{instance_id.replace('__', '_1776_')}"
+
+
 def _aslist(v):
     if isinstance(v, list):
         return v
@@ -80,7 +86,7 @@ def _meta(cid, title, difficulty, published_at, timeout) -> str:
     )
 
 
-def import_suite(records, out_root, suite, start_date, end_date, timeout, limit):
+def import_suite(records, out_root, suite, start_date, end_date, timeout, limit, namespace="starryzhang"):
     suite_dir = out_root / suite
     if suite_dir.exists():
         shutil.rmtree(suite_dir)
@@ -106,6 +112,9 @@ def import_suite(records, out_root, suite, start_date, end_date, timeout, limit)
         inst["PASS_TO_PASS"] = _aslist(r.get("PASS_TO_PASS"))
         inst["test_cmds"] = _aslist(r.get("test_cmds")) or ["python -m pytest"]
         inst["instance_id"] = iid
+        # prebuilt per-instance image (used only under runner --prebuilt). SWE-bench-Live convention:
+        # <namespace>/sweb.eval.x86_64.<instance_id with __ -> _1776_>. image_key overrides if present.
+        inst["image"] = r.get("image_key") or image_name(iid, namespace)
 
         cdir = suite_dir / cid
         cdir.mkdir(parents=True, exist_ok=True)
@@ -139,6 +148,7 @@ def main(argv=None):
     ap.add_argument("--end-date", default=None)
     ap.add_argument("--timeout", type=int, default=1800, help="per-challenge test timeout (s)")
     ap.add_argument("--limit", type=int, default=None)
+    ap.add_argument("--namespace", default="starryzhang", help="Docker Hub namespace for prebuilt images")
     args = ap.parse_args(argv)
 
     if args.source:
@@ -147,7 +157,7 @@ def main(argv=None):
         records = _fetch(args.split)
     out_root = Path(args.out) if args.out else paths.challenges_dir()
     written, skipped = import_suite(records, out_root, args.suite, args.start_date, args.end_date,
-                                    args.timeout, args.limit)
+                                    args.timeout, args.limit, args.namespace)
     print(f"imported {written} repo-patch challenges -> {out_root / args.suite}  ({skipped} skipped)")
     return 0
 

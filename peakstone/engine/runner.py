@@ -116,6 +116,12 @@ def main(argv=None):
                          "the live repo via tools instead of one-shot oracle patching")
     ap.add_argument("--max-turns", type=int, default=25,
                     help="max agent turns for --agent repo-patch runs (default 25)")
+    ap.add_argument("--prebuilt", action="store_true",
+                    help="for repo-patch: use each instance's prebuilt per-instance Docker image "
+                         "(full fidelity) instead of a generic clone+install")
+    ap.add_argument("--prune-images", action="store_true",
+                    help="with --prebuilt, remove each image after its run (stream one-at-a-time; "
+                         "keeps peak disk to ~one image)")
     ap.add_argument("--reference", action="store_true",
                     help="use reference/ solutions instead of calling a model (suite sanity check)")
     ap.add_argument("--no-judge", action="store_true", help="disable LLM judge scoring")
@@ -431,6 +437,7 @@ def main(argv=None):
                 inst = json.loads(inst_path.read_text())
                 res = swebench.run_repo_patch_task(inst, client=client, model=model, run_cfg=run_cfg,
                                                    reference=args.reference, agent=args.agent,
+                                                   prebuilt=args.prebuilt, prune=args.prune_images,
                                                    max_turns=args.max_turns, timeout=ch.timeout)
                 results.append({
                     "model": model, "challenge": ch.id, "language": ch.language,

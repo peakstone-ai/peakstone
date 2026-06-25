@@ -35,6 +35,12 @@ def test_extract_diff_from_fence_and_raw():
     assert sb.extract_diff("no patch here") == ""
 
 
+def test_image_name_encoding():
+    from peakstone.engine.importers.swebench import image_name
+    assert image_name("pypa__twine-1225") == "starryzhang/sweb.eval.x86_64.pypa_1776_twine-1225"
+    assert image_name("a__b-1", "ns") == "ns/sweb.eval.x86_64.a_1776_b-1"
+
+
 def test_resolved():
     f2p = ["t::a", "t::b"]
     p2p = ["t::c"]

@@ -33,10 +33,11 @@ def _docker(*args, timeout=120, stdin=None):
 class RepoSandbox:
     """A single long-lived container; commands via `docker exec`, files via stdin."""
 
-    def __init__(self, image: str, *, network: bool):
+    def __init__(self, image: str, *, network: bool, prune: bool = False):
         self.image = image
+        self.prune = prune              # remove the image after teardown (stream one-at-a-time, bounded disk)
         net = [] if network else ["--network", "none"]
-        r = _docker("run", "-d", "--rm", *net, image, "sleep", "infinity", timeout=300)
+        r = _docker("run", "-d", "--rm", *net, image, "sleep", "infinity", timeout=900)
         if r.returncode != 0:
             raise RuntimeError(f"docker run {image} failed: {r.stderr[-300:]}")
         self.cid = r.stdout.strip()
@@ -60,6 +61,8 @@ class RepoSandbox:
 
     def teardown(self):
         _docker("rm", "-f", self.cid, timeout=60)
+        if self.prune:
+            _docker("rmi", "-f", self.image, timeout=120)   # keep peak disk to ~one image
 
     def __enter__(self):
         return self
@@ -115,20 +118,20 @@ def resolved(results: dict[str, str], fail_to_pass: list[str], pass_to_pass: lis
 # --------------------------------------------------------------------------- #
 # setup + run
 # --------------------------------------------------------------------------- #
-def _setup(sb: RepoSandbox, inst: dict, log: list) -> bool:
+def _setup(sb: RepoSandbox, inst: dict, log: list, mode: str) -> bool:
     """Put the repo at base_commit into /testbed. Returns True on success."""
-    if inst.get("fixtures"):                                   # synthetic
-        sb.exec(f"mkdir -p {WORK}")
-        for path, content in inst["fixtures"].items():
+    if mode == "synthetic":
+        for path, content in inst.get("fixtures", {}).items():
             sb.write(path, content)
         for cmd in inst.get("setup_cmds", []):
             sb.exec(cmd)
         return True
-    if inst.get("image"):                                      # prebuilt: repo already present
+    if mode == "prebuilt":                                     # repo already in the image at /testbed
         repo_dir = inst.get("repo_dir", WORK)
-        r = sb.exec(f"git -C {repo_dir} checkout -f {shlex.quote(inst['base_commit'])}", timeout=120)
-        log.append(r.stdout[-500:] + r.stderr[-500:])
-        return r.returncode == 0
+        r = sb.exec(f"git -C {repo_dir} checkout -f {shlex.quote(inst['base_commit'])} 2>&1 || true",
+                    timeout=120)
+        log.append("[prebuilt] " + (r.stdout or "")[-300:])
+        return True
     # generic: clone + install (best-effort)
     repo = inst["repo"]
     # /testbed already exists (empty) from sandbox init; clone into it.
@@ -335,21 +338,29 @@ def _run_agent(sb, inst, client, model, run_cfg, max_turns, log) -> str:
 
 
 def run_repo_patch_task(inst: dict, *, client=None, model="", run_cfg=None, reference=False,
-                        agent=False, max_turns=25, timeout=1800) -> dict:
+                        agent=False, prebuilt=False, prune=False, max_turns=25, timeout=1800) -> dict:
     """Set up the repo, produce a fix (gold patch if `reference`; an agent loop editing the live repo
     if `agent`; else a one-shot oracle patch), graft the graded test_patch on top, run the target
-    tests, and check 'resolved'. Returns a result dict for the runner."""
+    tests, and check 'resolved'. Returns a result dict for the runner.
+
+    Environment: `synthetic` (fixtures), `prebuilt` (the instance's per-instance image — full
+    fidelity; set `prune` to remove it after, streaming one-at-a-time), or `generic` (clone+install
+    in a shared base image — free but best-effort)."""
     run_cfg = run_cfg or {}
     log: list[str] = []
     f2p = list(inst.get("FAIL_TO_PASS") or [])
     p2p = list(inst.get("PASS_TO_PASS") or [])
-    image = inst.get("image") or GENERIC_IMAGE
-    network = not inst.get("image")   # generic clone/install (and synthetic pip) need egress; prebuilt doesn't
+    if inst.get("fixtures"):
+        mode, image, network = "synthetic", GENERIC_IMAGE, True
+    elif prebuilt and inst.get("image"):
+        mode, image, network = "prebuilt", inst["image"], False
+    else:
+        mode, image, network = "generic", GENERIC_IMAGE, True
     t0 = time.time()
     try:
-        with RepoSandbox(image, network=network) as sb:
+        with RepoSandbox(image, network=network, prune=prune) as sb:
             digest = sb.digest()
-            if not _setup(sb, inst, log):
+            if not _setup(sb, inst, log, mode):
                 return _fail("repo setup failed", log, image, digest, f2p, t0)
 
             # Produce the candidate fix (the one swappable step).
@@ -376,9 +387,16 @@ def run_repo_patch_task(inst: dict, *, client=None, model="", run_cfg=None, refe
             # parse_pytest maps back to the specific f2p/p2p node ids.
             targets = sorted({t.split("::", 1)[0] for t in (f2p + p2p) if "::" in t}) or list(f2p + p2p)
             tgt = " ".join(shlex.quote(t) for t in targets)
+            # prebuilt images set up a conda env "testbed" — use its python so the repo's deps resolve.
+            py = "python"
+            if mode == "prebuilt" and "y" in (sb.exec(
+                    "test -x /opt/miniconda3/envs/testbed/bin/python && echo y || true").stdout or ""):
+                py = "/opt/miniconda3/envs/testbed/bin/python"
             base = (inst.get("test_cmds") or ["python -m pytest"])[0]
-            if base.startswith("pytest"):     # use the module form so it works without the console script
-                base = "python -m " + base
+            if base.startswith("pytest"):     # module form so it works without the console script
+                base = f"{py} -m {base}"
+            elif base.startswith("python "):
+                base = py + base[len("python"):]
             cmd = f"{base} -rA -p no:cacheprovider {tgt}" if tgt else f"{base} -rA"
             r = sb.exec(cmd, timeout=timeout)
             results = parse_pytest((r.stdout or "") + "\n" + (r.stderr or ""))
@@ -393,9 +411,7 @@ def run_repo_patch_task(inst: dict, *, client=None, model="", run_cfg=None, refe
                 "resolved": res_ok, "final": 1.0 if res_ok else 0.0,
                 "passed": n_f2p, "total": len(f2p) or 1, "error": err,
                 "transcript": (head + "\n\nLOG:\n" + "\n".join(log))[-8000:],
-                "env": {"provider": "docker", "image": image, "image_digest": digest,
-                        "setup": ("synthetic" if inst.get("fixtures") else
-                                  "prebuilt" if inst.get("image") else "generic"),
+                "env": {"provider": "docker", "image": image, "image_digest": digest, "setup": mode,
                         "resolved": res_ok, "fail_to_pass_passed": n_f2p, "fail_to_pass_total": len(f2p),
                         "duration_s": round(time.time() - t0, 1)},
             }
