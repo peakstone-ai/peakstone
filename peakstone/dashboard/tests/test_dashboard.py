@@ -402,6 +402,28 @@ def test_register_quant(tmp_path, monkeypatch):
     assert again.name == "base-q4"
 
 
+def test_reproduce_screen_routes_generation_stream():
+    from peakstone.dashboard.app import Dashboard, ReproduceScreen, GEN_MARK, GEN_NL
+    from textual.widgets import Static, RichLog
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            scr = ReproduceScreen("m", None, "http://x")
+            await app.push_screen(scr)
+            await pilot.pause()
+            scr._on_line("   m | py-05-calc          → solving [tests] …")   # progress -> log + sets challenge
+            scr._on_line(GEN_MARK + "def f():" + GEN_NL + "  return 1")       # gen delta -> output panel
+            scr._on_line(GEN_MARK + " more")
+            await pilot.pause()
+            gen = str(scr.query_one("#repro-gen", Static).render())
+            assert "py-05-calc" in gen and "def f():\n  return 1 more" in gen
+            log = str(scr.query_one("#repro-log", RichLog).lines)
+            assert "py-05-calc" in log and GEN_MARK not in gen   # control char stripped from display
+
+    asyncio.run(scenario())
+
+
 def test_pretty_progress():
     from peakstone.dashboard.app import _pretty_progress
     assert "[green]✓[/]" in _pretty_progress("m | ch  ok  tests 10/10")

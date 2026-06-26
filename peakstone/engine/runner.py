@@ -32,6 +32,18 @@ from .sandbox import effective_sandbox, run_tests
 from .scoring import compute_score
 
 ROOT = paths.repo_root()   # results land here; data files resolve via engine.paths
+
+# --stream-output protocol: generation deltas go to stdout one chunk per line, prefixed with GEN_MARK
+# (so the dashboard can split them from progress lines); real newlines are escaped to GEN_NL since each
+# delta is one stdout line. Plain control chars → invisible/harmless if a CLI user ever sees them.
+GEN_MARK = "\x01"
+GEN_NL = "\x02"
+
+
+def _emit_gen(chunk: str) -> None:
+    print(GEN_MARK + chunk.replace("\n", GEN_NL), flush=True)
+
+
 SYSTEM_PROMPT = (
     "You are an expert programmer. Solve the task exactly as specified. "
     "Output your solution as fenced code blocks using the required file name(s) and the "
@@ -162,6 +174,9 @@ def main(argv=None):
     ap.add_argument("--bundle", action="store_true",
                     help="also emit a signed, schema-valid Peakstone result bundle (bundle.json) "
                          "next to the report — the reproducible, submittable artifact.")
+    ap.add_argument("--stream-output", action="store_true",
+                    help="stream live model generation to stdout (token deltas, control-prefixed) so "
+                         "the dashboard can show what the model is producing as it solves each task.")
     # planner evaluation (decoupled two-phase: gen plans with planner served, then exec with
     # the fixed coder served). See serve/planner_eval.sh for orchestration.
     ap.add_argument("--gen-plans", metavar="PLANNER",
@@ -335,6 +350,8 @@ def main(argv=None):
                 print(f"!! {model} endpoint not reachable; is serve.sh {model} running?",
                       file=sys.stderr)
                 continue
+            if args.stream_output:
+                client.on_delta = _emit_gen   # live token stream for the dashboard
             model_vram = _gpu_mem_used()  # footprint of the one loaded model
 
         caps = model_capabilities(model)   # gated axes (tools/agentic) this model can attempt

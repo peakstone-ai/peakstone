@@ -27,6 +27,9 @@ class LLMClient:
     def __init__(self, base_url: str, api_key: str = ""):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
+        # when set (callable taking a text delta), chat() streams and reports generation live;
+        # the runner wires this up under --stream-output so the dashboard can show tokens as they land.
+        self.on_delta = None
 
     def chat(
         self,
@@ -35,7 +38,11 @@ class LLMClient:
         temperature: float = 0.2,
         max_tokens: int = 4096,
         timeout: int = 600,
+        on_delta=None,
     ) -> ChatResult:
+        on_delta = on_delta or self.on_delta
+        if on_delta is not None:
+            return self._chat_stream(model, messages, temperature, max_tokens, timeout, on_delta)
         url = f"{self.base_url}/v1/chat/completions"
         payload = {
             "model": model,
@@ -76,6 +83,62 @@ class LLMClient:
             latency_s=round(dt, 2),
             tok_per_s=round(tps, 1),
         )
+
+    def _chat_stream(self, model, messages, temperature, max_tokens, timeout, on_delta) -> ChatResult:
+        """SSE streaming path: same result as chat(), but each content/reasoning delta is forwarded to
+        on_delta as it arrives (batched ~48 chars to keep the consumer light). Used for live output."""
+        url = f"{self.base_url}/v1/chat/completions"
+        payload = {"model": model, "messages": messages, "temperature": temperature,
+                   "max_tokens": max_tokens, "stream": True, "stream_options": {"include_usage": True}}
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST")
+        text_parts, reason_parts, usage, pending = [], [], {}, []
+
+        def flush():
+            if pending:
+                on_delta("".join(pending))
+                pending.clear()
+
+        t0 = time.time()
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                for raw in resp:
+                    line = raw.decode("utf-8", "replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    body = line[5:].strip()
+                    if body == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(body)
+                    except ValueError:
+                        continue
+                    if chunk.get("usage"):
+                        usage = chunk["usage"]
+                    delta = ((chunk.get("choices") or [{}])[0]).get("delta") or {}
+                    piece = (delta.get("content") or "") + (delta.get("reasoning_content") or "")
+                    if delta.get("content"):
+                        text_parts.append(delta["content"])
+                    if delta.get("reasoning_content"):
+                        reason_parts.append(delta["reasoning_content"])
+                    if piece:
+                        pending.append(piece)
+                        if sum(len(p) for p in pending) >= 48 or "\n" in piece:
+                            flush()
+        except urllib.error.HTTPError as e:
+            return ChatResult(text="", error=f"HTTP {e.code}: {e.read().decode()[:500]}")
+        except Exception as e:  # noqa: BLE001
+            return ChatResult(text="", error=f"{type(e).__name__}: {e}")
+        flush()
+        dt = time.time() - t0
+        text, reasoning = "".join(text_parts), "".join(reason_parts)
+        ct = int(usage.get("completion_tokens", 0))
+        tps = (ct / dt) if (dt > 0 and ct) else 0.0
+        return ChatResult(text=text, reasoning=reasoning,
+                          prompt_tokens=int(usage.get("prompt_tokens", 0)), completion_tokens=ct,
+                          latency_s=round(dt, 2), tok_per_s=round(tps, 1))
 
     def chat_tools(
         self,

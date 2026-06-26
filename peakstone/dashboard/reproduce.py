@@ -85,7 +85,8 @@ def bench(name: str, ids: list[str] | None = None, *, level: str | None = None,
     out = Path(out_dir) if out_dir else (REPO / "results" / f"repro-{name}")
     out.mkdir(parents=True, exist_ok=True)
     # -u + PYTHONUNBUFFERED so the child flushes each progress line as it happens (live streaming).
-    cmd = ["python", "-u", "-m", "peakstone.engine.runner", "--models", name, "--bundle", "--out", str(out)]
+    cmd = ["python", "-u", "-m", "peakstone.engine.runner", "--models", name, "--bundle",
+           "--stream-output", "--out", str(out)]
     if level:
         # the runner resolves the level's selection + settings (judge/agent/prebuilt); stream-prune
         # so prebuilt image disk stays bounded.

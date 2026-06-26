@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from textual import work
 from textual.app import App, ComposeResult
-from textual.containers import Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Header, Input, ProgressBar, RichLog, Static, Tree
 
@@ -31,6 +31,10 @@ def _bar(used: int, total: int, width: int = 22) -> str:
 def _fmt(v, fmt: str = "{:.2f}") -> str:
     return fmt.format(v) if isinstance(v, (int, float)) else "—"
 
+
+# Live-generation stream protocol — must match peakstone.engine.runner (GEN_MARK / GEN_NL).
+GEN_MARK = "\x01"
+GEN_NL = "\x02"
 
 # Render the runner's per-challenge progress markers as checkmarks in the live run log.
 _PROGRESS_MARKS = [("  → solving", "  [dim]⟳[/]"), ("  ok ", "  [green]✓[/] "),
@@ -193,6 +197,8 @@ class ReproduceScreen(ModalScreen):
     ReproduceScreen { align: center middle; }
     #repro { width: 92%; height: 90%; border: thick $accent; background: $surface; padding: 1; }
     #repro-log { height: 1fr; border: round $primary; }
+    #repro-gen-wrap { height: 40%; border: round $secondary; margin-top: 1; }
+    #repro-gen { width: 1fr; }
     #repro-result { height: auto; padding-top: 1; }
     """
     BINDINGS = [("escape", "dismiss", "Close"), ("s", "submit", "Submit")]
@@ -207,6 +213,8 @@ class ReproduceScreen(ModalScreen):
         self.challenge_ids = challenge_ids or REPRODUCE_IDS
         self.free_procs = free_procs or []   # llama-servers to free before serving (pre-flight)
         self._result: reproduce.ReproduceResult | None = None
+        self._gen_buf = ""       # accumulated live model output for the current challenge
+        self._gen_ch = ""        # the challenge currently being solved (from the runner's progress)
 
     def compose(self) -> ComposeResult:
         scope = f"level {self.level}" if self.level else f"{len(self.challenge_ids)} peakstones"
@@ -214,6 +222,8 @@ class ReproduceScreen(ModalScreen):
             yield Static(f"[b]Run[/b] {self.model}  ·  {scope}  ·  "
                          f"published {_fmt(self.published_tps, '{:.0f}')} tok/s", id="repro-title")
             yield RichLog(id="repro-log", wrap=True, max_lines=300)
+            with VerticalScroll(id="repro-gen-wrap"):
+                yield Static("[dim]model output appears here as it solves each task[/]", id="repro-gen")
             yield Static("running… (Esc to close)", id="repro-result")
 
     def on_mount(self) -> None:
@@ -221,10 +231,8 @@ class ReproduceScreen(ModalScreen):
 
     @work(thread=True, exclusive=True)
     def run_reproduce(self) -> None:
-        log = self.query_one("#repro-log", RichLog)
-
         def emit(s: str) -> None:
-            self.app.call_from_thread(log.write, _pretty_progress(s))
+            self.app.call_from_thread(self._on_line, s)
 
         if self.free_procs:
             emit(f"freeing GPU: stopping {len(self.free_procs)} llama-server process(es)…")
@@ -234,6 +242,25 @@ class ReproduceScreen(ModalScreen):
         history.append({"model": res.model, "ok": res.ok, "your_tps": res.your_tps,
                         "published_tps": res.published_tps, "code_score": res.code_score, "note": res.note})
         self.app.call_from_thread(self._show, res)
+
+    def _on_line(self, s: str) -> None:
+        """Route a streamed line: generation deltas (control-prefixed) to the output panel, everything
+        else to the progress log. A new 'solving' line resets the output panel to the new challenge."""
+        if s.startswith(GEN_MARK):
+            self._gen_buf += s[len(GEN_MARK):].replace(GEN_NL, "\n")
+            self._gen_buf = self._gen_buf[-8000:]
+            self._render_gen()
+            return
+        if "→ solving" in s:
+            self._gen_ch = s.split("→ solving")[0].split("|")[-1].strip()
+            self._gen_buf = ""
+            self._render_gen()
+        self.query_one("#repro-log", RichLog).write(_pretty_progress(s))
+
+    def _render_gen(self) -> None:
+        head = f"[b]solving[/] {self._gen_ch}" if self._gen_ch else "[dim]model output[/]"
+        self.query_one("#repro-gen", Static).update(f"{head}\n{self._gen_buf}")
+        self.query_one("#repro-gen-wrap", VerticalScroll).scroll_end(animate=False)
 
     def _show(self, res: "reproduce.ReproduceResult") -> None:
         self._result = res
