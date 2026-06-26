@@ -154,6 +154,7 @@ def _submitter_handle(db, sub: models.Submission) -> str | None:
 def _run_info(db, sub: models.Submission, art: models.ModelArtifact) -> dict:
     env = sub.env or {}
     return {"artifact": art.artifact, "hf_repo": art.hf_repo,
+            "gpu": env.get("gpu"), "cpu": env.get("cpu"),                        # hardware it ran on
             "vram_gb": sub.vram_gb, "ram_gb": env.get("ram_gb"),                 # machine totals
             "vram_used_gb": env.get("vram_used_gb"), "ram_used_gb": env.get("ram_used_gb"),  # model footprint
             "context": sub.context, "engine": sub.engine, "trust_tier": sub.trust_tier,

@@ -97,6 +97,7 @@ def test_coverage_and_sol_per_s(client):
     assert row["sol_per_s"] == 0.5                  # throughput over total model time
     assert row["run"]["vram_gb"] == 24 and "ram_gb" in row["run"]   # machine totals
     assert "vram_used_gb" in row["run"] and "ram_used_gb" in row["run"]   # model footprint exposed
+    assert row["run"]["gpu"] == "RTX 4090" and "cpu" in row["run"]        # hardware it ran on
     # sortable axis
     assert client.get("/leaderboard", params={"sort": "sol_per_s"}).status_code == 200
 

@@ -99,6 +99,30 @@ def _mem(vram, ram) -> str:
     return f"{v or r} GB" if (v or r) else "?"
 
 
+def _short_gpu(name: str | None) -> str:
+    return (name or "").replace("NVIDIA GeForce ", "").replace("NVIDIA ", "").strip()
+
+
+def _short_cpu(name: str | None) -> str:
+    s = name or ""
+    for junk in ("(R)", "(TM)", " CPU", " Processor"):
+        s = s.replace(junk, "")
+    s = re.sub(r"\s*\d+-Core", "", s)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _hw(run: dict) -> str:
+    """Hardware a run used: 'GPU VRAM · CPU RAM' for the scoreboard. Parts with no name are omitted."""
+    gpu, cpu = _short_gpu(run.get("gpu")), _short_cpu(run.get("cpu"))
+    vram, ram = run.get("vram_gb"), run.get("ram_gb")
+    parts = []
+    if gpu:
+        parts.append(f"{gpu} {vram:g}G" if isinstance(vram, (int, float)) else gpu)
+    if cpu:
+        parts.append(f"{cpu} {ram:g}G" if isinstance(ram, (int, float)) else cpu)
+    return " · ".join(parts)
+
+
 # Live-generation stream protocol — must match peakstone.engine.runner (GEN_MARK / GEN_NL).
 GEN_MARK = "\x01"
 GEN_NL = "\x02"
@@ -392,10 +416,12 @@ class Dashboard(App):
         n_total = r.get("n_total")
         cov = f"{n_total}/{self.corpus_total()}" if n_total else "—"
         mem = _mem(run.get("vram_used_gb") or run.get("vram_gb"), run.get("ram_used_gb") or run.get("ram_gb"))
+        hw = _hw(run)
         return (f"{run.get('artifact', '—'):14} c {_fmt(r.get('code_score'))} a {_fmt(r.get('agent_score'))} "
                 f"p {_fmt(r.get('planner_score'))}  {_fmt(r.get('tok_per_s'), '{:.0f}')} tps  "
-                f"{_fmt(r.get('sol_per_s'), '{:.2f}')} sol/s  {mem}  "
-                f"{(run.get('trust_tier') or '').replace('-', ' ')}  cov {cov}")
+                f"{_fmt(r.get('sol_per_s'), '{:.2f}')} sol/s  {mem} used  "
+                f"{(run.get('trust_tier') or '').replace('-', ' ')}  cov {cov}"
+                + (f"   [dim]{hw}[/]" if hw else ""))
 
     def _render(self, data: dict, max_vram: float | None) -> None:
         tree = self.query_one("#board", BoardTree)
@@ -412,9 +438,10 @@ class Dashboard(App):
         for rank, (fam, frows) in enumerate(fams.items(), 1):
             best = frows[0]
             repo = best.get("run", {}).get("hf_repo")
+            hw = _hw(best.get("run", {}))
             node = tree.root.add(
-                f"[b]{rank}. {fam}[/]   code {_fmt(best.get('code_score'))}   "
-                f"{len(frows)} quant(s)",
+                f"[b]{rank}. {fam}[/]   code {_fmt(best.get('code_score'))}   {len(frows)} quant(s)"
+                + (f"   [dim]{hw}[/]" if hw else ""),
                 data={"kind": "family", "family": fam, "repo": repo, "row": best})
             for r in frows:
                 node.add_leaf(self._quant_label(r),

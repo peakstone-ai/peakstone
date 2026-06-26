@@ -24,6 +24,7 @@ _FAKE = {"count": 2, "leaderboard": [
     {"rank": 1, "family": "qwen3-coder", "code_score": 0.93, "agent_score": None,
      "planner_score": None, "tok_per_s": 85.0, "sol_per_s": 0.5, "n_total": 50,
      "run": {"vram_gb": 24, "ram_gb": 64, "vram_used_gb": 24, "ram_used_gb": 26,
+             "gpu": "NVIDIA GeForce RTX 4090", "cpu": "AMD Ryzen 9 7950X 16-Core Processor",
              "trust_tier": "community-verified"}},                       # spilled to RAM
     {"rank": 2, "family": "phi-4-mini", "code_score": 0.42, "agent_score": None,
      "planner_score": None, "tok_per_s": 120.0, "sol_per_s": 1.2, "n_total": 12,
@@ -45,8 +46,13 @@ def test_helpers():
     assert _bar(2, 4).startswith("[") and "2/4" in _bar(2, 4)
     assert _bar(0, 0).endswith("0/0")          # no div-by-zero
     assert _fmt(0.126) == "0.13" and _fmt(None) == "—" and _fmt(85.0, "{:.0f}") == "85"
-    from peakstone.dashboard.app import _mem
+    from peakstone.dashboard.app import _mem, _hw, _short_gpu, _short_cpu
     assert _mem(24, 26) == "24/26 GB" and _mem(24, None) == "24 GB" and _mem(None, None) == "?"
+    assert _short_gpu("NVIDIA GeForce RTX 4090") == "RTX 4090"
+    assert _short_cpu("AMD Ryzen 9 7950X 16-Core Processor") == "AMD Ryzen 9 7950X"
+    assert _hw({"gpu": "NVIDIA GeForce RTX 4090", "vram_gb": 24,
+                "cpu": "Intel(R) Core(TM) i9-13900K", "ram_gb": 64}) == "RTX 4090 24G · Intel Core i9-13900K 64G"
+    assert _hw({}) == ""
 
 
 def test_app_renders_filtered_leaderboard(monkeypatch):
@@ -72,9 +78,10 @@ def test_app_renders_filtered_leaderboard(monkeypatch):
             fam_labels = [str(n.label) for n in tree.root.children]
             assert len(fam_labels) == 2                        # one node per model family
             assert any("qwen3-coder" in lbl for lbl in fam_labels)
-            # the model's quant run is nested under it with its metrics
+            # the model's quant run is nested under it with its metrics + hardware
             leaf = str(tree.root.children[0].children[0].label)
             assert "24/26 GB" in leaf and "50/1965" in leaf
+            assert "RTX 4090 24G" in leaf and "Ryzen 9 7950X 64G" in leaf   # hardware it ran on
             # cycling sort re-queries with the next axis
             await pilot.press("s")
             await app.workers.wait_for_complete()
