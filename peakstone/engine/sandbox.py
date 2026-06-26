@@ -47,6 +47,25 @@ def _gnu_time_bin() -> str | None:
 
 _TIME_BIN = _gnu_time_bin()
 
+
+def _net_isolate_prefix() -> list[str]:
+    """Argv prefix that runs a command in a fresh network namespace (no external network; loopback
+    brought up so 127.0.0.1 tests still work). Enforces the offline test policy: a solution that does
+    real I/O — e.g. a BigCodeBench task that wget/HTTP/FTPs past the test's mocks — fails in ~0s
+    instead of hanging to the timeout. Empty when unsupported (non-Linux, or user namespaces off)."""
+    if not shutil.which("unshare"):
+        return []
+    try:
+        probe = subprocess.run(["unshare", "-rn", "--", "true"], capture_output=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    if probe.returncode != 0:
+        return []
+    return ["unshare", "-rn", "--", "sh", "-c", 'ip link set lo up 2>/dev/null; exec "$@"', "_"]
+
+
+_NET_ISOLATE = _net_isolate_prefix()
+
 # the isolation mechanism run_tests actually implements. `sandbox="docker"` in config is NOT wired
 # into the test runner (only the env providers use real docker), so bundles must record the truth.
 SANDBOX_MECHANISM = "subprocess"
@@ -143,6 +162,7 @@ def _run(cmd: list[str], cwd: Path, timeout: int, env: dict) -> tuple[int, str, 
     import time
     t0 = time.time()
     timed_out = False
+    cmd = [*_NET_ISOLATE, *cmd]   # offline: real network I/O fails fast instead of hanging to timeout
     try:
         # start_new_session puts the child in its own process group so a timeout kills the WHOLE
         # tree (go/cargo/tsx spawn grandchildren that subprocess.run would otherwise orphan).

@@ -28,6 +28,22 @@ def test_capture_env_records_model_footprint():
     assert "vram_used_gb" not in bundle.capture_env({"name": "x"})      # old bundles: no used keys
 
 
+def test_run_applies_network_isolation(monkeypatch):
+    captured = {}
+
+    class FakeP:
+        returncode = 0
+
+        def communicate(self, timeout=None):
+            return ("", "")
+
+    monkeypatch.setattr(sandbox.subprocess, "Popen", lambda cmd, **kw: captured.update(cmd=cmd) or FakeP())
+    monkeypatch.setattr(sandbox, "_NET_ISOLATE", ["unshare", "-rn", "--", "sh", "-c", "X", "_"])
+    sandbox._run(["pytest", "-q"], Path("."), 10, {})
+    # the test command is wrapped in the no-network namespace prefix; the real cmd still trails it
+    assert captured["cmd"][:4] == ["unshare", "-rn", "--", "sh"] and captured["cmd"][-2:] == ["pytest", "-q"]
+
+
 def test_effective_sandbox_records_truth():
     # config may ask for 'docker' but the test runner only implements subprocess -> record the truth
     assert sandbox.effective_sandbox("docker") == "subprocess"
