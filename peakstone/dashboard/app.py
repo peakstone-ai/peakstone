@@ -218,7 +218,9 @@ class Dashboard(App):
         # set when the selection came from a level shortcut (1-5) — runs via --level so the level's
         # judge/agent/prebuilt settings apply; None for a hand-picked selection (plain id run).
         self.selected_level: str | None = None
-        self.run_ctx: int | None = None         # chosen context length for runs (None = model default)
+        # chosen context window, per model name; "" is the global default applied to models without
+        # their own override (None at any key = the model's native ctx).
+        self.ctx_overrides: dict[str, int | None] = {}
         # run manager: runs execute on an app-level worker (not the modal) so they survive leaving the
         # run view, and a second run while one is active is queued rather than started concurrently.
         self.run_queue: list[dict] = []
@@ -482,6 +484,11 @@ class Dashboard(App):
     def run_ids(self) -> list[str]:
         """Challenges to run: the user's Challenges-screen selection, else the quick default set."""
         return self.selected_ids or REPRODUCE_IDS
+
+    def ctx_for(self, name: str) -> int | None:
+        """The context window to serve `name` at: its own override, else the global default, else
+        None (the model's native ctx)."""
+        return self.ctx_overrides.get(name, self.ctx_overrides.get(""))
 
     def effective_ids(self) -> list[str]:
         """The challenge ids a run will actually cover: a selected level resolves to its set, else
@@ -1088,7 +1095,7 @@ def run_with_preflight(screen, name: str, *, challenge_ids=None, level=None, pub
     def launch(free_first: bool) -> None:
         procs = pf.freeable if (free_first and pf) else None
         started = app.start_run(name, published_tps=published_tps, challenge_ids=challenge_ids,
-                                level=level, free_procs=procs, ctx=app.run_ctx)
+                                level=level, free_procs=procs, ctx=app.ctx_for(name))
         if started:
             app.push_screen(ReproduceScreen())
 
@@ -1110,16 +1117,18 @@ class CtxScreen(ModalScreen):
     """
     BINDINGS = [("escape", "dismiss", "Close"), ("enter", "choose", "Select")]
 
-    def __init__(self, entry, current):
+    def __init__(self, entry, key, current):
         super().__init__()
         self.entry = entry            # the selected model's registry entry (None if unknown)
-        self.current = current        # app.run_ctx
+        self.key = key                # ctx_overrides key: the model name, or "" for the global default
+        self.current = current        # the override currently set for this key
         self._rows: list = []         # row index -> ctx value (None = default/native)
 
     def compose(self) -> ComposeResult:
         native = getattr(self.entry, "ctx", None) if self.entry else None
-        name = getattr(self.entry, "name", "model") if self.entry else "model"
-        head = f"[b]Context[/b] for {name}" + (f"  ·  native {_ctx_k(native)}" if native else "")
+        name = getattr(self.entry, "name", None) if self.entry else None
+        head = (f"[b]Context[/b] for {name}" if name else "[b]Context[/b] (default for all models)") \
+            + (f"  ·  native {_ctx_k(native)}" if native else "")
         with Vertical(id="ctx"):
             yield Static(head + "  ·  ⏎ select · Esc cancel")
             yield DataTable(id="ctx-tbl", cursor_type="row", zebra_stripes=True)
@@ -1166,7 +1175,7 @@ class CtxScreen(ModalScreen):
         t = self.query_one("#ctx-tbl", DataTable)
         if t.cursor_row is None or t.cursor_row >= len(self._rows):
             return
-        self.app.run_ctx = self._rows[t.cursor_row]   # None = default (native window)
+        self.app.ctx_overrides[self.key] = self._rows[t.cursor_row]   # per model ("" = global default)
         self.dismiss()
 
 
@@ -1186,7 +1195,10 @@ class ModelsScreen(ModalScreen):
     def _header(self) -> str:
         ids, lvl = self.app.run_ids(), self.app.selected_level
         scope = f"level [b]{lvl}[/]" if lvl else f"[b]{len(ids)}[/] peakstones"
-        ctx = f"[b]{_ctx_k(self.app.run_ctx)}[/]" if self.app.run_ctx else "[b]default[/]"
+        e = self._target_entry()
+        cur = self.app.ctx_for(e.name) if e else self.app.ctx_overrides.get("")
+        who = e.name if e else "default"
+        ctx = f"[b]{_ctx_k(cur)}[/] ({who})" if cur else f"[b]default[/] ({who})"
         return (f"[b]Models[/b] — will run {scope} @ ctx {ctx}  ·  ⏎ expand · download · run  ·  r run  "
                 "·  k ctx  ·  v quants  ·  l levels  ·  a add  ·  u queue  ·  Esc close")
 
@@ -1195,10 +1207,18 @@ class ModelsScreen(ModalScreen):
             yield Static(self._header(), id="models-hdr")
             yield ModelTree("models", id="models-tree")
 
+    def _refresh_header(self) -> None:
+        self.query_one("#models-hdr", Static).update(self._header())
+
+    def on_tree_node_highlighted(self, _ev) -> None:
+        self._refresh_header()          # the ctx shown follows the model under the cursor
+
     def action_ctx(self) -> None:
+        e = self._target_entry()
+        key = e.name if e else ""
         self.app.push_screen(
-            CtxScreen(self._target_entry(), self.app.run_ctx),
-            lambda _=None: self.query_one("#models-hdr", Static).update(self._header()))
+            CtxScreen(e, key, self.app.ctx_overrides.get(key)),
+            lambda _=None: self._refresh_header())
 
     def on_mount(self) -> None:
         tree = self.query_one("#models-tree", Tree)
@@ -1328,7 +1348,10 @@ class ModelsScreen(ModalScreen):
         node.set_label(self._family_label(d["f"], len(extra)))
 
     def _node_data(self) -> dict:
-        n = self.query_one("#models-tree", Tree).cursor_node
+        try:                                   # the header reads this during compose, before the tree mounts
+            n = self.query_one("#models-tree", Tree).cursor_node
+        except Exception:  # noqa: BLE001
+            return {}
         return (n.data if n else None) or {}
 
     def _target_entry(self):

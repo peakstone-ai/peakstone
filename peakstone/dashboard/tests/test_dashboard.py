@@ -608,7 +608,7 @@ def test_ctx_picker_caps_skips_and_selects():
         async with app.run_test() as pilot:
             app.selected_ids = ["lc-01-buried-routes"]          # a min_ctx=16384 long-context challenge
             entry = _m.ModelEntry("m", "r", "models/m/x.gguf", 8081, 32768, "")  # native 32K
-            scr = CtxScreen(entry, None)
+            scr = CtxScreen(entry, "m", None)                    # per-model key = "m"
             await app.push_screen(scr)
             await pilot.pause()
             t = app.screen.query_one("#ctx-tbl", DataTable)
@@ -618,13 +618,24 @@ def test_ctx_picker_caps_skips_and_selects():
             # the 8K option would skip the 16K long-context challenge; 32K skips none
             assert "skips 1" in str(t.get_row_at(2)[3])          # 8192 row
             assert "skips" not in str(t.get_row_at(4)[3])        # 32768 row
-            # selecting the 16K row sets run_ctx and closes
+            # selecting the 16K row sets this model's ctx and closes
             t.move_cursor(row=3)
             scr.action_choose()
             await pilot.pause()
-            assert app.run_ctx == 16384
+            assert app.ctx_for("m") == 16384 and app.ctx_overrides["m"] == 16384
 
     asyncio.run(scenario())
+
+
+def test_ctx_is_per_model():
+    from peakstone.dashboard.app import Dashboard
+    app = Dashboard("http://x")
+    app.ctx_overrides[""] = 8192            # global default
+    app.ctx_overrides["big-model"] = 131072  # per-model override
+    assert app.ctx_for("big-model") == 131072
+    assert app.ctx_for("other-model") == 8192   # falls back to the global default
+    del app.ctx_overrides[""]
+    assert app.ctx_for("other-model") is None   # no default -> native ctx
 
 
 def test_quant_label_shows_efficiency():
@@ -762,7 +773,7 @@ def test_run_ctx_selection_threads_through(monkeypatch):
             t.move_cursor(row=1)                                # [default, 4096, …] -> pick 4096
             app.screen.action_choose()
             await pilot.pause()
-            assert app.run_ctx == CTX_CHOICES[1]
+            assert app.ctx_for("m") == CTX_CHOICES[1]
             run_with_preflight(scr, "m")
             await app.workers.wait_for_complete()
             await pilot.pause()
