@@ -142,6 +142,17 @@ def test_leaderboard_prefers_most_coverage(client):
     assert row["n_total"] == 10 and row["code_score"] == 0.6   # the most-coverage run is shown, not the best score
 
 
+def test_run_results_endpoint(client):
+    ap, a = _newkey()
+    assert client.post("/submissions", json=_bundle("runres", [0.5, 1.0], 24, ap, a, "rr")).status_code == 201
+    bh = next(r for r in client.get("/leaderboard").json()["leaderboard"]
+              if r["family"] == "runres")["run"]["bundle_hash"]
+    res = client.get(f"/runs/{bh}").json()
+    chs = {r["challenge"] for r in res["results"]}
+    assert {"arch-0", "arch-1", "refuse-x"} <= chs              # per-challenge breakdown of the run
+    assert client.get("/runs/nope").status_code == 404
+
+
 def test_pubkey_swap_is_rejected(client):
     ap, a = _newkey()
     b = _bundle("pubkeyM", [0.5], 24, ap, a, "PK")

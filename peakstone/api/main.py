@@ -228,6 +228,19 @@ def leaderboard(db: Session = Depends(get_session), suite: str | None = None,
             "count": len(rows), "leaderboard": rows}
 
 
+@app.get("/runs/{bundle_hash}")
+def run_results(bundle_hash: str, db: Session = Depends(get_session)):
+    """Per-challenge results for one run (submission) — the breakdown behind a leaderboard row."""
+    sub = db.scalar(select(models.Submission).where(models.Submission.bundle_hash == bundle_hash))
+    if not sub:
+        raise HTTPException(404, "unknown run")
+    results = [{"challenge": r.challenge_id, "category": r.category, "verification": r.verification,
+                "final": r.final, "passed": r.passed, "total": r.total, "difficulty": r.difficulty}
+               for r in sub.results]
+    results.sort(key=lambda r: (r["category"] or "", r["challenge"]))
+    return {"bundle_hash": bundle_hash, "n": len(results), "results": results}
+
+
 @app.get("/models/{family}")
 def model_page(family: str, db: Session = Depends(get_session)):
     """Every run (no collapsing) for a model family — quants, contexts, hardware, trust tiers."""

@@ -96,6 +96,34 @@ def test_app_renders_filtered_leaderboard(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_board_quant_expands_to_results(monkeypatch):
+    from peakstone.dashboard.app import Dashboard, BoardTree
+    LB = {"count": 1, "leaderboard": [{"family": "qz", "code_score": 0.7, "tok_per_s": 80, "n_total": 2,
+          "run": {"artifact": "Q6_K", "bundle_hash": "bh1", "vram_gb": 24}}]}
+    monkeypatch.setattr(client, "get_leaderboard", lambda *a, **k: LB)
+    monkeypatch.setattr(client, "get_run", lambda url, bh, **k: {"results": [
+        {"challenge": "c1", "final": 1.0, "passed": 10, "total": 10, "category": "code"},
+        {"challenge": "c2", "final": 0.0, "passed": 0, "total": 10, "category": "code"}]})
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            t = app.query_one("#board", BoardTree)
+            fam = t.root.children[0]
+            fam.expand()
+            await pilot.pause()
+            quant = fam.children[0]
+            quant.expand()                                 # drill into the run's per-challenge results
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            leaves = [str(c.label) for c in quant.children]
+            assert any("c1" in lbl for lbl in leaves) and any("c2" in lbl for lbl in leaves)
+
+    asyncio.run(scenario())
+
+
 def test_registry_add_and_list(monkeypatch, tmp_path):
     from peakstone.dashboard import models
     toml = tmp_path / "serve" / "models.toml"

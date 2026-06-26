@@ -76,17 +76,8 @@ class ModelTree(NavTree):
 
 
 class BoardTree(NavTree):
-    """The leaderboard tree: models with their quant runs nested under. ⏎ expands/collapses a model
-    or reproduces a quant run; →/← navigate."""
-    BINDINGS = [Binding("enter", "activate", "Expand / reproduce")]
-
-    def action_activate(self) -> None:
-        node = self.cursor_node
-        d = (node.data if node else None) or {}
-        if d.get("kind") == "family":
-            node.collapse() if node.is_expanded else node.expand()
-        elif d.get("kind") == "quant":
-            self.app.action_reproduce()
+    """The leaderboard tree: model → quant run → per-challenge results. ⏎ (and →/←) drill in/out:
+    expand a model to its quant runs, a quant run to the tests it ran and how they scored."""
 
 
 def _mem(vram, ram) -> str:
@@ -173,7 +164,6 @@ class Dashboard(App):
         ("r", "refresh", "Refresh"),
         ("f", "toggle_fit", "Fit filter"),
         ("s", "cycle_sort", "Sort axis"),
-        ("enter", "reproduce", "Reproduce"),
         ("c", "challenges", "Peakstones"),
         ("v", "quants", "Quants"),
         ("m", "models", "Models"),
@@ -400,11 +390,40 @@ class Dashboard(App):
         """Challenges to run: the user's Challenges-screen selection, else the quick default set."""
         return self.selected_ids or REPRODUCE_IDS
 
-    def action_reproduce(self) -> None:
-        fam, _, row = self._cursor_family()
-        if fam:
-            run_with_preflight(self, fam, challenge_ids=self.run_ids(),
-                               published_tps=row.get("tok_per_s"))
+    def on_tree_node_expanded(self, ev) -> None:
+        d = ev.node.data or {}
+        if d.get("kind") == "quant" and not d.get("filled"):   # lazily load this run's per-challenge results
+            d["filled"] = True
+            self.load_run_results(ev.node, (d.get("row") or {}).get("run", {}).get("bundle_hash"))
+
+    @work(thread=True)
+    def load_run_results(self, node, bundle_hash) -> None:
+        if not bundle_hash:
+            self.call_from_thread(self._add_results, node, [])
+            return
+        try:
+            data = client.get_run(self.base_url, bundle_hash)
+        except client.APIError:
+            self.call_from_thread(self._add_results, node, None)
+            return
+        self.call_from_thread(self._add_results, node, data.get("results", []))
+
+    @staticmethod
+    def _result_leaf(r: dict) -> str:
+        final = r.get("final") or 0.0
+        mark = "[green]✓[/]" if final >= 0.999 else ("[red]✗[/]" if final == 0 else "[yellow]◐[/]")
+        pt = f"  {r['passed']}/{r['total']}" if r.get("total") else ""
+        cat = r.get("category") or r.get("verification") or ""
+        return f"{mark} {r.get('challenge', '?'):30} {final:.2f}{pt}  [dim]{cat}[/]"
+
+    def _add_results(self, node, results) -> None:
+        if results is None:
+            node.add_leaf("[red]could not load results[/]")
+        elif not results:
+            node.add_leaf("[dim](no per-challenge results)[/]")
+        else:
+            for r in results:
+                node.add_leaf(self._result_leaf(r))
 
     @work(thread=True, exclusive=True)
     def load_board(self) -> None:
@@ -436,7 +455,7 @@ class Dashboard(App):
         scope = f"fits ≤{max_vram:g} GB" if max_vram else "all hardware"
         sel = f"  ·  ▶ {len(self.selected_ids)} peakstones selected" if self.selected_ids else ""
         self.sub_title = (f"{self.base_url}  ·  {scope}  ·  sort: {self.SORTS[self.sort_i]}  ·  "
-                          f"⏎ expand/reproduce  v quants  c peakstones  m models  u queue{sel}")
+                          f"⏎ expand  v quants  c peakstones  m models  u queue{sel}")
         rows = data.get("leaderboard", [])
         self._board_rows = rows
         fams: dict[str, list] = {}
@@ -450,10 +469,10 @@ class Dashboard(App):
                 f"[b]{rank}. {fam}[/]   code {_fmt(best.get('code_score'))}   {len(frows)} quant(s)"
                 + (f"   [dim]{hw}[/]" if hw else ""),
                 data={"kind": "family", "family": fam, "repo": repo, "row": best})
-            for r in frows:
-                node.add_leaf(self._quant_label(r),
-                              data={"kind": "quant", "family": fam, "row": r,
-                                    "repo": r.get("run", {}).get("hf_repo")})
+            for r in frows:   # expandable: drill in to see the per-challenge results of that run
+                node.add(self._quant_label(r),
+                         data={"kind": "quant", "family": fam, "row": r, "filled": False,
+                               "repo": r.get("run", {}).get("hf_repo")})
         if not rows:
             tree.root.add_leaf("(no runs fit this filter)")
         if tree.root.children:
