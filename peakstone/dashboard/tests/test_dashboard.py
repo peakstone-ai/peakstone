@@ -760,6 +760,22 @@ def test_run_queues_when_active():
     asyncio.run(scenario())
 
 
+def test_download_queues_as_job():
+    from peakstone.dashboard.app import Dashboard, QueueScreen
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test():
+            app.run_active = True                                  # a job is already in progress
+            started = app.start_download("phi-q2")
+            assert started is False                               # download goes on the queue, not inline
+            spec = app.run_queue[0]
+            assert spec["name"] == "phi-q2" and spec["download_only"] is True
+            assert QueueScreen._scope(spec) == "⬇ download"       # shown as a download job in the queue
+
+    asyncio.run(scenario())
+
+
 def test_job_status_tracks_phase_and_progress():
     from peakstone.dashboard.app import Dashboard
 

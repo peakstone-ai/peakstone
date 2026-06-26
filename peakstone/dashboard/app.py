@@ -240,11 +240,11 @@ class Dashboard(App):
         return next((c.spec for c in self.corpus() if c.id == challenge_id), None)
 
     def start_run(self, name: str, *, published_tps=None, challenge_ids=None, level=None,
-                  free_procs=None, ctx=None) -> bool:
+                  free_procs=None, ctx=None, download_only=False) -> bool:
         """Queue a run. Returns True if it started immediately, False if it was queued behind an active
         run. Runs execute one at a time on _run_loop (one model on the GPU at a time)."""
         spec = {"name": name, "published_tps": published_tps, "challenge_ids": challenge_ids,
-                "level": level, "free_procs": free_procs, "ctx": ctx}
+                "level": level, "free_procs": free_procs, "ctx": ctx, "download_only": download_only}
         with self._run_lock:                 # append + active-check atomically vs the drain loop
             self.run_queue.append(spec)
             active = self.run_active
@@ -253,6 +253,11 @@ class Dashboard(App):
             return False
         self._run_loop()
         return True
+
+    def start_download(self, name: str) -> bool:
+        """Queue a download-only job (no serve/bench) — shares the run queue so it has the same
+        progress bar, cancel, and one-at-a-time ordering as runs."""
+        return self.start_run(name, download_only=True)
 
     @work(thread=True, exclusive=True, group="run")
     def _run_loop(self) -> None:
@@ -268,6 +273,15 @@ class Dashboard(App):
                 self._run_phase, self._run_done, self._run_total, self._run_t0 = "start", 0, 0, None
                 self._dl_done = self._dl_total = 0
             self.call_from_thread(self._viewer_reset)
+            if spec.get("download_only"):       # a queued download job — fetch weights, no serve/bench
+                res = reproduce.fetch(spec["name"], on_proc=self._run_procs.append,
+                                      on_dl_progress=self._dl_progress, log=self._run_emit)
+                if self._run_cancelled:
+                    res = reproduce.ReproduceResult(spec["name"], False, download=True, note="cancelled")
+                self._run_result = res
+                self.call_from_thread(self._viewer_show, res)
+                self.call_from_thread(self.notify, f"{spec['name']}: {res.note}")
+                continue
             if spec["free_procs"]:
                 self._run_emit(f"freeing GPU: stopping {len(spec['free_procs'])} llama-server process(es)…")
                 preflight.free(spec["free_procs"])
@@ -295,6 +309,8 @@ class Dashboard(App):
     def _dl_progress(self, done, total) -> None:
         with self._run_lock:
             self._dl_done, self._dl_total = done or 0, total or 0
+        if self._viewer is not None:          # drive the viewer's bar between log lines (~every 0.5s)
+            self.call_from_thread(self._viewer._update_stat)
 
     def _run_emit(self, line: str) -> None:
         self._run_log.append(line)
@@ -638,7 +654,7 @@ class ReproduceScreen(ModalScreen):
         ids = spec.get("challenge_ids") or REPRODUCE_IDS
         self._result = None
         self._gen_buf, self._gen_ch = "", ""
-        scope = f"level {level}" if level else f"{len(ids)} peakstones"
+        scope = "download" if spec.get("download_only") else (f"level {level}" if level else f"{len(ids)} peakstones")
         ctx = f"  ·  ctx {_ctx_k(spec.get('ctx'))}" if spec.get("ctx") else ""
         queued = f"  ·  {len(self.app.run_queue)} queued" if self.app.run_queue else ""
         self.query_one("#repro-title", Static).update(
@@ -665,6 +681,11 @@ class ReproduceScreen(ModalScreen):
 
     def _update_stat(self) -> None:
         p = self.app.run_progress()             # app owns the counters; the view just renders them
+        if p["phase"] == "download" and p["dl_total"]:
+            self.query_one("#repro-stat", Static).update(
+                f"[b]downloading[/]  {_bar(p['dl_done'], p['dl_total'])}  "
+                f"{p['dl_done'] / 1e9:.1f}/{p['dl_total'] / 1e9:.1f} GB")
+            return
         elapsed = (time.monotonic() - p["t0"]) if p["t0"] else 0.0
         rate = (p["done"] / elapsed) if elapsed > 0 else 0.0
         total = p["total"] or "?"
@@ -683,6 +704,10 @@ class ReproduceScreen(ModalScreen):
     def show_result(self, res: "reproduce.ReproduceResult") -> None:
         self._result = res
         out = self.query_one("#repro-result", Static)
+        if res.download:
+            out.update(f"[green b]downloaded ✓[/] — {res.note}" if res.ok
+                       else f"[red b]download failed[/] — {res.note}")
+            return
         if res.ok:
             ratio = f"  ([b]{res.tps_ratio}×[/b] published)" if res.tps_ratio else ""
             if not res.bundle:
@@ -857,6 +882,8 @@ class QueueScreen(ModalScreen):
 
     @staticmethod
     def _scope(spec: dict) -> str:
+        if spec.get("download_only"):
+            return "⬇ download"
         scope = f"level {spec['level']}" if spec.get("level") else \
                 f"{len(spec.get('challenge_ids') or REPRODUCE_IDS)} peakstones"
         e = models.load_registry().get(spec["name"])
@@ -1503,25 +1530,22 @@ class QuantScreen(ModalScreen):
         t = self.query_one("#q-tbl", DataTable)
         if t.cursor_row is None or t.cursor_row >= len(self._rows):
             return
-        self.download_quant(self._rows[t.cursor_row])
-
-    @work(thread=True, exclusive=True)
-    def download_quant(self, row: dict) -> None:
+        row = self._rows[t.cursor_row]
         if row["present"]:
-            self.app.call_from_thread(self.app.notify, f"{row['quant']} already downloaded")
+            self.notify(f"{row['quant']} already downloaded")
             return
         entry = row["entry"]
-        if entry is None:
+        if entry is None:                        # HF-only quant: register it so it can be served
             if not (row["repo"] and row["file"]):
-                self.app.call_from_thread(self.app.notify, "no HF source for this quant")
+                self.notify("no HF source for this quant")
                 return
             try:
                 entry = models.register_quant(self.family, row["repo"], row["file"], row["quant"])
             except Exception as ex:  # noqa: BLE001
-                self.app.call_from_thread(self.app.notify, f"register failed: {ex}")
+                self.notify(f"register failed: {ex}")
                 return
-        self.app.call_from_thread(self.app.notify, f"downloading {entry.name}…")
-        models.download(entry, lambda s: self.app.call_from_thread(self.app.notify, s, timeout=6))
+        started = self.app.start_download(entry.name)   # queue it like any other job (progress bar + cancel)
+        self.notify(f"downloading {entry.name}…" if started else f"queued download: {entry.name}")
         self.app.call_from_thread(self.load)
 
 

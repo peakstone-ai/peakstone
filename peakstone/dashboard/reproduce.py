@@ -33,6 +33,7 @@ class ReproduceResult:
     total: int = 0
     note: str = ""
     bundle: dict | None = None    # the signed bundle, for one-key submission to the leaderboard
+    download: bool = False         # this job only fetched weights (no serve/bench)
 
     @property
     def tps_ratio(self) -> float | None:
@@ -141,6 +142,20 @@ def stop(proc) -> None:
                 proc.kill()
             except OSError:
                 pass
+
+
+def fetch(name: str, *, on_proc=None, on_dl_progress=None, log=lambda s: None,
+          _download=models.download) -> ReproduceResult:
+    """Download a model's weights as a standalone queued job — no serve/bench. Used by the quant
+    menu so a download is just another job on the queue (with the same progress bar / cancel)."""
+    entry = models.load_registry().get(name)
+    if entry is None:
+        return ReproduceResult(name, False, download=True, note=f"{name} not in serve/models.toml — add it first")
+    if entry.present:
+        return ReproduceResult(name, True, download=True, note="already downloaded")
+    log(f"downloading {name}…")
+    ok = _download(entry, log, progress=on_dl_progress, on_proc=on_proc)
+    return ReproduceResult(name, bool(ok), download=True, note="downloaded" if ok else "download failed")
 
 
 def reproduce(name: str, *, challenge_ids: list[str] | None = None, level: str | None = None,
