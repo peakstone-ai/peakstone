@@ -245,7 +245,7 @@ def test_models_screen_run_opens_reproduce(monkeypatch):
             await pilot.pause()
             await app.push_screen(ModelsScreen())   # the real registry has models -> a selectable row
             await pilot.pause()
-            await pilot.press("enter")               # ⏎ runs the selected model (was r)
+            await pilot.press("r")                   # r runs the selected model
             await pilot.pause()
             assert isinstance(app.screen, ReproduceScreen)
             await app.workers.wait_for_complete()
@@ -404,6 +404,36 @@ def test_challenges_screen_manual_edit_clears_level(monkeypatch):
             await pilot.press("r")
             await pilot.pause()
             assert app.selected_level is None   # plain id run, not a level run
+
+    asyncio.run(scenario())
+
+
+def test_model_tree_enter_expands_then_downloads(monkeypatch):
+    from peakstone.dashboard import models
+    from peakstone.dashboard.app import Dashboard, ModelsScreen
+    from textual.widgets import Tree
+    entry = models.ModelEntry("m-q4", "org/r", "models/m/x-Q4_K_M.gguf", 8081, 32768, "", "fam")  # not present
+    monkeypatch.setattr(models, "load_registry", lambda: {"m-q4": entry})
+    monkeypatch.setattr(models, "available_quants", lambda repo, **k: [])
+    dl = []
+    monkeypatch.setattr(models, "download", lambda e, *a, **k: dl.append(e.name) or True)
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            await app.push_screen(ModelsScreen())
+            await pilot.pause()
+            t = app.screen.query_one("#models-tree", Tree)
+            fam = t.root.children[0]
+            assert not fam.is_expanded                 # families start collapsed
+            await pilot.press("enter")                 # ⏎ on a family -> expand
+            await pilot.pause()
+            assert fam.is_expanded
+            await pilot.press("down")                  # to the quant leaf (not downloaded)
+            await pilot.press("enter")                 # ⏎ on a not-present quant -> download it
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            assert dl == ["m-q4"]
 
     asyncio.run(scenario())
 

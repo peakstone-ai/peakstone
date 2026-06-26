@@ -62,11 +62,19 @@ class NavTree(Tree):
 
 
 class ModelTree(NavTree):
-    """The models picker tree: ⏎ runs (or queues) the selected model/quant; →/← still expand/collapse."""
-    BINDINGS = [Binding("enter", "run_cursor", "Run/queue")]
+    """The models picker tree. ⏎ is contextual: expand/collapse a family, download a quant that isn't
+    downloaded yet, or run one that is. (→/← still expand/collapse; r always runs.)"""
+    BINDINGS = [Binding("enter", "activate", "Expand / download / run")]
 
-    def action_run_cursor(self) -> None:
-        self.screen.action_run()
+    def action_activate(self) -> None:
+        node = self.cursor_node
+        d = (node.data if node else None) or {}
+        if d.get("kind") == "family":
+            node.collapse() if node.is_expanded else node.expand()
+        elif d.get("kind") == "registry":
+            self.screen.action_run() if d["entry"].present else self.screen.action_download()
+        elif d.get("kind") == "hf":
+            self.screen.action_download()
 
 
 def _mem(vram, ram) -> str:
@@ -720,15 +728,15 @@ class ModelsScreen(ModalScreen):
     #dl-bar { margin-top: 1; }
     """
     BINDINGS = [("escape", "dismiss", "Close"), ("a", "add", "Add"),
-                ("d", "download", "Download"), ("l", "levels", "Levels"), ("r", "run", "Run"),
+                ("l", "levels", "Levels"), ("r", "run", "Run"),
                 ("v", "quants", "Quants"), ("u", "queue", "Queue")]
 
     def compose(self) -> ComposeResult:
         ids, lvl = self.app.run_ids(), self.app.selected_level
         scope = f"level [b]{lvl}[/]" if lvl else f"[b]{len(ids)}[/] peakstones"
         with Vertical(id="models"):
-            yield Static(f"[b]Models[/b] — will run {scope}  ·  ⏎ run/queue  ·  → expand  ·  v quants  "
-                         "·  l levels  ·  d download  ·  a add  ·  u queue  ·  Esc close")
+            yield Static(f"[b]Models[/b] — will run {scope}  ·  ⏎ expand · download · run  ·  r run  "
+                         "·  v quants  ·  l levels  ·  a add  ·  u queue  ·  Esc close")
             yield ModelTree("models", id="models-tree")
             yield ProgressBar(id="dl-bar", show_eta=False)
 
@@ -818,8 +826,7 @@ class ModelsScreen(ModalScreen):
                                        "remote": f["remote"], "hf_done": False})
             for e in entries:
                 node.add_leaf(self._registry_label(e, max_vram), data={"kind": "registry", "entry": e})
-            if entries:
-                node.expand()      # local families: auto-expand so available quants are visible
+            # families start collapsed — expand (⏎ or →) to see quants; HF discovery runs on expand
         if tree.root.children:
             tree.cursor_line = 0
 
