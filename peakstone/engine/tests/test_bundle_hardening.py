@@ -6,6 +6,14 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from peakstone.engine import bundle, keys, sandbox
 
 
+def test_nominal_ram_gib():
+    from peakstone.engine.bundle import _nominal_ram_gib
+    assert _nominal_ram_gib(67_032_477_696) == 64        # 64 GiB machine (MemTotal 62.4 GiB) -> 64, not 67
+    assert _nominal_ram_gib(33_000_000_000) == 32        # ~30.7 GiB usable -> 32
+    assert _nominal_ram_gib(16 * 2**30) == 16
+    assert _nominal_ram_gib(8 * 2**30 - 400 * 2**20) == 8  # just under 8 GiB -> 8
+
+
 def test_capture_env_records_model_footprint():
     env = bundle.capture_env({"name": "RTX 4090"}, {"vram_mib": 24576, "ram_mib": 26624})
     assert env["vram_used_gb"] == 24.0 and env["ram_used_gb"] == 26.0   # measured model footprint

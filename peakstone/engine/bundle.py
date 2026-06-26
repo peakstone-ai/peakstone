@@ -141,6 +141,14 @@ def challenge_publication(challenges_dir: Path) -> dict[str, dict]:
 # --------------------------------------------------------------------------- #
 # environment + model identity
 # --------------------------------------------------------------------------- #
+def _nominal_ram_gib(total_bytes: int) -> int:
+    """Nominal installed RAM in GiB. MemTotal is reported in binary units and always a bit below the
+    installed size (firmware reserves a few hundred MB), so round the usable GiB UP to the next even
+    number — a 64 GiB machine reads 64, not the misleading 67 a decimal (/1e9) divide produces."""
+    import math
+    return math.ceil(total_bytes / 2**30 / 2) * 2
+
+
 def capture_env(gpu_meta: dict | None, mem_used: dict | None = None) -> dict:
     env: dict = {}
     gpu_meta = gpu_meta or {}
@@ -163,7 +171,7 @@ def capture_env(gpu_meta: dict | None, mem_used: dict | None = None) -> dict:
         pass
     env["cpu"] = cpu
     try:
-        env["ram_gb"] = round(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / 1e9, 1)
+        env["ram_gb"] = _nominal_ram_gib(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"))
     except Exception:  # noqa: BLE001
         pass
     # total GPU memory — the "fits in <=X GB VRAM" leaderboard facet keys on this. On Apple Silicon
