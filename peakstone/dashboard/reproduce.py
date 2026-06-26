@@ -79,7 +79,7 @@ def wait_healthy(port: int, *, timeout: float = 180, opener=urllib.request.urlop
 
 
 def bench(name: str, ids: list[str] | None = None, *, level: str | None = None,
-          out_dir: Path | None = None, log=lambda s: None, popen=subprocess.Popen) -> dict | None:
+          out_dir: Path | None = None, log=lambda s: None, popen=subprocess.Popen, on_proc=None) -> dict | None:
     """Run the engine over the selection, streaming the runner's per-challenge output line-by-line to
     `log` so the dashboard can show progress live (each challenge solving + its ✓/✗ result)."""
     out = Path(out_dir) if out_dir else (REPO / "results" / f"repro-{name}")
@@ -103,6 +103,8 @@ def bench(name: str, ids: list[str] | None = None, *, level: str | None = None,
     env = {**os.environ, "PYTHONUNBUFFERED": "1"}
     proc = popen(cmd, cwd=str(REPO), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                  text=True, bufsize=1, env=env, start_new_session=True)
+    if on_proc:
+        on_proc(proc)          # register so a cancel can kill the benchmark mid-run
     killer = threading.Timer(timeout, lambda: _kill(proc))   # hard cap even if the child goes silent
     killer.start()
     try:
@@ -134,7 +136,7 @@ def stop(proc) -> None:
 
 
 def reproduce(name: str, *, challenge_ids: list[str] | None = None, level: str | None = None,
-              published_tps: float | None = None,
+              published_tps: float | None = None, on_proc=None,
               log=lambda s: None, _serve=serve, _wait=wait_healthy, _bench=bench, _stop=stop,
               _download=models.download) -> ReproduceResult:
     entry = models.load_registry().get(name)
@@ -146,6 +148,8 @@ def reproduce(name: str, *, challenge_ids: list[str] | None = None, level: str |
             return ReproduceResult(name, False, published_tps=published_tps, note="download failed")
     log(f"serving {name} on :{entry.port} …")
     proc = _serve(name)
+    if on_proc:
+        on_proc(proc)          # register so the run can be cancelled (killed) mid-flight
     try:
         if not _wait(entry.port, proc=proc):
             died = proc is not None and getattr(proc, "poll", lambda: None)() is not None
@@ -159,7 +163,7 @@ def reproduce(name: str, *, challenge_ids: list[str] | None = None, level: str |
                 note = "model never became healthy in time (is llama-server installed / GPU free?)"
             return ReproduceResult(name, False, published_tps=published_tps, note=note)
         log(f"benchmarking ({'level ' + level if level else 'selection'}) …")
-        bundle = _bench(name, challenge_ids, level=level, log=log)
+        bundle = _bench(name, challenge_ids, level=level, log=log, on_proc=on_proc)
     finally:
         _stop(proc)
         log("stopped serving")

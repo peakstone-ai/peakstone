@@ -153,6 +153,8 @@ class Dashboard(App):
         self._run_result = None
         self._run_spec: dict | None = None
         self._viewer = None                    # the ReproduceScreen currently viewing the active run
+        self._run_procs: list = []             # serve + bench subprocesses of the active run (for cancel)
+        self._run_cancelled = False
 
     def start_run(self, name: str, *, published_tps=None, challenge_ids=None, level=None,
                   free_procs=None) -> bool:
@@ -172,13 +174,16 @@ class Dashboard(App):
             spec = self.run_queue.pop(0)
             self.run_active = True
             self._run_spec, self._run_log, self._run_result = spec, [], None
+            self._run_procs, self._run_cancelled = [], False
             self.call_from_thread(self._viewer_reset)
             if spec["free_procs"]:
                 self._run_emit(f"freeing GPU: stopping {len(spec['free_procs'])} llama-server process(es)…")
                 preflight.free(spec["free_procs"])
             res = reproduce.reproduce(spec["name"], challenge_ids=spec["challenge_ids"],
                                       level=spec["level"], published_tps=spec["published_tps"],
-                                      log=self._run_emit)
+                                      on_proc=self._run_procs.append, log=self._run_emit)
+            if self._run_cancelled:            # killed mid-run → record as cancelled, move to next
+                res = reproduce.ReproduceResult(spec["name"], False, note="cancelled")
             history.append({"model": res.model, "ok": res.ok, "your_tps": res.your_tps,
                             "published_tps": res.published_tps, "code_score": res.code_score, "note": res.note})
             self._run_result = res
@@ -197,6 +202,24 @@ class Dashboard(App):
     def _viewer_show(self, res) -> None:
         if self._viewer is not None:
             self._viewer.show_result(res)
+
+    def cancel_active(self) -> bool:
+        """Stop the active run: kill its serve + benchmark subprocesses so the run loop unblocks and
+        advances to the next queued run. Returns False if nothing is running."""
+        if not self.run_active:
+            self.notify("no active run")
+            return False
+        self._run_cancelled = True
+        for p in list(self._run_procs):
+            reproduce.stop(p)
+        self.notify("cancelling active run…")
+        return True
+
+    def shutdown_runs(self) -> None:
+        """Kill any run subprocesses — called on quit so nothing is left orphaned."""
+        self._run_cancelled = True
+        for p in list(self._run_procs):
+            reproduce.stop(p)
 
     # queue management (the QueueScreen drives these) ----------------------------------------------
     def cancel_queued(self, i: int):
@@ -242,6 +265,13 @@ class Dashboard(App):
 
     def action_queue(self) -> None:
         self.push_screen(QueueScreen())
+
+    def action_quit(self) -> None:
+        """Warn before quitting while runs are active/queued — quitting kills the run subprocesses."""
+        if self.run_active or self.run_queue:
+            self.push_screen(ConfirmQuitScreen())
+        else:
+            self.exit()
 
     def action_history(self) -> None:
         self.push_screen(HistoryScreen())
@@ -325,7 +355,10 @@ class ReproduceScreen(ModalScreen):
     #repro-gen { width: 1fr; }
     #repro-result { height: auto; padding-top: 1; }
     """
-    BINDINGS = [("escape", "dismiss", "Close"), ("s", "submit", "Submit")]
+    BINDINGS = [("escape", "dismiss", "Close"), ("s", "submit", "Submit"), ("x", "cancel_run", "Cancel run")]
+
+    def action_cancel_run(self) -> None:
+        self.app.cancel_active()
 
     def __init__(self):
         super().__init__()
@@ -343,7 +376,7 @@ class ReproduceScreen(ModalScreen):
             yield RichLog(id="repro-log", wrap=True, max_lines=300)
             with VerticalScroll(id="repro-gen-wrap"):
                 yield Static("[dim]model output appears here as it solves each task[/]", id="repro-gen")
-            yield Static("running… (Esc to close — the run keeps going)", id="repro-result")
+            yield Static("running… (Esc close, run continues · x cancel run)", id="repro-result")
 
     def on_mount(self) -> None:
         self.app._viewer = self                 # the active run streams into this view
@@ -372,7 +405,7 @@ class ReproduceScreen(ModalScreen):
             f"{_fmt(spec.get('published_tps'), '{:.0f}')} tok/s{queued}")
         self.query_one("#repro-log", RichLog).clear()
         self.query_one("#repro-gen", Static).update("[dim]model output appears here as it solves each task[/]")
-        self.query_one("#repro-result", Static).update("running… (Esc to close — the run keeps going)")
+        self.query_one("#repro-result", Static).update("running… (Esc close, run continues · x cancel run)")
 
     def _on_line(self, s: str) -> None:
         """Route a streamed line: generation deltas (control-prefixed) to the output panel, everything
@@ -438,6 +471,29 @@ class ReproduceScreen(ModalScreen):
             return
         msg = {201: "submitted ✓", 409: "already submitted", 400: "rejected"}.get(status, f"status {status}")
         self.app.call_from_thread(self.app.notify, f"{msg}")
+
+
+class ConfirmQuitScreen(ModalScreen):
+    """Confirm quitting while runs are active/queued (quitting kills the run subprocesses)."""
+    CSS = """
+    ConfirmQuitScreen { align: center middle; }
+    #confirmquit { width: 64; height: auto; border: thick $warning; background: $surface; padding: 1; }
+    """
+    BINDINGS = [("escape", "dismiss", "Cancel"), ("y", "confirm", "Quit"), ("q", "confirm", "Quit")]
+
+    def compose(self) -> ComposeResult:
+        parts = []
+        if self.app.run_active:
+            parts.append("1 active run")
+        if self.app.run_queue:
+            parts.append(f"{len(self.app.run_queue)} queued")
+        with Vertical(id="confirmquit"):
+            yield Static(f"[b yellow]Jobs still running[/] ({' · '.join(parts)})\n"
+                         "Quitting will stop them.  [b]y[/] quit  ·  [b]Esc[/] cancel")
+
+    def action_confirm(self) -> None:
+        self.app.shutdown_runs()
+        self.app.exit()
 
 
 class QueueScreen(ModalScreen):
@@ -516,7 +572,8 @@ class QueueScreen(ModalScreen):
                 self.notify(f"cancelled {spec['name']}")
             self.refill()
         elif kind == "active":
-            self.notify("the active run can't be cancelled here — close its view to stop watching")
+            self.app.cancel_active()          # kill its subprocesses; the run loop advances to the next
+            self.refill()
 
     def action_clear(self) -> None:
         if self.app.run_queue:

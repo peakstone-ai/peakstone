@@ -599,6 +599,51 @@ def test_run_queues_when_active():
     asyncio.run(scenario())
 
 
+def test_cancel_active_kills_and_marks(monkeypatch):
+    from peakstone.dashboard.app import Dashboard
+    from peakstone.dashboard import reproduce as R
+    killed = []
+    monkeypatch.setattr(R, "stop", killed.append)
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test():
+            assert app.cancel_active() is False               # nothing running
+            app.run_active = True
+            app._run_procs = ["serve", "bench"]
+            assert app.cancel_active() is True
+            assert app._run_cancelled and killed == ["serve", "bench"]   # both subprocesses killed
+
+    asyncio.run(scenario())
+
+
+def test_quit_warns_only_when_jobs(monkeypatch):
+    from peakstone.dashboard.app import Dashboard, ConfirmQuitScreen
+    from peakstone.dashboard import reproduce as R
+    killed = []
+    monkeypatch.setattr(R, "stop", killed.append)
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            exited = []
+            monkeypatch.setattr(app, "exit", lambda *a, **k: exited.append(True))
+            app.action_quit()                                 # no jobs -> quits immediately
+            await pilot.pause()
+            assert exited == [True] and not isinstance(app.screen, ConfirmQuitScreen)
+
+            app.run_active = True
+            app._run_procs = ["p"]
+            app.action_quit()                                 # jobs -> confirm first
+            await pilot.pause()
+            assert isinstance(app.screen, ConfirmQuitScreen)
+            await pilot.press("y")                            # confirm -> kill subprocesses + exit
+            await pilot.pause()
+            assert killed == ["p"] and exited == [True, True]
+
+    asyncio.run(scenario())
+
+
 def test_queue_screen_manage():
     from peakstone.dashboard.app import Dashboard, QueueScreen
     from textual.widgets import DataTable
