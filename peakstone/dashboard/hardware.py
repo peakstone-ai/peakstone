@@ -29,6 +29,19 @@ class GPU:
 
 
 @dataclass
+class GpuProc:
+    """A process holding accelerator memory that we could free (always one of our own llama-servers).
+    `used_mib` is GPU memory on NVIDIA, resident set size on Apple Silicon (unified memory)."""
+    pid: int
+    used_mib: int
+    name: str = "llama-server"
+
+    @property
+    def used_gb(self) -> float:
+        return round(self.used_mib / 1024, 1)
+
+
+@dataclass
 class HardwareSnapshot:
     gpus: list[GPU]
     cpu_pct: float
@@ -194,3 +207,76 @@ def snapshot() -> HardwareSnapshot:
     return HardwareSnapshot(gpus=query_gpus(), cpu_pct=cpu_percent(),
                             ram_total_mib=total, ram_used_mib=max(0, total - avail),
                             cores=os.cpu_count() or 0)
+
+
+# --------------------------------------------------------------------------- #
+# pre-flight VRAM: how much accelerator memory is free, and which of our servers hold it
+# --------------------------------------------------------------------------- #
+def gpu_free_gb() -> float:
+    """Free accelerator memory budget for loading a model. On NVIDIA that's the freest GPU's spare
+    VRAM; on Apple Silicon (unified memory) it's free system RAM, since weights live in RAM."""
+    snap = snapshot()
+    if _MAC:
+        return round((snap.ram_total_mib - snap.ram_used_mib) / 1024, 1)
+    g = max(snap.gpus, key=lambda x: x.mem_total_mib - x.mem_used_mib, default=None)
+    return round((g.mem_total_mib - g.mem_used_mib) / 1024, 1) if g else 0.0
+
+
+def _proc_is_llama(pid: int) -> bool:
+    try:
+        return "llama-server" in open(f"/proc/{pid}/cmdline", "rb").read().decode("utf-8", "replace")
+    except OSError:
+        return False
+
+
+def _nvidia_llama_procs() -> list[GpuProc]:
+    if not shutil.which("nvidia-smi"):
+        return []
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-compute-apps=pid,used_memory",
+                              "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    procs = []
+    for line in out.stdout.strip().splitlines():
+        p = [x.strip() for x in line.split(",")]
+        if len(p) < 2:
+            continue
+        try:
+            pid, mib = int(p[0]), int(p[1])
+        except ValueError:
+            continue
+        if _proc_is_llama(pid):   # only ever offer to free our own servers, never arbitrary GPU apps
+            procs.append(GpuProc(pid, mib))
+    return procs
+
+
+def _rss_mib(pid: int) -> int:
+    try:
+        out = subprocess.run(["ps", "-o", "rss=", "-p", str(pid)], capture_output=True, text=True, timeout=3)
+        return int(out.stdout.strip() or 0) // 1024
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return 0
+
+
+def _mac_llama_procs() -> list[GpuProc]:
+    try:
+        out = subprocess.run(["pgrep", "-f", "llama-server"], capture_output=True, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    procs = []
+    for tok in out.stdout.split():
+        try:
+            pid = int(tok)
+        except ValueError:
+            continue
+        if pid == os.getpid():
+            continue
+        procs.append(GpuProc(pid, _rss_mib(pid)))   # unified memory: RSS ≈ the budget freed
+    return procs
+
+
+def freeable_gpu_procs() -> list[GpuProc]:
+    """Our llama-server processes currently holding accelerator memory — the ones a pre-flight check
+    can offer to kill to make room. Empty when none are running."""
+    return _mac_llama_procs() if _MAC else _nvidia_llama_procs()

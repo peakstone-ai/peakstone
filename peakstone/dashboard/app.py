@@ -16,7 +16,7 @@ from peakstone.engine import estimate as eng_estimate
 from peakstone.engine import levels as eng_levels
 
 from . import challenges as ch_browse
-from . import client, hardware, history, models, reproduce
+from . import client, hardware, history, models, preflight, reproduce
 
 # a short, fast challenge set for a reproduce run — enough to measure tok/s + a code score
 REPRODUCE_IDS = ["py-02-csv-groupby", "py-05-calc", "py-01-fizzbuzz"]
@@ -186,13 +186,14 @@ class ReproduceScreen(ModalScreen):
     BINDINGS = [("escape", "dismiss", "Close"), ("s", "submit", "Submit")]
 
     def __init__(self, model: str, published_tps: float | None, base_url: str,
-                 challenge_ids: list[str] | None = None, level: str | None = None):
+                 challenge_ids: list[str] | None = None, level: str | None = None, free_procs=None):
         super().__init__()
         self.model = model
         self.published_tps = published_tps
         self.base_url = base_url
         self.level = level
         self.challenge_ids = challenge_ids or REPRODUCE_IDS
+        self.free_procs = free_procs or []   # llama-servers to free before serving (pre-flight)
         self._result: reproduce.ReproduceResult | None = None
 
     def compose(self) -> ComposeResult:
@@ -213,6 +214,9 @@ class ReproduceScreen(ModalScreen):
         def emit(s: str) -> None:
             self.app.call_from_thread(log.write, s)
 
+        if self.free_procs:
+            emit(f"freeing GPU: stopping {len(self.free_procs)} llama-server process(es)…")
+            preflight.free(self.free_procs)
         res = reproduce.reproduce(self.model, challenge_ids=self.challenge_ids, level=self.level,
                                   published_tps=self.published_tps, log=emit)
         history.append({"model": res.model, "ok": res.ok, "your_tps": res.your_tps,
@@ -273,6 +277,71 @@ class AddModelScreen(ModalScreen):
             self.dismiss(True)
         except ValueError as e:
             self.query_one("#addmodel-err", Static).update(f"[red]{e}[/]")
+
+
+class PreflightScreen(ModalScreen):
+    """Shown before serving when free accelerator memory looks too small for the model. Offers to free
+    our own llama-server processes (Linux: GPU VRAM; macOS: unified RAM) or run anyway."""
+    CSS = """
+    PreflightScreen { align: center middle; }
+    #preflight { width: 76; height: auto; border: thick $warning; background: $surface; padding: 1; }
+    """
+
+    def __init__(self, model_name: str, pf: "preflight.Preflight", on_proceed):
+        super().__init__()
+        self.model_name = model_name
+        self.pf = pf
+        self._on_proceed = on_proceed   # on_proceed(free_first: bool)
+
+    def compose(self) -> ComposeResult:
+        pf = self.pf
+        lines = ["[b yellow]Memory looks tight[/]",
+                 f"{self.model_name} needs ~[b]{pf.need_gb}[/] GB · [b]{pf.free_gb}[/] GB free"]
+        if pf.freeable:
+            lines.append(f"\n{len(pf.freeable)} llama-server process(es) holding {pf.freeable_gb} GB:")
+            lines += [f"  · pid {p.pid} ({p.name})  {p.used_gb} GB" for p in pf.freeable]
+            verdict = "→ freeing them should make room." if pf.fits_after_free \
+                else "→ may still not fit even after freeing."
+            lines.append(verdict)
+            lines.append("\n[b]f[/] free & run   ·   [b]r[/] run anyway   ·   [b]Esc[/] cancel")
+        else:
+            lines.append("\nNo llama-servers of ours to free — close other GPU apps, or:")
+            lines.append("[b]r[/] run anyway   ·   [b]Esc[/] cancel")
+        with Vertical(id="preflight"):
+            yield Static("\n".join(lines))
+
+    BINDINGS = [("escape", "cancel", "Cancel"), ("f", "free_run", "Free & run"),
+                ("r", "run_anyway", "Run anyway")]
+
+    def action_free_run(self) -> None:
+        if self.pf.freeable:
+            self.dismiss()
+            self._on_proceed(True)
+
+    def action_run_anyway(self) -> None:
+        self.dismiss()
+        self._on_proceed(False)
+
+    def action_cancel(self) -> None:
+        self.dismiss()
+
+
+def run_with_preflight(screen, name: str, *, challenge_ids=None, level=None) -> None:
+    """Launch a reproduce run, first checking free accelerator memory. If a model won't fit, prompt to
+    free our llama-servers (or run anyway) before opening the run; otherwise launch straight away."""
+    app = screen.app
+    entry = models.load_registry().get(name)
+    pf = preflight.check(entry) if entry else None
+
+    def launch(free_first: bool) -> None:
+        procs = pf.freeable if (free_first and pf) else None
+        app.push_screen(ReproduceScreen(name, None, app.base_url, challenge_ids=challenge_ids,
+                                        level=level, free_procs=procs))
+
+    if pf and not pf.fits_now:
+        app.push_screen(PreflightScreen(name, pf, on_proceed=launch))
+    else:
+        launch(False)
 
 
 class ModelsScreen(ModalScreen):
@@ -394,9 +463,7 @@ class ModelsScreen(ModalScreen):
         if not e:
             self.notify("pick a registered quant — press d to download an HF-only quant first")
             return
-        self.app.push_screen(ReproduceScreen(e.name, None, self.app.base_url,
-                                             challenge_ids=self.app.run_ids(),
-                                             level=self.app.selected_level))
+        run_with_preflight(self, e.name, challenge_ids=self.app.run_ids(), level=self.app.selected_level)
 
     def action_levels(self) -> None:
         e = self._target_entry()
@@ -737,7 +804,7 @@ class LevelScreen(ModalScreen):
         name = self._selected()
         if name:
             self.dismiss()
-            self.app.push_screen(ReproduceScreen(self.model, None, self.base_url, level=name))
+            run_with_preflight(self, self.model, level=name)
 
 
 def main() -> None:

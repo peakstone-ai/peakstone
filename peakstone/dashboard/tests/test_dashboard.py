@@ -390,6 +390,70 @@ def test_register_quant(tmp_path, monkeypatch):
     assert again.name == "base-q4"
 
 
+def test_preflight_decision():
+    from peakstone.dashboard import preflight, hardware
+
+    class E:                       # stub entry (file size known)
+        size_gb, ctx = 3.0, 32768
+
+    assert preflight.vram_needed_gb(E()) == 4.3          # 3.0*1.1 + max(1, 1)
+    procs = [hardware.GpuProc(111, 22000)]
+    pf = preflight.check(E(), free_gb=2.0, procs=procs)
+    assert not pf.fits_now and pf.fits_after_free and pf.freeable_gb == 21.5
+    assert preflight.check(E(), free_gb=20.0, procs=[]).fits_now
+
+    class NoSize:                  # not downloaded yet -> can't check -> None (skip pre-flight)
+        size_gb, ctx = None, 32768
+    assert preflight.check(NoSize(), free_gb=20.0, procs=[]) is None
+
+
+def test_preflight_screen_actions():
+    from peakstone.dashboard import preflight, hardware
+    from peakstone.dashboard.app import Dashboard, PreflightScreen
+    pf = preflight.Preflight(free_gb=2.0, need_gb=4.3, freeable=[hardware.GpuProc(111, 22000)])
+    calls = []
+
+    async def scenario(key):
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            await app.push_screen(PreflightScreen("m", pf, on_proceed=calls.append))
+            await pilot.pause()
+            await pilot.press(key)
+            await pilot.pause()
+
+    asyncio.run(scenario("f"))
+    asyncio.run(scenario("r"))
+    assert calls == [True, False]   # f -> free first, r -> run anyway
+
+
+def test_run_with_preflight_routing(monkeypatch):
+    from peakstone.dashboard import preflight, models, history, hardware
+    from peakstone.dashboard import reproduce as R
+    from peakstone.dashboard.app import (Dashboard, ModelsScreen, PreflightScreen, ReproduceScreen,
+                                         run_with_preflight)
+    entry = models.ModelEntry("m", "org/r", "models/m/x.gguf", 8081, 32768, "")
+    monkeypatch.setattr(models, "load_registry", lambda: {"m": entry})
+    monkeypatch.setattr(R, "reproduce", lambda *a, **k: R.ReproduceResult("m", True, note="done"))
+    monkeypatch.setattr(history, "append", lambda e: None)
+
+    async def scenario(pf, expect):
+        monkeypatch.setattr(preflight, "check", lambda e: pf)
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            scr = ModelsScreen()
+            await app.push_screen(scr)
+            await pilot.pause()
+            run_with_preflight(scr, "m", challenge_ids=["a"], level=None)
+            await pilot.pause()
+            assert isinstance(app.screen, expect)
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+
+    tight = preflight.Preflight(2.0, 4.3, [hardware.GpuProc(111, 22000)])
+    asyncio.run(scenario(tight, PreflightScreen))       # won't fit -> prompt
+    asyncio.run(scenario(preflight.Preflight(20.0, 4.3, []), ReproduceScreen))  # fits -> straight to run
+
+
 def test_models_screen_shows_caps(monkeypatch):
     from peakstone.dashboard.app import Dashboard, ModelsScreen
     from textual.widgets import Tree
@@ -419,6 +483,7 @@ def test_level_screen_estimates_and_runs(monkeypatch):
         "gen_min": 10.0, "exec_min": 1.0, "download_gb": 0.0, "download_min": 0.0,
         "total_min": 11.0, "tps": 90, "mbps": 50, "unknowns": [], "settings": {}})
     monkeypatch.setattr(R, "reproduce", lambda model, **k: R.ReproduceResult(model, True, your_tps=80.0))
+    monkeypatch.setattr("peakstone.dashboard.preflight.check", lambda e: None)   # skip GPU pre-flight
 
     async def scenario():
         app = Dashboard("http://x")
