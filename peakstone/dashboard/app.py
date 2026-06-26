@@ -110,7 +110,8 @@ class Dashboard(App):
     def on_mount(self) -> None:
         self.title = "Peakstone"
         table = self.query_one(DataTable)
-        table.add_columns("#", "Model", "Code", "Agentic", "Planner", "TPS", "VRAM", "Trust")
+        table.add_columns("#", "Model", "Code", "Agentic", "Planner", "TPS", "sol/s",
+                          "VRAM", "Trust", "Coverage")
         self.load_board()
 
     def action_refresh(self) -> None:
@@ -179,13 +180,15 @@ class Dashboard(App):
         self._board_rows = rows
         for r in rows:
             run = r.get("run", {})
+            n_total = r.get("n_total")
             table.add_row(
                 str(r.get("rank", "")), r.get("family", ""),
                 _fmt(r.get("code_score")), _fmt(r.get("agent_score")), _fmt(r.get("planner_score")),
-                _fmt(r.get("tok_per_s"), "{:.0f}"),
-                f"{run.get('vram_gb', '?')} GB", (run.get("trust_tier") or "").replace("-", " "))
+                _fmt(r.get("tok_per_s"), "{:.0f}"), _fmt(r.get("sol_per_s"), "{:.2f}"),
+                f"{run.get('vram_gb', '?')} GB", (run.get("trust_tier") or "").replace("-", " "),
+                str(n_total) if n_total else "—")
         if not rows:
-            table.add_row("", "(no runs fit this filter)", "", "", "", "", "", "")
+            table.add_row("", "(no runs fit this filter)", "", "", "", "", "", "", "", "")
 
     def _render_error(self, msg: str) -> None:
         table = self.query_one(DataTable)

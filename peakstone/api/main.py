@@ -60,7 +60,8 @@ METRIC_AXES = {"peak_rss_mb": "asc", "loc": "asc", "solution_bytes": "asc", "tes
 # post-release challenges (held_out_score=None → they don't qualify for that board).
 SORT_ORDER = {"code_score": "desc", "held_out_score": "desc", "math_score": "desc",
               "agent_score": "desc", "planner_score": "desc", "safety_score": "desc",
-              "solved": "desc", "tok_per_s": "desc", **METRIC_AXES}
+              "solved": "desc", "tok_per_s": "desc", "sol_per_s": "desc", "n_total": "desc",
+              **METRIC_AXES}
 
 
 def _agg_metrics(rs) -> dict:
@@ -128,10 +129,18 @@ def _summarize(sub: models.Submission, fam: models.ModelFamily | None = None) ->
         "n_math": len(math_rs),
         "n_agent": len(agent),
         "n_planner": len(planner),
+        "n_total": len(rs),                              # coverage: challenges in the run
+        "sol_per_s": _sol_per_s(rs),                     # throughput: challenges per second of work
         "by_category": {k: round(sum(v) / len(v), 3) for k, v in sorted(by_cat.items())},
         "tok_per_s": _avg([r.tok_per_s for r in rs]),
         "metrics": _agg_metrics(rs),
     }
+
+
+def _sol_per_s(rs) -> float | None:
+    """Challenges solved per second over the run's total model time (sum of per-challenge latency)."""
+    lat = sum(r.latency_s for r in rs if r.latency_s)
+    return round(len(rs) / lat, 3) if lat > 0 else None
 
 
 def _submitter_handle(db, sub: models.Submission) -> str | None:

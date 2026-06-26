@@ -41,7 +41,7 @@ def _newkey():
 
 def _result(cid, typ, f, metrics=None):
     r = {"model": "m", "challenge": cid, "type": typ, "difficulty": 4, "scoring": "tests",
-         "final_score": f, "passed": int(f * 10), "total": 10, "tok_per_s": 50,
+         "final_score": f, "passed": int(f * 10), "total": 10, "tok_per_s": 50, "latency_s": 2.0,
          "response": "x", "stdout": "ok"}
     if metrics:
         r["metrics"] = metrics
@@ -86,6 +86,17 @@ def test_submission_trust_chain(client):
     again = _bundle("trustDup", [0.5], 24, ap, a, "s3")
     assert client.post("/submissions", json=again).status_code == 201
     assert client.post("/submissions", json=again).status_code == 409
+
+
+def test_coverage_and_sol_per_s(client):
+    ap, a = _newkey()
+    # 3 arch challenges + 1 refusal = 4 results, each latency 2.0s -> sol/s = 4 / 8 = 0.5
+    assert client.post("/submissions", json=_bundle("covX", [0.6, 0.6, 0.6], 24, ap, a, "cov")).status_code == 201
+    row = next(r for r in client.get("/leaderboard").json()["leaderboard"] if r["family"] == "covX")
+    assert row["n_total"] == 4                      # coverage: challenges in the run
+    assert row["sol_per_s"] == 0.5                  # throughput over total model time
+    # sortable axis
+    assert client.get("/leaderboard", params={"sort": "sol_per_s"}).status_code == 200
 
 
 def test_pubkey_swap_is_rejected(client):

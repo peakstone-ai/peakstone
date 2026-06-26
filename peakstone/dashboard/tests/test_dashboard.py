@@ -22,10 +22,11 @@ def _no_hf_network(monkeypatch):
 
 _FAKE = {"count": 2, "leaderboard": [
     {"rank": 1, "family": "qwen3-coder", "code_score": 0.93, "agent_score": None,
-     "planner_score": None, "tok_per_s": 85.0,
+     "planner_score": None, "tok_per_s": 85.0, "sol_per_s": 0.5, "n_total": 50,
      "run": {"vram_gb": 24, "trust_tier": "community-verified"}},
     {"rank": 2, "family": "phi-4-mini", "code_score": 0.42, "agent_score": None,
-     "planner_score": None, "tok_per_s": 120.0, "run": {"vram_gb": 8, "trust_tier": "self-reported"}},
+     "planner_score": None, "tok_per_s": 120.0, "sol_per_s": 1.2, "n_total": 12,
+     "run": {"vram_gb": 8, "trust_tier": "self-reported"}},
 ]}
 
 
@@ -61,6 +62,11 @@ def test_app_renders_filtered_leaderboard(monkeypatch):
             await pilot.pause()
             table = app.query_one(DataTable)
             assert table.row_count == 2
+            cols = [str(c.label) for c in table.columns.values()]
+            assert cols == ["#", "Model", "Code", "Agentic", "Planner", "TPS", "sol/s",
+                            "VRAM", "Trust", "Coverage"]
+            assert str(table.get_row_at(0)[6]) == "0.50"   # sol/s after TPS
+            assert str(table.get_row_at(0)[9]) == "50"     # coverage (n_total) last
             # fit filter on by default -> the request was scoped to local VRAM (or None if no GPU)
             assert "max_vram_gb" in captured
             # cycling sort re-queries with the next axis
