@@ -443,7 +443,7 @@ class Dashboard(App):
 
     def open_solution(self, r: dict) -> None:
         cid = r.get("challenge", "?")
-        self.push_screen(SolutionScreen(cid, self.challenge_spec(cid), r.get("response")))
+        self.push_screen(SolutionScreen(cid, self.challenge_spec(cid), _solution_body(r)))
 
     @work(thread=True, exclusive=True)
     def load_board(self) -> None:
@@ -633,8 +633,30 @@ class ReproduceScreen(ModalScreen):
         self.app.call_from_thread(self.app.notify, f"{msg}")
 
 
+def _solution_body(r: dict) -> str:
+    """Bottom-pane text for a test result: the model's solution, then the execution output and the
+    test's reaction (pass/fail). For iterative runs (agentic/repo-patch) raw_output is the full
+    turn-by-turn transcript, so each attempt and its result already appear in order."""
+    tr = r.get("transcript") or {}
+    parts = []
+    if tr.get("plan"):
+        parts.append("── plan ──\n" + tr["plan"])
+    parts.append("── proposed solution ──\n" + (tr.get("raw_output") or "(no solution recorded for this run)"))
+    if tr.get("stdout"):
+        parts.append("── output ──\n" + tr["stdout"])
+    if tr.get("stderr"):
+        parts.append("── errors ──\n" + tr["stderr"])
+    final = r.get("final")
+    pt = f"  {r['passed']}/{r['total']} tests" if r.get("total") else ""
+    verdict = "PASS" if (final or 0) >= 0.999 else ("FAIL" if final == 0 else "PARTIAL")
+    parts.append(f"── result ──\n{verdict}   score {final if final is not None else '—'}{pt}")
+    return "\n\n".join(parts)
+
+
 class SolutionScreen(ModalScreen):
-    """A test's challenge spec (top) and the model's proposed solution (bottom), split like the runner."""
+    """A test's challenge spec (top) and the model's solution + result (bottom), split like the runner.
+    The bottom pane shows the proposed solution, the execution output, and the test's reaction; for
+    iterative runs the attempts and their results appear in order within the transcript."""
     CSS = """
     SolutionScreen { align: center middle; }
     #sol { width: 92%; height: 90%; border: thick $accent; background: $surface; padding: 1; }
@@ -644,20 +666,20 @@ class SolutionScreen(ModalScreen):
     """
     BINDINGS = [("escape", "dismiss", "Close")]
 
-    def __init__(self, challenge_id: str, spec: str | None, response: str | None):
+    def __init__(self, challenge_id: str, spec: str | None, body: str):
         super().__init__()
         self.challenge_id = challenge_id
         self.spec = spec
-        self.response = response
+        self.body = body
 
     def compose(self) -> ComposeResult:
         with Vertical(id="sol"):
-            yield Static(f"[b]{self.challenge_id}[/]  ·  challenge (top) · proposed solution (bottom)  ·  Esc close")
+            yield Static(f"[b]{self.challenge_id}[/]  ·  challenge (top) · solution + result (bottom)  ·  Esc close")
             with VerticalScroll(id="sol-spec-wrap"):
                 # markup off: specs/solutions contain [ ] that Rich would try to parse
                 yield Static(self.spec or "(challenge spec not in the local corpus)", id="sol-spec", markup=False)
             with VerticalScroll(id="sol-out-wrap"):
-                yield Static(self.response or "(no solution recorded for this run)", id="sol-out", markup=False)
+                yield Static(self.body, id="sol-out", markup=False)
 
 
 class ConfirmScreen(ModalScreen):

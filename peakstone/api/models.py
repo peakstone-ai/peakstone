@@ -188,7 +188,7 @@ class Result(Base):
     total: Mapped[int | None] = mapped_column(Integer)
     tok_per_s: Mapped[float | None] = mapped_column(Float)
     latency_s: Mapped[float | None] = mapped_column(Float)
-    response: Mapped[str | None] = mapped_column(String)   # the model's output (proposed solution)
+    transcript: Mapped[dict | None] = mapped_column(JSONv)  # solution + output: raw_output/stdout/stderr/plan
     metrics: Mapped[dict | None] = mapped_column(JSONv)    # P2: size/perf/memory efficiency axes
     # When this challenge's content first became public + where that date came from. Compared
     # against the model's release_date to decide contamination (engine/contamination.py).

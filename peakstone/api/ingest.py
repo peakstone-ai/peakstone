@@ -160,7 +160,7 @@ def ingest_bundle(db, b: dict) -> models.Submission:
             verification=r.get("verification"), difficulty=r.get("difficulty"),
             final=float(sc.get("final", 0.0)), passed=sc.get("passed"), total=sc.get("total"),
             tok_per_s=r.get("tok_per_s"), latency_s=r.get("latency_s"), metrics=r.get("metrics"),
-            response=(r.get("transcript") or {}).get("raw_output"),   # model's proposed solution
+            transcript=r.get("transcript"),   # solution + execution output (raw_output/stdout/stderr/plan)
             published_at=r.get("published_at"), published_at_source=r.get("published_at_source"),
         ))
         # lazily register the challenge in the corpus

@@ -103,8 +103,9 @@ def test_board_quant_expands_to_results(monkeypatch):
     monkeypatch.setattr(client, "get_leaderboard", lambda *a, **k: LB)
     monkeypatch.setattr(client, "get_run", lambda url, bh, **k: {"results": [
         {"challenge": "c1", "final": 1.0, "passed": 10, "total": 10, "category": "code",
-         "response": "def solution(): return 42"},
-        {"challenge": "c2", "final": 0.0, "passed": 0, "total": 10, "category": "code", "response": "broken"}]})
+         "transcript": {"raw_output": "def solution(): return 42", "stdout": "all tests passed"}},
+        {"challenge": "c2", "final": 0.0, "passed": 0, "total": 10, "category": "code",
+         "transcript": {"raw_output": "broken", "stderr": "AssertionError"}}]})
 
     async def scenario():
         from peakstone.dashboard.app import SolutionScreen
@@ -128,7 +129,10 @@ def test_board_quant_expands_to_results(monkeypatch):
             await pilot.press("enter")
             await pilot.pause()
             assert isinstance(app.screen, SolutionScreen)
-            assert "def solution(): return 42" in str(app.screen.query_one("#sol-out", Static).render())
+            out = str(app.screen.query_one("#sol-out", Static).render())
+            assert "def solution(): return 42" in out      # the solution
+            assert "all tests passed" in out               # the execution output
+            assert "PASS" in out and "10/10" in out         # the test's reaction
 
     asyncio.run(scenario())
 
