@@ -124,6 +124,24 @@ def test_leaderboard_collapse_quant(client):
     assert {r["run"]["artifact"] for r in pq} == {"UD-Q4_K_XL", "UD-Q6_K"}
 
 
+def test_leaderboard_prefers_most_coverage(client):
+    ap, a = _newkey()
+
+    def mk(sha, n, f):
+        b = bundle.produce_bundle({"models": ["covm"], "judge": None, "timestamp": sha,
+                                   "gpu": {"name": "RTX 4090"}},
+                                  [_result(f"cm-{i}", "architecture", f) for i in range(n)], sign=False)
+        b["model"]["family"], b["model"]["artifact"], b["model"]["file_sha256"] = "covm", "Q4", sha
+        bundle.sign_inplace(b, ap, a)
+        return b
+
+    # a small high-scoring run, then a more thorough lower-scoring one of the same model+quant
+    assert client.post("/submissions", json=mk("smoke", 2, 0.9)).status_code == 201
+    assert client.post("/submissions", json=mk("deep", 10, 0.6)).status_code == 201
+    row = next(r for r in client.get("/leaderboard").json()["leaderboard"] if r["family"] == "covm")
+    assert row["n_total"] == 10 and row["code_score"] == 0.6   # the most-coverage run is shown, not the best score
+
+
 def test_pubkey_swap_is_rejected(client):
     ap, a = _newkey()
     b = _bundle("pubkeyM", [0.5], 24, ap, a, "PK")

@@ -208,14 +208,21 @@ def leaderboard(db: Session = Depends(get_session), suite: str | None = None,
         if val is None:
             continue
         key = f"{fam.name}\x00{art.artifact}" if collapse == "quant" else fam.name
+        cov = row.get("n_total") or 0
         cur = best.get(key)
-        better = cur is None or (val > cur["_v"] if order == "desc" else val < cur["_v"])
+        if cur is None:                       # keep the most-thorough qualifying run per group:
+            better = True                     # prefer the most coverage, tie-break by the sort value
+        elif cov != cur["_cov"]:
+            better = cov > cur["_cov"]
+        else:
+            better = val > cur["_v"] if order == "desc" else val < cur["_v"]
         if better:
-            best[key] = {**row, "_v": val}
+            best[key] = {**row, "_v": val, "_cov": cov}
     rows = sorted(best.values(), key=lambda r: r["_v"], reverse=(order == "desc"))
     for i, r in enumerate(rows, 1):
         r["rank"] = i
         r.pop("_v", None)
+        r.pop("_cov", None)
     return {"filters": {"suite": suite, "version": version, "max_vram_gb": max_vram_gb,
                         "quant": quant, "trust": trust, "sort": sort, "order": order, "collapse": collapse},
             "count": len(rows), "leaderboard": rows}
