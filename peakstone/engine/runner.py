@@ -340,6 +340,7 @@ def main(argv=None):
         caps = model_capabilities(model)   # gated axes (tools/agentic) this model can attempt
         for ch in chs:
             label = f"{model:>18} | {ch.id:<28}"
+            print(f"{label}  → solving [{ch.scoring}] …")   # live progress: what's running now
 
             if not relevant(ch.family, caps):
                 print(f"{label}  SKIP (model lacks '{GATED_CAP.get(ch.family)}')")

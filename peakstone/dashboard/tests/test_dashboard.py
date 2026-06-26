@@ -161,7 +161,7 @@ def test_reproduce_orchestration(monkeypatch):
     ]}
     res = reproduce.reproduce("m", challenge_ids=["a"], published_tps=100.0,
                               _download=lambda e, log: True, _serve=lambda n: object(),
-                              _wait=lambda p, **k: True, _bench=lambda n, ids: bundle, _stop=lambda p: None)
+                              _wait=lambda p, **k: True, _bench=lambda n, ids, **k: bundle, _stop=lambda p: None)
     assert res.ok and res.your_tps == 85.0 and res.code_score == 0.75
     assert res.passed == 13 and res.total == 20 and res.tps_ratio == 0.85
 
@@ -171,7 +171,7 @@ def test_reproduce_orchestration(monkeypatch):
     monkeypatch.setattr(models, "load_registry", lambda: {"m": entry})
     unhealthy = reproduce.reproduce("m", challenge_ids=["a"], _download=lambda e, log: True,
                                     _serve=lambda n: object(), _wait=lambda p, **k: False,
-                                    _bench=lambda n, ids: bundle, _stop=lambda p: None)
+                                    _bench=lambda n, ids, **k: bundle, _stop=lambda p: None)
     assert unhealthy.ok is False and "healthy" in unhealthy.note
 
     # a crashed serve process (poll() returns an exit code) fails fast with the crash reason, not "healthy"
@@ -180,7 +180,7 @@ def test_reproduce_orchestration(monkeypatch):
             return 1
     crashed = reproduce.reproduce("m", challenge_ids=["a"], _download=lambda e, log: True,
                                   _serve=lambda n: _Dead(), _wait=lambda p, proc=None: False,
-                                  _bench=lambda n, ids: bundle, _stop=lambda p: None)
+                                  _bench=lambda n, ids, **k: bundle, _stop=lambda p: None)
     assert crashed.ok is False and "exited before serving" in crashed.note
 
 
@@ -400,6 +400,37 @@ def test_register_quant(tmp_path, monkeypatch):
     assert "base" in {x.fam for x in models.load_registry().values()}
     again = models.register_quant("base", "org/R", "models/base/R-Q4_K_M.gguf", "Q4_K_M")  # already registered
     assert again.name == "base-q4"
+
+
+def test_pretty_progress():
+    from peakstone.dashboard.app import _pretty_progress
+    assert "[green]✓[/]" in _pretty_progress("m | ch  ok  tests 10/10")
+    assert "[red]✗[/]" in _pretty_progress("m | ch  !! refusal expect=refuse got=answered")
+    assert "⟳" in _pretty_progress("m | ch  → solving [tests] …")
+    assert "✗ ERROR" in _pretty_progress("m | ch  ERROR boom")
+
+
+def test_bench_streams_progress(tmp_path):
+    from peakstone.dashboard import reproduce as R
+    (tmp_path / "bundle.json").write_text('{"results": []}')
+    out_lines, fed = [], ["m | ch1  → solving [tests] …\n", "m | ch1  ok  tests 10/10\n"]
+
+    class FakeProc:
+        pid = 4321
+
+        def __init__(self):
+            self.stdout = iter(fed)
+
+        def wait(self):
+            return 0
+
+    def fake_popen(cmd, **kw):
+        assert "-u" in cmd and kw.get("env", {}).get("PYTHONUNBUFFERED") == "1"   # unbuffered streaming
+        return FakeProc()
+
+    bundle = R.bench("m", ["x"], out_dir=tmp_path, log=out_lines.append, popen=fake_popen)
+    assert bundle == {"results": []}
+    assert any("→ solving" in ln for ln in out_lines) and any("ok " in ln for ln in out_lines)
 
 
 def test_preflight_decision():

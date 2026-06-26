@@ -32,6 +32,18 @@ def _fmt(v, fmt: str = "{:.2f}") -> str:
     return fmt.format(v) if isinstance(v, (int, float)) else "—"
 
 
+# Render the runner's per-challenge progress markers as checkmarks in the live run log.
+_PROGRESS_MARKS = [("  → solving", "  [dim]⟳[/]"), ("  ok ", "  [green]✓[/] "),
+                   ("  !! ", "  [red]✗[/] "), ("  ERROR ", "  [red]✗ ERROR[/] "),
+                   ("  SKIP ", "  [dim]· SKIP[/] ")]
+
+
+def _pretty_progress(s: str) -> str:
+    for a, b in _PROGRESS_MARKS:
+        s = s.replace(a, b)
+    return s
+
+
 class HardwarePanel(Static):
     """Live GPU/CPU/RAM meters, refreshed every second."""
 
@@ -179,7 +191,7 @@ class ReproduceScreen(ModalScreen):
     """Reproduce a model on local hardware and compare your tok/s to the published number."""
     CSS = """
     ReproduceScreen { align: center middle; }
-    #repro { width: 84; height: 24; border: thick $accent; background: $surface; padding: 1; }
+    #repro { width: 92%; height: 90%; border: thick $accent; background: $surface; padding: 1; }
     #repro-log { height: 1fr; border: round $primary; }
     #repro-result { height: auto; padding-top: 1; }
     """
@@ -212,7 +224,7 @@ class ReproduceScreen(ModalScreen):
         log = self.query_one("#repro-log", RichLog)
 
         def emit(s: str) -> None:
-            self.app.call_from_thread(log.write, s)
+            self.app.call_from_thread(log.write, _pretty_progress(s))
 
         if self.free_procs:
             emit(f"freeing GPU: stopping {len(self.free_procs)} llama-server process(es)…")

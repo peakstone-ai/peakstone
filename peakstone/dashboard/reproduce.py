@@ -10,6 +10,7 @@ import json
 import os
 import signal
 import subprocess
+import threading
 import time
 import urllib.request
 from dataclasses import dataclass
@@ -78,10 +79,13 @@ def wait_healthy(port: int, *, timeout: float = 180, opener=urllib.request.urlop
 
 
 def bench(name: str, ids: list[str] | None = None, *, level: str | None = None,
-          runner=subprocess.run, out_dir: Path | None = None) -> dict | None:
+          out_dir: Path | None = None, log=lambda s: None, popen=subprocess.Popen) -> dict | None:
+    """Run the engine over the selection, streaming the runner's per-challenge output line-by-line to
+    `log` so the dashboard can show progress live (each challenge solving + its ✓/✗ result)."""
     out = Path(out_dir) if out_dir else (REPO / "results" / f"repro-{name}")
     out.mkdir(parents=True, exist_ok=True)
-    cmd = ["python", "-m", "peakstone.engine.runner", "--models", name, "--bundle", "--out", str(out)]
+    # -u + PYTHONUNBUFFERED so the child flushes each progress line as it happens (live streaming).
+    cmd = ["python", "-u", "-m", "peakstone.engine.runner", "--models", name, "--bundle", "--out", str(out)]
     if level:
         # the runner resolves the level's selection + settings (judge/agent/prebuilt); stream-prune
         # so prebuilt image disk stays bounded.
@@ -95,9 +99,26 @@ def bench(name: str, ids: list[str] | None = None, *, level: str | None = None,
             ids_file.write_text("\n".join(ids))
             cmd += ["--ids-file", str(ids_file)]
         timeout = 1800 if (ids and len(ids) <= 50) else 6 * 3600
-    runner(cmd, cwd=str(REPO), capture_output=True, text=True, timeout=timeout)
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    proc = popen(cmd, cwd=str(REPO), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                 text=True, bufsize=1, env=env, start_new_session=True)
+    killer = threading.Timer(timeout, lambda: _kill(proc))   # hard cap even if the child goes silent
+    killer.start()
+    try:
+        for line in proc.stdout:
+            log(line.rstrip("\n"))
+    finally:
+        killer.cancel()
+        proc.wait()
     bundle = out / "bundle.json"
     return json.loads(bundle.read_text()) if bundle.exists() else None
+
+
+def _kill(proc) -> None:
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, OSError):
+        pass
 
 
 def stop(proc) -> None:
@@ -137,7 +158,7 @@ def reproduce(name: str, *, challenge_ids: list[str] | None = None, level: str |
                 note = "model never became healthy in time (is llama-server installed / GPU free?)"
             return ReproduceResult(name, False, published_tps=published_tps, note=note)
         log(f"benchmarking ({'level ' + level if level else 'selection'}) …")
-        bundle = _bench(name, challenge_ids, level=level) if level else _bench(name, challenge_ids)
+        bundle = _bench(name, challenge_ids, level=level, log=log)
     finally:
         _stop(proc)
         log("stopped serving")
