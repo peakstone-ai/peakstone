@@ -435,11 +435,37 @@ class Dashboard(App):
     def _add_results(self, node, results) -> None:
         if results is None:
             node.add_leaf("[red]could not load results[/]")
-        elif not results:
+            return
+        if not results:
             node.add_leaf("[dim](no per-challenge results)[/]")
-        else:
-            for r in results:
-                node.add_leaf(self._result_leaf(r), data={"kind": "result", "row": r})
+            return
+        # group the run's challenges the same way the peakstones window does: collection -> date ->
+        # family -> challenge. Challenges we have locally drive the grouping; any others go under "other".
+        by_id = {r["challenge"]: r for r in results}
+        known = [c for c in self.corpus() if c.id in by_id]
+        for grp in ch_browse.group_by_collection(known):
+            chs = grp["chs"]
+            coll = node.add(f"{grp['label']} ({len(chs)})")
+            if grp["kind"] == "native":
+                for bucket, dchs in ch_browse.group_by_date(chs).items():
+                    dnode = coll.add(f"{bucket} ({len(dchs)})")
+                    for fam, fchs in ch_browse.group_by_family(dchs).items():
+                        fnode = dnode.add(f"{fam} ({len(fchs)})")
+                        self._add_result_leaves(fnode, fchs, by_id)
+            else:
+                for bucket, dchs in ch_browse.group_by_date(chs).items():
+                    dnode = coll.add(f"{bucket} ({len(dchs)})")
+                    self._add_result_leaves(dnode, dchs, by_id)
+        extra = [by_id[i] for i in by_id if i not in {c.id for c in known}]
+        if extra:
+            other = node.add(f"other ({len(extra)})")        # ran but not in the local corpus
+            for r in extra:
+                other.add_leaf(self._result_leaf(r), data={"kind": "result", "row": r})
+
+    def _add_result_leaves(self, parent, challenges, by_id) -> None:
+        for c in sorted(challenges, key=lambda c: c.id):
+            r = by_id[c.id]
+            parent.add_leaf(self._result_leaf(r), data={"kind": "result", "row": r})
 
     def open_solution(self, r: dict) -> None:
         cid = r.get("challenge", "?")

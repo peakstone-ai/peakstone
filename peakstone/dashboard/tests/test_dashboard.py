@@ -96,20 +96,27 @@ def test_app_renders_filtered_leaderboard(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_board_quant_expands_to_results(monkeypatch):
-    from peakstone.dashboard.app import Dashboard, BoardTree
+def test_board_quant_groups_results_like_peakstones(monkeypatch):
+    from peakstone.dashboard.app import Dashboard, BoardTree, SolutionScreen
+    from textual.widgets import Static
     LB = {"count": 1, "leaderboard": [{"family": "qz", "code_score": 0.7, "tok_per_s": 80, "n_total": 2,
           "run": {"artifact": "Q6_K", "bundle_hash": "bh1", "vram_gb": 24}}]}
     monkeypatch.setattr(client, "get_leaderboard", lambda *a, **k: LB)
+    # real native corpus ids, so they group under Native -> date -> family like the peakstones window
     monkeypatch.setattr(client, "get_run", lambda url, bh, **k: {"results": [
-        {"challenge": "c1", "final": 1.0, "passed": 10, "total": 10, "category": "code",
+        {"challenge": "py-05-calc", "final": 1.0, "passed": 10, "total": 10, "category": "code",
          "transcript": {"raw_output": "def solution(): return 42", "stdout": "all tests passed"}},
-        {"challenge": "c2", "final": 0.0, "passed": 0, "total": 10, "category": "code",
-         "transcript": {"raw_output": "broken", "stderr": "AssertionError"}}]})
+        {"challenge": "go-03-detect-cycle", "final": 0.0, "passed": 0, "total": 1, "category": "code",
+         "transcript": {"raw_output": "broken"}}]})
+
+    def leaves(node):
+        out = []
+        for c in node.children:
+            out.append(str(c.label))
+            out += leaves(c)
+        return out
 
     async def scenario():
-        from peakstone.dashboard.app import SolutionScreen
-        from textual.widgets import Static
         app = Dashboard("http://x")
         async with app.run_test() as pilot:
             await app.workers.wait_for_complete()
@@ -122,17 +129,18 @@ def test_board_quant_expands_to_results(monkeypatch):
             quant.expand()                                 # drill into the run's per-challenge results
             await app.workers.wait_for_complete()
             await pilot.pause()
-            leaves = [str(c.label) for c in quant.children]
-            assert any("c1" in lbl for lbl in leaves) and any("c2" in lbl for lbl in leaves)
-            # ⏎ on a test opens the challenge/solution split view
-            t.move_cursor(quant.children[0])
-            await pilot.press("enter")
+            # grouped like peakstones: collection -> date -> family -> challenge
+            assert any("Native" in str(c.label) for c in quant.children)
+            allnodes = leaves(quant)
+            assert any("2026-06" in n for n in allnodes) and any("python" in n for n in allnodes)
+            assert any("py-05-calc" in n for n in allnodes) and any("go-03-detect-cycle" in n for n in allnodes)
+            # opening a test result still shows the split view with solution + output + reaction
+            app.open_solution({"challenge": "py-05-calc", "final": 1.0, "passed": 10, "total": 10,
+                               "transcript": {"raw_output": "def solution(): return 42", "stdout": "all tests passed"}})
             await pilot.pause()
-            assert isinstance(app.screen, SolutionScreen)
             out = str(app.screen.query_one("#sol-out", Static).render())
-            assert "def solution(): return 42" in out      # the solution
-            assert "all tests passed" in out               # the execution output
-            assert "PASS" in out and "10/10" in out         # the test's reaction
+            assert isinstance(app.screen, SolutionScreen) and "def solution(): return 42" in out
+            assert "all tests passed" in out and "PASS" in out and "10/10" in out
 
     asyncio.run(scenario())
 
