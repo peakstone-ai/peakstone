@@ -635,7 +635,7 @@ def main(argv=None):
                 max_attempts = 1 + max(0, args.retries)
                 run = None
                 response, tps, lat, ptoks, ctoks = None, None, None, 0, 0
-                files = {}
+                files, looped = {}, False
                 for attempt in range(1, max_attempts + 1):
                     res = client.chat(
                         model, msgs,
@@ -650,6 +650,7 @@ def main(argv=None):
                                                 response=res.error, vram=model_vram))
                         break
                     attempts = attempt
+                    looped = looped or res.aborted   # generation hit a degenerate repetition loop
                     response, tps, lat = res.text, res.tok_per_s, res.latency_s
                     ptoks, ctoks = res.prompt_tokens, res.completion_tokens
                     files = extract_files(res.text, ch.solution_file, ch.language)
@@ -675,6 +676,8 @@ def main(argv=None):
 
             sc = compute_score(ch, run, judge_res)
             extra = {}
+            if looped:
+                extra["error"] = "repetition-loop"   # surfaced as a distinct error type in results
             if args.retries:
                 extra.update(attempts=attempts, passed_on_attempt=passed_on)
             if agents_md is not None:
@@ -687,7 +690,7 @@ def main(argv=None):
             results.append(_row(model, ch, run, sc, judge_res,
                                 response=response, tps=tps, lat=lat,
                                 ptoks=ptoks, ctoks=ctoks, vram=model_vram, extra=extra))
-            flag = "ok " if run.ok else "   "
+            flag = "ok " if run.ok else ("!! " if looped else "   ")
             retry_note = ""
             if args.retries and attempts > 1:
                 retry_note = (f" [green on try {passed_on}/{attempts}]" if passed_on
@@ -696,7 +699,7 @@ def main(argv=None):
                   f"tests={sc['passed']}/{sc['total']}"
                   + (f" judge={sc['judge_score']:.2f}" if judge_res else "")
                   + (f" {tps:.0f}tok/s" if tps else "")
-                  + retry_note)
+                  + retry_note + ("  (repetition loop)" if looped else ""))
 
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     outdir = Path(args.out) if args.out else ROOT / "results" / stamp

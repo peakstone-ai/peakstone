@@ -14,6 +14,14 @@ def test_nominal_ram_gib():
     assert _nominal_ram_gib(8 * 2**30 - 400 * 2**20) == 8  # just under 8 GiB -> 8
 
 
+def test_bundle_carries_error_type():
+    b = bundle.produce_bundle(
+        {"models": ["m"], "judge": None, "timestamp": "t", "gpu": {"name": "x"}},
+        [{"challenge": "c", "type": "architecture", "final_score": 0.0,
+          "error": "repetition-loop", "response": "loop loop loop"}], sign=False)
+    assert b["results"][0]["transcript"]["error"] == "repetition-loop"
+
+
 def test_capture_env_records_model_footprint():
     env = bundle.capture_env({"name": "RTX 4090"}, {"vram_mib": 24576, "ram_mib": 26624})
     assert env["vram_used_gb"] == 24.0 and env["ram_used_gb"] == 26.0   # measured model footprint

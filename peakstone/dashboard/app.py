@@ -426,6 +426,8 @@ class Dashboard(App):
 
     @staticmethod
     def _result_leaf(r: dict) -> str:
+        if (r.get("transcript") or {}).get("error") == "repetition-loop":
+            return f"[magenta]⟳[/] {r.get('challenge', '?'):30} repetition loop"
         final = r.get("final") or 0.0
         mark = "[green]✓[/]" if final >= 0.999 else ("[red]✗[/]" if final == 0 else "[yellow]◐[/]")
         pt = f"  {r['passed']}/{r['total']}" if r.get("total") else ""
@@ -674,7 +676,10 @@ def _solution_body(r: dict) -> str:
         parts.append("── errors ──\n" + tr["stderr"])
     final = r.get("final")
     pt = f"  {r['passed']}/{r['total']} tests" if r.get("total") else ""
-    verdict = "PASS" if (final or 0) >= 0.999 else ("FAIL" if final == 0 else "PARTIAL")
+    if tr.get("error") == "repetition-loop":
+        verdict = "REPETITION LOOP (generation aborted)"
+    else:
+        verdict = "PASS" if (final or 0) >= 0.999 else ("FAIL" if final == 0 else "PARTIAL")
     parts.append(f"── result ──\n{verdict}   score {final if final is not None else '—'}{pt}")
     return "\n\n".join(parts)
 

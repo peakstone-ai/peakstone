@@ -325,6 +325,8 @@ def _result(row: dict, chash: dict, judge_model: str | None, cpub: dict | None =
         tr["stdout"] = row["stdout"]
     if row.get("stderr"):
         tr["stderr"] = row["stderr"]
+    if row.get("error"):
+        tr["error"] = row["error"]          # e.g. "repetition-loop" — a distinct failure type
     if tr:
         r["transcript"] = tr
     jd = row.get("judge_detail") or {}

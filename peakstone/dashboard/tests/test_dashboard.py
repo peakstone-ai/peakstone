@@ -583,6 +583,16 @@ def test_reproduce_screen_coverage_and_rate():
     asyncio.run(scenario())
 
 
+def test_repetition_loop_shows_as_error_type():
+    from peakstone.dashboard.app import Dashboard, _solution_body
+    leaf = Dashboard._result_leaf({"challenge": "c1", "final": 0.0,
+                                   "transcript": {"error": "repetition-loop"}})
+    assert "⟳" in leaf and "repetition loop" in leaf          # distinct marker, not a plain ✗
+    body = _solution_body({"challenge": "c1", "final": 0.0,
+                           "transcript": {"error": "repetition-loop", "raw_output": "loop loop"}})
+    assert "REPETITION LOOP" in body
+
+
 def test_pretty_progress():
     from peakstone.dashboard.app import _pretty_progress
     assert "[green]✓[/]" in _pretty_progress("m | ch  ok  tests 10/10")
