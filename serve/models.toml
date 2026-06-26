@@ -157,3 +157,19 @@ port  = 8093
 release_date = "2026-01-19"   # same weights as glm-4.7-flash
 ctx   = 131072
 flags = "--temp 0.6 --top-p 0.95 -fa on --cache-type-k q8_0 --cache-type-v q8_0"
+
+["phi-4-mini-q2_k"]
+repo  = "unsloth/Phi-4-mini-instruct-GGUF"
+file  = "models/phi-4-mini-q2_k/Phi-4-mini-instruct-Q2_K.gguf"
+port  = 8096
+ctx   = 32768
+flags = ""
+family = "phi-4-mini"
+
+["phi-4-mini-q2_k_l"]
+repo  = "unsloth/Phi-4-mini-instruct-GGUF"
+file  = "models/phi-4-mini-q2_k_l/Phi-4-mini-instruct-Q2_K_L.gguf"
+port  = 8097
+ctx   = 32768
+flags = ""
+family = "phi-4-mini"
