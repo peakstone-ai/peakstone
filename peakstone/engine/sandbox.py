@@ -53,15 +53,19 @@ def _net_isolate_prefix() -> list[str]:
     brought up so 127.0.0.1 tests still work). Enforces the offline test policy: a solution that does
     real I/O — e.g. a BigCodeBench task that wget/HTTP/FTPs past the test's mocks — fails in ~0s
     instead of hanging to the timeout. Empty when unsupported (non-Linux, or user namespaces off)."""
+    import sys
     if not shutil.which("unshare"):
         return []
+    prefix = ["unshare", "-rn", "--", "sh", "-c", 'ip link set lo up 2>/dev/null; exec "$@"', "_"]
+    # Verify the namespace works AND loopback is usable inside it — on a host with userns but no
+    # iproute2, `ip link set lo up` silently fails and 127.0.0.1 tests would break, so fall back.
+    check = [*prefix, sys.executable, "-c", "import socket; socket.socket().bind(('127.0.0.1', 0))"]
     try:
-        probe = subprocess.run(["unshare", "-rn", "--", "true"], capture_output=True, timeout=5)
+        if subprocess.run(check, capture_output=True, timeout=10).returncode == 0:
+            return prefix
     except (OSError, subprocess.SubprocessError):
-        return []
-    if probe.returncode != 0:
-        return []
-    return ["unshare", "-rn", "--", "sh", "-c", 'ip link set lo up 2>/dev/null; exec "$@"', "_"]
+        pass
+    return []
 
 
 _NET_ISOLATE = _net_isolate_prefix()
