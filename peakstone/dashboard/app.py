@@ -371,7 +371,9 @@ class ModelsScreen(ModalScreen):
         tree = self.query_one("#models-tree", Tree)
         tree.show_root = False
         tree.auto_expand = False
-        self.refresh_models()
+        self._leaderboard = None
+        self.refresh_models()      # registry-only first (instant, offline-safe)
+        self.load_remote()         # then merge in models the server has run on similar hardware
         tree.focus()
 
     def _last_tps(self, name: str):
@@ -380,15 +382,47 @@ class ModelsScreen(ModalScreen):
                 return h["your_tps"]
         return None
 
+    def _best_local_tps(self, entries):
+        vals = [t for e in entries if (t := self._last_tps(e.name))]
+        return max(vals) if vals else None
+
     @staticmethod
     def _fitmark(size, max_vram) -> str:
         if not size:
             return "?"
         return "✓" if (max_vram and size <= max_vram) else "✗"
 
-    def _family_label(self, fam: str, n_local: int, n_hf: int | None = None) -> str:
-        extra = f", +{n_hf} on HF" if n_hf else ""
-        return f"[b]{fam}[/]  ({n_local} local{extra})"
+    def _merged_families(self, leaderboard) -> list[dict]:
+        """Registry families merged with leaderboard families (models others ran on hardware that fits
+        ours), each annotated with a claimed tps. Sorted by that tps so the fastest-on-similar-hardware
+        models lead; remote-only families (not in the registry) are downloadable."""
+        fams: dict[str, dict] = {}
+        for fam, entries in models.group_by_family(models.load_registry()).items():
+            fams[fam] = {"family": fam, "entries": entries, "remote": False,
+                         "repo": next((e.repo for e in entries if e.repo), None),
+                         "tps": self._best_local_tps(entries), "hw": None}
+        for row in (leaderboard or {}).get("leaderboard", []):
+            name = row.get("family")
+            if not name:
+                continue
+            run = row.get("run", {})
+            f = fams.get(name) or fams.setdefault(name, {"family": name, "entries": [], "remote": True,
+                                                          "repo": None, "tps": None, "hw": None})
+            tps = row.get("tok_per_s")
+            if tps is not None and (f["tps"] is None or f["remote"]):   # prefer the server's claimed tps
+                f["tps"], f["hw"] = tps, run.get("vram_gb")
+            f["repo"] = f["repo"] or run.get("hf_repo")
+        return sorted(fams.values(), key=lambda f: (f["tps"] is None, -(f["tps"] or 0), f["family"]))
+
+    def _family_label(self, f: dict, n_hf: int | None = None) -> str:
+        tps = f.get("tps")
+        tps_s = (f" · [b]{tps:.0f}[/] tps" + (f"@{f['hw']:.0f}GB" if f.get("hw") else "")) if tps else ""
+        if f["remote"] and not f["entries"]:
+            tag = f"(remote · {n_hf} quants" + ")" if n_hf else "(remote · ⏎ to see quants)"
+        else:
+            extra = f", +{n_hf} on HF" if n_hf else ""
+            tag = f"({len(f['entries'])} local{extra})"
+        return f"[b]{f['family']}[/]{tps_s}  {tag}"
 
     def _registry_label(self, e, max_vram) -> str:
         present = "✓" if e.present else "·"
@@ -405,20 +439,37 @@ class ModelsScreen(ModalScreen):
         size = f"~{sz} GB" if sz else "—"
         return f"· {q['quant']:13} {size:>8}  {self._fitmark(sz, max_vram)}fit  (download)"
 
-    def refresh_models(self) -> None:
+    def refresh_models(self, leaderboard=None) -> None:
         tree = self.query_one("#models-tree", Tree)
         tree.clear()
         max_vram = hardware.snapshot().max_vram_gb
-        for fam, entries in models.group_by_family(models.load_registry()).items():
-            repo = next((e.repo for e in entries if e.repo), None)
+        for f in self._merged_families(leaderboard):
+            entries = f["entries"]
             present = next((e for e in entries if e.present), None)
-            node = tree.root.add(self._family_label(fam, len(entries)),
-                                 data={"kind": "family", "family": fam, "repo": repo,
-                                       "entries": entries, "entry": present or entries[0], "hf_done": False})
+            node = tree.root.add(self._family_label(f),
+                                 data={"kind": "family", "f": f, "family": f["family"], "repo": f["repo"],
+                                       "entries": entries, "entry": present or (entries[0] if entries else None),
+                                       "remote": f["remote"], "hf_done": False})
             for e in entries:
                 node.add_leaf(self._registry_label(e, max_vram), data={"kind": "registry", "entry": e})
+            if entries:
+                node.expand()      # local families: auto-expand so available quants are visible
         if tree.root.children:
             tree.cursor_line = 0
+
+    @work(thread=True, exclusive=True)
+    def load_remote(self) -> None:
+        try:
+            lb = client.get_leaderboard(self.app.base_url, max_vram_gb=hardware.snapshot().max_vram_gb,
+                                        sort="tok_per_s")
+        except Exception:  # noqa: BLE001 — offline / no server: stay registry-only
+            return
+        self._leaderboard = lb
+        n = lb.get("count", 0)
+        self.app.call_from_thread(self.refresh_models, lb)
+        if n:
+            self.app.call_from_thread(self.app.notify,
+                                      f"{n} model(s) with runs on hardware ≤ yours, sorted by tps")
 
     def on_tree_node_expanded(self, ev: "Tree.NodeExpanded") -> None:
         d = ev.node.data or {}
@@ -442,7 +493,7 @@ class ModelsScreen(ModalScreen):
             node.add_leaf(self._hf_label(q, max_vram),
                           data={"kind": "hf", "family": d["family"], "repo": d["repo"],
                                 "file": q["file"], "quant": q["quant"], "size_gb": q.get("size_gb")})
-        node.set_label(self._family_label(d["family"], len(d["entries"]), len(extra)))
+        node.set_label(self._family_label(d["f"], len(extra)))
 
     def _node_data(self) -> dict:
         n = self.query_one("#models-tree", Tree).cursor_node
@@ -454,7 +505,7 @@ class ModelsScreen(ModalScreen):
         return d.get("entry") if d.get("kind") in ("registry", "family") else None
 
     def action_add(self) -> None:
-        self.app.push_screen(AddModelScreen(), lambda _ok: self.refresh_models())
+        self.app.push_screen(AddModelScreen(), lambda _ok: self.refresh_models(self._leaderboard))
 
     def action_run(self) -> None:
         """Benchmark the selected quant locally (download if needed) → a real, submittable run. No
@@ -492,7 +543,7 @@ class ModelsScreen(ModalScreen):
         if entry:
             self._download_entry(entry)
         else:
-            self.app.call_from_thread(self.refresh_models)
+            self.app.call_from_thread(self.refresh_models, self._leaderboard)
 
     def _download_entry(self, entry) -> None:
         self.app.call_from_thread(self.app.notify, f"downloading {entry.name}…")
@@ -500,7 +551,7 @@ class ModelsScreen(ModalScreen):
         models.download(entry, lambda s: self.app.call_from_thread(self.app.notify, s, timeout=8),
                         progress=lambda done, total: self.app.call_from_thread(self._bar_update, done, total))
         self.app.call_from_thread(self._bar_show, False)
-        self.app.call_from_thread(self.refresh_models)
+        self.app.call_from_thread(self.refresh_models, self._leaderboard)
 
     def _bar_show(self, show: bool) -> None:
         self.query_one("#dl-bar", ProgressBar).display = show

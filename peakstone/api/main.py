@@ -143,9 +143,10 @@ def _submitter_handle(db, sub: models.Submission) -> str | None:
 
 
 def _run_info(db, sub: models.Submission, art: models.ModelArtifact) -> dict:
-    return {"artifact": art.artifact, "vram_gb": sub.vram_gb, "context": sub.context,
-            "engine": sub.engine, "trust_tier": sub.trust_tier, "submitted_at": str(sub.submitted_at),
-            "submitter": _submitter_handle(db, sub), "bundle_hash": sub.bundle_hash}
+    return {"artifact": art.artifact, "hf_repo": art.hf_repo, "vram_gb": sub.vram_gb,
+            "context": sub.context, "engine": sub.engine, "trust_tier": sub.trust_tier,
+            "submitted_at": str(sub.submitted_at), "submitter": _submitter_handle(db, sub),
+            "bundle_hash": sub.bundle_hash}
 
 
 def _sort_value(row: dict, key: str):

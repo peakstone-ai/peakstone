@@ -7,7 +7,18 @@ import pytest
 from textual.widgets import DataTable, Static
 
 from peakstone.dashboard import client, hardware
+from peakstone.dashboard import models as _models
 from peakstone.dashboard.app import Dashboard, _bar, _fmt
+
+# Captured before any stubbing so the cache-path test can call the real implementation.
+_REAL_AVAILABLE_QUANTS = _models.available_quants
+
+
+@pytest.fixture(autouse=True)
+def _no_hf_network(monkeypatch):
+    """The models screen auto-expands families, which kicks off HF quant discovery in worker threads;
+    keep that off the network in tests (a real lookup would block worker shutdown at app exit)."""
+    monkeypatch.setattr(_models, "available_quants", lambda repo, **k: [])
 
 _FAKE = {"count": 2, "leaderboard": [
     {"rank": 1, "family": "qwen3-coder", "code_score": 0.93, "agent_score": None,
@@ -207,11 +218,12 @@ def test_reproduce_screen_shows_result_and_records_history(monkeypatch):
 
 
 def test_models_screen_run_opens_reproduce(monkeypatch):
-    from peakstone.dashboard import history
+    from peakstone.dashboard import history, models
     from peakstone.dashboard import reproduce as R
     from peakstone.dashboard.app import Dashboard, ModelsScreen, ReproduceScreen
     monkeypatch.setattr(R, "reproduce", lambda model, **k: R.ReproduceResult(model, True, your_tps=70.0, note="done"))
     monkeypatch.setattr(history, "append", lambda e: None)
+    monkeypatch.setattr(models, "available_quants", lambda repo, **k: [])   # no HF network in tests
 
     async def scenario():
         app = Dashboard("http://x")
@@ -374,7 +386,7 @@ def test_available_quants_uses_cache(tmp_path):
     from peakstone.dashboard import models
     cache = tmp_path / "hf.json"
     cache.write_text(json.dumps({"org/Repo": [{"quant": "Q6_K", "file": "x-Q6_K.gguf", "size_gb": 27.0}]}))
-    assert models.available_quants("org/Repo", cache_path=cache) == \
+    assert _REAL_AVAILABLE_QUANTS("org/Repo", cache_path=cache) == \
         [{"quant": "Q6_K", "file": "x-Q6_K.gguf", "size_gb": 27.0}]   # cache hit, no network
 
 
@@ -433,6 +445,7 @@ def test_run_with_preflight_routing(monkeypatch):
                                          run_with_preflight)
     entry = models.ModelEntry("m", "org/r", "models/m/x.gguf", 8081, 32768, "")
     monkeypatch.setattr(models, "load_registry", lambda: {"m": entry})
+    monkeypatch.setattr(models, "available_quants", lambda repo, **k: [])   # no HF network in tests
     monkeypatch.setattr(R, "reproduce", lambda *a, **k: R.ReproduceResult("m", True, note="done"))
     monkeypatch.setattr(history, "append", lambda e: None)
 
@@ -455,10 +468,12 @@ def test_run_with_preflight_routing(monkeypatch):
 
 
 def test_models_screen_shows_caps(monkeypatch):
+    from peakstone.dashboard import models
     from peakstone.dashboard.app import Dashboard, ModelsScreen
     from textual.widgets import Tree
     monkeypatch.setattr("peakstone.engine.capabilities.effective_capabilities",
                         lambda m, **k: {"tools", "agentic"})
+    monkeypatch.setattr(models, "available_quants", lambda repo, **k: [])   # no HF network in tests
 
     async def scenario():
         app = Dashboard("http://x")
