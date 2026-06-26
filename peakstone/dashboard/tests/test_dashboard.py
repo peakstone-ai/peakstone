@@ -590,6 +590,14 @@ def test_repetition_loop_shows_as_error_type():
     assert "REPETITION LOOP" in body
 
 
+def test_fmt_dur():
+    from peakstone.dashboard.app import _fmt_dur
+    assert _fmt_dur(45) == "45s"
+    assert _fmt_dur(192) == "3m12s"
+    assert _fmt_dur(3725) == "1h02m"
+    assert _fmt_dur(None) == "—" and _fmt_dur(0) == "—"
+
+
 def test_pretty_progress():
     from peakstone.dashboard.app import _pretty_progress
     assert "[green]✓[/]" in _pretty_progress("m | ch  ok  tests 10/10")

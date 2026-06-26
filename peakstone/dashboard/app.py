@@ -37,6 +37,18 @@ def _fmt(v, fmt: str = "{:.2f}") -> str:
     return fmt.format(v) if isinstance(v, (int, float)) else "—"
 
 
+def _fmt_dur(s) -> str:
+    """Compact run duration: 45s, 3m12s, 1h02m."""
+    if not isinstance(s, (int, float)) or s <= 0:
+        return "—"
+    s = int(s)
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m{s % 60:02d}s"
+    return f"{s // 3600}h{(s % 3600) // 60:02d}m"
+
+
 class NavTree(Tree):
     """Tree with file-explorer keys: ⏎ expands/collapses, space selects, ← collapses (or steps to
     parent), → expands. (Default Textual maps ⏎→select and space→toggle; we swap them.)"""
@@ -192,7 +204,7 @@ class Dashboard(App):
         ("u", "queue", "Queue"),
         ("h", "history", "History"),
     ]
-    SORTS = ["code_score", "held_out_score", "agent_score", "planner_score", "tok_per_s"]
+    SORTS = ["code_score", "held_out_score", "agent_score", "planner_score", "tok_per_s", "total_time_s"]
 
     def __init__(self, base_url: str):
         super().__init__()
@@ -570,7 +582,7 @@ class Dashboard(App):
         ctx = f"  {_ctx_k(run.get('context'))} ctx" if run.get("context") else ""
         return (f"{run.get('artifact', '—'):14} c {_fmt(r.get('code_score'))} a {_fmt(r.get('agent_score'))} "
                 f"p {_fmt(r.get('planner_score'))}  {_fmt(r.get('tok_per_s'), '{:.0f}')} tps  "
-                f"{_fmt(r.get('sol_per_s'), '{:.2f}')} sol/s  {mem} used{ctx}  "
+                f"{_fmt(r.get('sol_per_s'), '{:.2f}')} sol/s  {_fmt_dur(r.get('total_time_s'))}  {mem} used{ctx}  "
                 f"{(run.get('trust_tier') or '').replace('-', ' ')}  cov {cov}"
                 + (f"   [dim]{hw}[/]" if hw else ""))
 

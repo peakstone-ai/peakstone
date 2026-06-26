@@ -95,6 +95,7 @@ def test_coverage_and_sol_per_s(client):
     row = next(r for r in client.get("/leaderboard").json()["leaderboard"] if r["family"] == "covX")
     assert row["n_total"] == 4                      # coverage: challenges in the run
     assert row["sol_per_s"] == 0.5                  # throughput over total model time
+    assert row["total_time_s"] == 8.0               # total run time = sum of per-challenge latency
     assert row["run"]["vram_gb"] == 24 and "ram_gb" in row["run"]   # machine totals
     assert "vram_used_gb" in row["run"] and "ram_used_gb" in row["run"]   # model footprint exposed
     assert row["run"]["gpu"] == "RTX 4090" and "cpu" in row["run"]        # hardware it ran on

@@ -61,6 +61,7 @@ METRIC_AXES = {"peak_rss_mb": "asc", "loc": "asc", "solution_bytes": "asc", "tes
 SORT_ORDER = {"code_score": "desc", "held_out_score": "desc", "math_score": "desc",
               "agent_score": "desc", "planner_score": "desc", "safety_score": "desc",
               "solved": "desc", "tok_per_s": "desc", "sol_per_s": "desc", "n_total": "desc",
+              "total_time_s": "asc",                  # quicker runs rank first
               **METRIC_AXES}
 
 
@@ -131,6 +132,7 @@ def _summarize(sub: models.Submission, fam: models.ModelFamily | None = None) ->
         "n_planner": len(planner),
         "n_total": len(rs),                              # coverage: challenges in the run
         "sol_per_s": _sol_per_s(rs),                     # throughput: challenges per second of work
+        "total_time_s": _total_time(rs),                 # wall: sum of per-challenge model time
         "by_category": {k: round(sum(v) / len(v), 3) for k, v in sorted(by_cat.items())},
         "tok_per_s": _avg([r.tok_per_s for r in rs]),
         "metrics": _agg_metrics(rs),
@@ -139,8 +141,14 @@ def _summarize(sub: models.Submission, fam: models.ModelFamily | None = None) ->
 
 def _sol_per_s(rs) -> float | None:
     """Challenges solved per second over the run's total model time (sum of per-challenge latency)."""
+    lat = _total_time(rs)
+    return round(len(rs) / lat, 3) if lat else None
+
+
+def _total_time(rs) -> float | None:
+    """Total run time = sum of per-challenge model time (latency_s). None if no timing recorded."""
     lat = sum(r.latency_s for r in rs if r.latency_s)
-    return round(len(rs) / lat, 3) if lat > 0 else None
+    return round(lat, 1) if lat > 0 else None
 
 
 def _submitter_handle(db, sub: models.Submission) -> str | None:
