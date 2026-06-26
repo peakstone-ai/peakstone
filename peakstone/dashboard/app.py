@@ -1549,7 +1549,10 @@ class QuantScreen(ModalScreen):
                 self.notify(f"register failed: {ex}")
                 return
         started = self.app.start_download(entry.name)   # queue it like any other job (progress bar + cancel)
-        self.notify(f"downloading {entry.name}…" if started else f"queued download: {entry.name}")
+        if started:
+            self.app.push_screen(ReproduceScreen())     # open the live view so the progress bar is visible
+        else:
+            self.notify(f"queued download: {entry.name} — open the queue (u) to watch it")
         self.app.call_from_thread(self.load)
 
 
