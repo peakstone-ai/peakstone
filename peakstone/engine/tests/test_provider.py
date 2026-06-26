@@ -58,6 +58,11 @@ def test_is_looping():
     assert is_looping("the " * 80)                 # a word repeated
     assert is_looping("\n" * 300)                   # whitespace flood
     assert is_looping("ab" * 150)                   # tiny period
+    # long, block-level repetition (period well beyond the old 50-char cap)
+    block = "".join(chr(48 + (i * i + i) % 75) for i in range(120))   # ~120-char non-periodic block
+    assert is_looping(block * 5)                    # >=3 reps over >=400 chars
+    assert is_looping(block * 9 + block[:60])       # partial trailing rep still caught
+    assert not is_looping(block * 2)                # only 2 reps of a medium block -> not flagged
     assert not is_looping("def f():\n    return 1\n" * 2)        # short, not a long exact run
     assert not is_looping("a normal varied answer with no long exact repetition at all, really.")
 

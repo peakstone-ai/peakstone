@@ -24,20 +24,27 @@ class ChatResult:
     aborted: bool = False        # generation cut short (e.g. a degenerate repetition loop)
 
 
-def is_looping(tail: str, *, max_period: int = 50, min_reps: int = 6, min_span: int = 200) -> bool:
-    """True if the end of the generated text is a short unit repeated over and over — the degenerate
-    loop low-bit quants fall into. Requires a long run of EXACT repetition (>= min_span chars, the
-    smallest period repeated >= min_reps times) so normal repetitive code doesn't trip it."""
+def is_looping(tail: str, *, max_period: int = 1200) -> bool:
+    """True if the end of the generated text is a unit repeated over and over — the degenerate loop
+    low-bit quants fall into. Handles short tight loops AND long block-level repeats (a whole
+    sentence/function repeated). Tiered so the longer the repeated unit, the fewer exact reps are
+    needed (no legit text repeats a long block verbatim), while normal repetitive code/whitespace
+    needs a sustained run:
+      - >= 6 reps over >= 180 chars   (tight loops: a word, a few tokens)
+      - >= 3 reps over >= 400 chars   (a line / short paragraph)
+      - >= 2 reps over >= 2000 chars  (a large block repeated)
+    """
     n = len(tail)
-    if n < min_span:
+    if n < 180:
         return False
-    for p in range(1, max_period + 1):
+    for p in range(1, min(max_period, n // 2) + 1):
         unit = tail[n - p:]
         reps, i = 1, n - p
         while i - p >= 0 and tail[i - p:i] == unit:
             reps += 1
             i -= p
-        if reps >= min_reps and reps * p >= min_span:
+        span = reps * p
+        if (reps >= 6 and span >= 180) or (reps >= 3 and span >= 400) or (reps >= 2 and span >= 2000):
             return True
     return False
 
@@ -147,7 +154,7 @@ class LLMClient:
                         pending.append(piece)
                         if sum(len(p) for p in pending) >= 48 or "\n" in piece:
                             flush()
-                        tail, since_check = (tail + piece)[-400:], since_check + len(piece)
+                        tail, since_check = (tail + piece)[-4096:], since_check + len(piece)
                         if since_check >= 150:      # throttle the check; abort on a degenerate loop
                             since_check = 0
                             if is_looping(tail):
