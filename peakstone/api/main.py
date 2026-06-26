@@ -230,16 +230,31 @@ def leaderboard(db: Session = Depends(get_session), suite: str | None = None,
 
 @app.get("/runs/{bundle_hash}")
 def run_results(bundle_hash: str, db: Session = Depends(get_session)):
-    """Per-challenge results for one run (submission) — the breakdown behind a leaderboard row."""
+    """Per-challenge results for one run (submission) — the breakdown behind a leaderboard row. Lite:
+    scores + the error type only, NOT the (potentially large) transcripts; fetch a single challenge's
+    transcript on demand via /runs/{hash}/challenge/{id}."""
     sub = db.scalar(select(models.Submission).where(models.Submission.bundle_hash == bundle_hash))
     if not sub:
         raise HTTPException(404, "unknown run")
     results = [{"challenge": r.challenge_id, "category": r.category, "verification": r.verification,
                 "final": r.final, "passed": r.passed, "total": r.total, "difficulty": r.difficulty,
-                "transcript": r.transcript}
+                "error": (r.transcript or {}).get("error")}
                for r in sub.results]
     results.sort(key=lambda r: (r["category"] or "", r["challenge"]))
     return {"bundle_hash": bundle_hash, "n": len(results), "results": results}
+
+
+@app.get("/runs/{bundle_hash}/challenge/{challenge_id}")
+def run_challenge(bundle_hash: str, challenge_id: str, db: Session = Depends(get_session)):
+    """One challenge's full result incl. transcript — fetched when the user opens the solution view."""
+    sub = db.scalar(select(models.Submission).where(models.Submission.bundle_hash == bundle_hash))
+    if not sub:
+        raise HTTPException(404, "unknown run")
+    r = next((x for x in sub.results if x.challenge_id == challenge_id), None)
+    if not r:
+        raise HTTPException(404, "unknown challenge in this run")
+    return {"challenge": r.challenge_id, "final": r.final, "passed": r.passed, "total": r.total,
+            "category": r.category, "transcript": r.transcript}
 
 
 @app.get("/models/{family}")

@@ -150,9 +150,11 @@ def test_run_results_endpoint(client):
     res = client.get(f"/runs/{bh}").json()
     by_ch = {r["challenge"]: r for r in res["results"]}
     assert {"arch-0", "arch-1", "refuse-x"} <= set(by_ch)       # per-challenge breakdown of the run
-    tr = by_ch["arch-0"]["transcript"]
-    assert tr["raw_output"] == "x" and tr["stdout"] == "ok"     # solution + execution output
+    assert "transcript" not in by_ch["arch-0"]                  # lite: no bulky transcript in the list
+    full = client.get(f"/runs/{bh}/challenge/arch-0").json()    # transcript fetched on demand
+    assert full["transcript"]["raw_output"] == "x" and full["transcript"]["stdout"] == "ok"
     assert client.get("/runs/nope").status_code == 404
+    assert client.get(f"/runs/{bh}/challenge/nope").status_code == 404
 
 
 def test_pubkey_swap_is_rejected(client):

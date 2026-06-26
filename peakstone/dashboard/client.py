@@ -40,8 +40,14 @@ def get_model(base_url: str, family: str, *, timeout: float = 10) -> dict:
 
 
 def get_run(base_url: str, bundle_hash: str, *, timeout: float = 10) -> dict:
-    """Per-challenge results for one run (the breakdown behind a leaderboard row)."""
+    """Per-challenge results for one run (lite: scores + error type, no transcripts)."""
     return _get(base_url, f"/runs/{urllib.parse.quote(bundle_hash, safe='')}", {}, timeout)
+
+
+def get_run_challenge(base_url: str, bundle_hash: str, challenge_id: str, *, timeout: float = 10) -> dict:
+    """One challenge's full result incl. transcript (fetched on solution-open)."""
+    return _get(base_url, f"/runs/{urllib.parse.quote(bundle_hash, safe='')}"
+                f"/challenge/{urllib.parse.quote(challenge_id, safe='')}", {}, timeout)
 
 
 def submit_bundle(base_url: str, bundle: dict, *, timeout: float = 30) -> tuple[int, str]:
