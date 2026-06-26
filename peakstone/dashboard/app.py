@@ -155,6 +155,16 @@ class Dashboard(App):
         self._viewer = None                    # the ReproduceScreen currently viewing the active run
         self._run_procs: list = []             # serve + bench subprocesses of the active run (for cancel)
         self._run_cancelled = False
+        self._corpus_total: int | None = None  # total peakstones available (coverage denominator)
+
+    def corpus_total(self) -> int:
+        """Total peakstones in the local corpus — the denominator for coverage ('N of our total')."""
+        if self._corpus_total is None:
+            try:
+                self._corpus_total = len(ch_browse.load_corpus())
+            except Exception:  # noqa: BLE001
+                self._corpus_total = 0
+        return self._corpus_total
 
     def start_run(self, name: str, *, published_tps=None, challenge_ids=None, level=None,
                   free_procs=None) -> bool:
@@ -333,7 +343,7 @@ class Dashboard(App):
                 _mem(run.get("vram_used_gb") or run.get("vram_gb"),     # used footprint, total fallback
                      run.get("ram_used_gb") or run.get("ram_gb")),
                 (run.get("trust_tier") or "").replace("-", " "),
-                str(n_total) if n_total else "—")
+                f"{n_total}/{self.corpus_total()}" if n_total else "—")
         if not rows:
             table.add_row("", "(no runs fit this filter)", "", "", "", "", "", "", "", "")
 
@@ -435,8 +445,10 @@ class ReproduceScreen(ModalScreen):
         rate = (self._n_done / elapsed) if elapsed > 0 else 0.0
         done = min(self._n_done, self._n_total) if self._n_total else self._n_done
         total = self._n_total or "?"
+        corpus = self.app.corpus_total()
+        suite = f"   ·   {self._n_total}/{corpus} of suite" if (self._n_total and corpus) else ""
         self.query_one("#repro-stat", Static).update(
-            f"[b]coverage[/] {done}/{total}   ·   [b]{rate:.2f}[/] sol/s   ·   "
+            f"[b]coverage[/] {done}/{total}{suite}   ·   [b]{rate:.2f}[/] sol/s   ·   "
             f"elapsed {int(elapsed // 60)}:{int(elapsed % 60):02d}")
 
     def _render_gen(self) -> None:

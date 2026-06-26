@@ -62,6 +62,7 @@ def test_app_renders_filtered_leaderboard(monkeypatch):
     async def scenario():
         app = Dashboard("http://test")
         async with app.run_test() as pilot:
+            app._corpus_total = 1965                             # fixed denominator for the assertion
             await app.workers.wait_for_complete()
             await pilot.pause()
             table = app.query_one(DataTable)
@@ -71,7 +72,7 @@ def test_app_renders_filtered_leaderboard(monkeypatch):
                             "VRAM/RAM", "Trust", "Coverage"]
             assert str(table.get_row_at(0)[6]) == "0.50"        # sol/s after TPS
             assert str(table.get_row_at(0)[7]) == "24/26 GB"    # VRAM/RAM used (spilled to RAM)
-            assert str(table.get_row_at(0)[9]) == "50"          # coverage (n_total) last
+            assert str(table.get_row_at(0)[9]) == "50/1965"     # coverage: run / total peakstones
             # fit filter on by default -> the request was scoped to local VRAM (or None if no GPU)
             assert "max_vram_gb" in captured
             # cycling sort re-queries with the next axis
@@ -473,6 +474,7 @@ def test_reproduce_screen_coverage_and_rate():
 
     async def scenario():
         app = Dashboard("http://x")
+        app._corpus_total = 1965                                              # fixed suite denominator
         async with app.run_test() as pilot:
             scr = ReproduceScreen()
             await app.push_screen(scr)
@@ -484,7 +486,7 @@ def test_reproduce_screen_coverage_and_rate():
             scr._on_line("   m | b   !! tests 3/10")                              # result -> 2 done
             await pilot.pause()
             stat = str(scr.query_one("#repro-stat", Static).render())
-            assert "coverage 2/3" in stat and "sol/s" in stat
+            assert "coverage 2/3" in stat and "3/1965 of suite" in stat and "sol/s" in stat
 
     asyncio.run(scenario())
 
