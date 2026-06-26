@@ -55,65 +55,36 @@ def test_app_renders_filtered_leaderboard(monkeypatch):
     def fake_get(base_url, *, max_vram_gb=None, sort="code_score", collapse="family", timeout=10):
         captured["max_vram_gb"] = max_vram_gb
         captured["sort"] = sort
+        captured["collapse"] = collapse
         return _FAKE
 
     monkeypatch.setattr(client, "get_leaderboard", fake_get)
 
     async def scenario():
+        from peakstone.dashboard.app import BoardTree
         app = Dashboard("http://test")
         async with app.run_test() as pilot:
-            app._corpus_total = 1965                             # fixed denominator for the assertion
+            app._corpus_total = 1965
             await app.workers.wait_for_complete()
             await pilot.pause()
-            table = app.query_one(DataTable)
-            assert table.row_count == 2
-            cols = [str(c.label) for c in table.columns.values()]
-            assert cols == ["#", "Model", "Quant", "Code", "Agentic", "Planner", "TPS", "sol/s",
-                            "VRAM/RAM", "Trust", "Coverage"]
-            assert str(table.get_row_at(0)[7]) == "0.50"        # sol/s after TPS
-            assert str(table.get_row_at(0)[8]) == "24/26 GB"    # VRAM/RAM used (spilled to RAM)
-            assert str(table.get_row_at(0)[10]) == "50/1965"    # coverage: run / total peakstones
-            # fit filter on by default -> the request was scoped to local VRAM (or None if no GPU)
-            assert "max_vram_gb" in captured
+            assert captured["collapse"] == "quant"             # board always fetches per-quant rows
+            tree = app.query_one("#board", BoardTree)
+            fam_labels = [str(n.label) for n in tree.root.children]
+            assert len(fam_labels) == 2                        # one node per model family
+            assert any("qwen3-coder" in lbl for lbl in fam_labels)
+            # the model's quant run is nested under it with its metrics
+            leaf = str(tree.root.children[0].children[0].label)
+            assert "24/26 GB" in leaf and "50/1965" in leaf
             # cycling sort re-queries with the next axis
             await pilot.press("s")
             await app.workers.wait_for_complete()
             await pilot.pause()
-            assert captured["sort"] == "held_out_score"   # SORTS: code_score -> held_out_score -> ...
+            assert captured["sort"] == "held_out_score"
             # toggling the fit filter off drops the VRAM scope
             await pilot.press("f")
             await app.workers.wait_for_complete()
             await pilot.pause()
             assert captured["max_vram_gb"] is None
-
-    asyncio.run(scenario())
-
-
-def test_board_per_quant_toggle(monkeypatch):
-    from peakstone.dashboard.app import Dashboard
-    captured = {}
-    fake = {"count": 1, "leaderboard": [{"rank": 1, "family": "qz", "code_score": 0.7, "tok_per_s": 80,
-            "n_total": 50, "run": {"artifact": "UD-Q6_K", "vram_gb": 24}}]}
-
-    def get(base, *, max_vram_gb=None, sort="code_score", collapse="family", timeout=10):
-        captured["collapse"] = collapse
-        return fake
-
-    monkeypatch.setattr(client, "get_leaderboard", get)
-
-    async def scenario():
-        app = Dashboard("http://x")
-        async with app.run_test() as pilot:
-            await app.workers.wait_for_complete()
-            await pilot.pause()
-            assert captured["collapse"] == "family"            # default: best per model
-            await pilot.press("g")                             # toggle per-quant
-            await app.workers.wait_for_complete()
-            await pilot.pause()
-            assert captured["collapse"] == "quant"
-            t = app.query_one(DataTable)
-            assert str(t.get_row_at(0)[1]) == "qz"             # Model column = family
-            assert str(t.get_row_at(0)[2]) == "UD-Q6_K"        # dedicated Quant column
 
     asyncio.run(scenario())
 
@@ -917,11 +888,13 @@ def test_app_handles_api_down(monkeypatch):
     monkeypatch.setattr(client, "get_leaderboard", boom)
 
     async def scenario():
+        from peakstone.dashboard.app import BoardTree
         app = Dashboard("http://down")
         async with app.run_test() as pilot:
             await app.workers.wait_for_complete()
             await pilot.pause()
-            table = app.query_one(DataTable)
-            assert table.row_count == 1   # the "API unreachable" row, not a crash
+            tree = app.query_one("#board", BoardTree)
+            labels = [str(n.label) for n in tree.root.children]
+            assert labels and "API unreachable" in labels[0]   # graceful, not a crash
 
     asyncio.run(scenario())

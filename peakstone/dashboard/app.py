@@ -75,6 +75,20 @@ class ModelTree(NavTree):
             self.screen.action_enter()       # quant: run if local, else confirm download+run
 
 
+class BoardTree(NavTree):
+    """The leaderboard tree: models with their quant runs nested under. ⏎ expands/collapses a model
+    or reproduces a quant run; →/← navigate."""
+    BINDINGS = [Binding("enter", "activate", "Expand / reproduce")]
+
+    def action_activate(self) -> None:
+        node = self.cursor_node
+        d = (node.data if node else None) or {}
+        if d.get("kind") == "family":
+            node.collapse() if node.is_expanded else node.expand()
+        elif d.get("kind") == "quant":
+            self.app.action_reproduce()
+
+
 def _mem(vram, ram) -> str:
     """Memory a run used: 'VRAM/RAM' so a model too big for VRAM that spills to system RAM (and still
     runs at usable tok/s) reads sensibly. Falls back to whichever is known."""
@@ -128,12 +142,12 @@ class Dashboard(App):
     CSS = """
     HardwarePanel { height: auto; border: round $accent; padding: 0 1; margin: 1 1 0 1; }
     DataTable { height: 1fr; margin: 0 1; }
+    #board { height: 1fr; margin: 0 1; }
     """
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("r", "refresh", "Refresh"),
         ("f", "toggle_fit", "Fit filter"),
-        ("g", "toggle_quants", "Per-quant"),
         ("s", "cycle_sort", "Sort axis"),
         ("enter", "reproduce", "Reproduce"),
         ("c", "challenges", "Peakstones"),
@@ -148,7 +162,6 @@ class Dashboard(App):
         super().__init__()
         self.base_url = base_url
         self.fit = True          # filter to models that fit my VRAM
-        self.collapse = "family"  # board collapses to best run per model; "quant" = per-quant rows
         self.sort_i = 0
         self._board_rows: list[dict] = []
         # peakstones chosen in the Challenges screen; empty = use the quick default repro set.
@@ -300,25 +313,22 @@ class Dashboard(App):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         yield HardwarePanel()
-        yield DataTable(zebra_stripes=True, cursor_type="row")
+        yield BoardTree("leaderboard", id="board")
         yield Footer()
 
     def on_mount(self) -> None:
         self.title = "Peakstone"
-        table = self.query_one(DataTable)
-        table.add_columns("#", "Model", "Quant", "Code", "Agentic", "Planner", "TPS", "sol/s",
-                          "VRAM/RAM", "Trust", "Coverage")
+        tree = self.query_one("#board", BoardTree)
+        tree.show_root = False
+        tree.auto_expand = False
         self.load_board()
+        tree.focus()
 
     def action_refresh(self) -> None:
         self.load_board()
 
     def action_toggle_fit(self) -> None:
         self.fit = not self.fit
-        self.load_board()
-
-    def action_toggle_quants(self) -> None:
-        self.collapse = "quant" if self.collapse == "family" else "family"
         self.load_board()
 
     def action_cycle_sort(self) -> None:
@@ -344,71 +354,82 @@ class Dashboard(App):
     def action_challenges(self) -> None:
         self.push_screen(ChallengesScreen())
 
+    def _cursor_family(self):
+        """(family, repo) of the highlighted board node — works on a model node or a quant child."""
+        node = self.query_one("#board", BoardTree).cursor_node
+        d = (node.data if node else None) or {}
+        return d.get("family"), d.get("repo"), d.get("row", {})
+
     def action_quants(self) -> None:
-        table = self.query_one(DataTable)
-        i = table.cursor_row
-        if not self._board_rows or i is None or i >= len(self._board_rows):
-            return
-        row = self._board_rows[i]
-        if row.get("family"):
-            self.push_screen(QuantScreen(row["family"], self.base_url, repo=row.get("run", {}).get("hf_repo")))
+        fam, repo, _ = self._cursor_family()
+        if fam:
+            self.push_screen(QuantScreen(fam, self.base_url, repo=repo))
 
     def run_ids(self) -> list[str]:
         """Challenges to run: the user's Challenges-screen selection, else the quick default set."""
         return self.selected_ids or REPRODUCE_IDS
 
     def action_reproduce(self) -> None:
-        table = self.query_one(DataTable)
-        i = table.cursor_row
-        if not self._board_rows or i is None or i >= len(self._board_rows):
-            return
-        row = self._board_rows[i]
-        if not row.get("family"):
-            return
-        run_with_preflight(self, row["family"], challenge_ids=self.run_ids(),
-                           published_tps=row.get("tok_per_s"))
+        fam, _, row = self._cursor_family()
+        if fam:
+            run_with_preflight(self, fam, challenge_ids=self.run_ids(),
+                               published_tps=row.get("tok_per_s"))
 
     @work(thread=True, exclusive=True)
     def load_board(self) -> None:
         snap = hardware.snapshot()
         max_vram = snap.max_vram_gb if (self.fit and snap.max_vram_gb) else None
-        try:
+        try:   # collapse=quant so we get every quant run; the tree groups them under each model
             data = client.get_leaderboard(self.base_url, max_vram_gb=max_vram,
-                                           sort=self.SORTS[self.sort_i], collapse=self.collapse)
+                                           sort=self.SORTS[self.sort_i], collapse="quant")
         except client.APIError as e:
             self.call_from_thread(self._render_error, str(e))
             return
         self.call_from_thread(self._render, data, max_vram)
 
+    def _quant_label(self, r: dict) -> str:
+        run = r.get("run", {})
+        n_total = r.get("n_total")
+        cov = f"{n_total}/{self.corpus_total()}" if n_total else "—"
+        mem = _mem(run.get("vram_used_gb") or run.get("vram_gb"), run.get("ram_used_gb") or run.get("ram_gb"))
+        return (f"{run.get('artifact', '—'):14} c {_fmt(r.get('code_score'))} a {_fmt(r.get('agent_score'))} "
+                f"p {_fmt(r.get('planner_score'))}  {_fmt(r.get('tok_per_s'), '{:.0f}')} tps  "
+                f"{_fmt(r.get('sol_per_s'), '{:.2f}')} sol/s  {mem}  "
+                f"{(run.get('trust_tier') or '').replace('-', ' ')}  cov {cov}")
+
     def _render(self, data: dict, max_vram: float | None) -> None:
-        table = self.query_one(DataTable)
-        table.clear()
+        tree = self.query_one("#board", BoardTree)
+        tree.clear()
         scope = f"fits ≤{max_vram:g} GB" if max_vram else "all hardware"
-        grouping = "per-quant" if self.collapse == "quant" else "best/model"
         sel = f"  ·  ▶ {len(self.selected_ids)} peakstones selected" if self.selected_ids else ""
-        self.sub_title = (f"{self.base_url}  ·  {scope}  ·  {grouping} (g)  ·  sort: {self.SORTS[self.sort_i]}  ·  "
-                          f"⏎ reproduce  v quants  c peakstones  m models  u queue{sel}")
+        self.sub_title = (f"{self.base_url}  ·  {scope}  ·  sort: {self.SORTS[self.sort_i]}  ·  "
+                          f"⏎ expand/reproduce  v quants  c peakstones  m models  u queue{sel}")
         rows = data.get("leaderboard", [])
         self._board_rows = rows
-        for r in rows:
-            run = r.get("run", {})
-            n_total = r.get("n_total")
-            table.add_row(
-                str(r.get("rank", "")), r.get("family", ""), run.get("artifact") or "—",
-                _fmt(r.get("code_score")), _fmt(r.get("agent_score")), _fmt(r.get("planner_score")),
-                _fmt(r.get("tok_per_s"), "{:.0f}"), _fmt(r.get("sol_per_s"), "{:.2f}"),
-                _mem(run.get("vram_used_gb") or run.get("vram_gb"),     # used footprint, total fallback
-                     run.get("ram_used_gb") or run.get("ram_gb")),
-                (run.get("trust_tier") or "").replace("-", " "),
-                f"{n_total}/{self.corpus_total()}" if n_total else "—")
+        fams: dict[str, list] = {}
+        for r in rows:                                   # rows arrive sorted; group preserving order
+            fams.setdefault(r.get("family", "?"), []).append(r)
+        for rank, (fam, frows) in enumerate(fams.items(), 1):
+            best = frows[0]
+            repo = best.get("run", {}).get("hf_repo")
+            node = tree.root.add(
+                f"[b]{rank}. {fam}[/]   code {_fmt(best.get('code_score'))}   "
+                f"{len(frows)} quant(s)",
+                data={"kind": "family", "family": fam, "repo": repo, "row": best})
+            for r in frows:
+                node.add_leaf(self._quant_label(r),
+                              data={"kind": "quant", "family": fam, "row": r,
+                                    "repo": r.get("run", {}).get("hf_repo")})
         if not rows:
-            table.add_row("", "(no runs fit this filter)", "", "", "", "", "", "", "", "", "")
+            tree.root.add_leaf("(no runs fit this filter)")
+        if tree.root.children:
+            tree.cursor_line = 0
 
     def _render_error(self, msg: str) -> None:
-        table = self.query_one(DataTable)
-        table.clear()
+        tree = self.query_one("#board", BoardTree)
+        tree.clear()
         self.sub_title = f"{self.base_url}  ·  API unreachable"
-        table.add_row("", "API unreachable", msg[:50], "", "", "", "", "")
+        tree.root.add_leaf(f"API unreachable — {msg[:60]}")
 
 
 class ReproduceScreen(ModalScreen):
