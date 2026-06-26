@@ -205,7 +205,7 @@ class Dashboard(App):
         ("h", "history", "History"),
     ]
     SORTS = ["code_score", "held_out_score", "agent_score", "planner_score", "tok_per_s",
-             "total_time_s", "score_per_1k_tokens"]
+             "total_time_s", "score_per_1k_tokens", "long_ctx_score"]
 
     def __init__(self, base_url: str):
         super().__init__()
@@ -584,8 +584,9 @@ class Dashboard(App):
         eff = _fmt(r.get("score_per_1k_tokens"), "{:.2f}")
         limited = r.get("n_ctx_limited") or 0
         warn = f" [yellow]⚠{limited}[/]" if limited else ""
+        lc = f" lc {_fmt(r.get('long_ctx_score'))}" if r.get("long_ctx_score") is not None else ""
         return (f"{run.get('artifact', '—'):14} c {_fmt(r.get('code_score'))} a {_fmt(r.get('agent_score'))} "
-                f"p {_fmt(r.get('planner_score'))}  {_fmt(r.get('tok_per_s'), '{:.0f}')} tps  "
+                f"p {_fmt(r.get('planner_score'))}{lc}  {_fmt(r.get('tok_per_s'), '{:.0f}')} tps  "
                 f"{_fmt(r.get('sol_per_s'), '{:.2f}')} sol/s  {_fmt_dur(r.get('total_time_s'))}  "
                 f"{eff}/1k tok{warn}  {mem} used{ctx}  "
                 f"{(run.get('trust_tier') or '').replace('-', ' ')}  cov {cov}"

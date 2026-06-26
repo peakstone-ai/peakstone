@@ -34,10 +34,12 @@ def test_observe_mapping():
         {"category": "tool-calling", "final_score": 0.5},
         {"verification": "goal-state-env", "final_score": 1.0},
         {"category": "math", "final_score": 1.0},
+        {"category": "long-context", "final_score": 0.5},       # used a long window -> long_ctx
+        {"category": "long-context", "final_score": 0.0},       # failed -> no negative asserted
         {"category": "code-correctness", "final_score": 1.0},   # not a capability signal
         {"category": "tool-calling", "final_score": 0.0},       # no engagement -> nothing
     ]
-    assert cap.observe(rows) == {"tools": True, "agentic": True, "reasoner": True}
+    assert cap.observe(rows) == {"tools": True, "agentic": True, "reasoner": True, "long_ctx": True}
     # bundle-shaped (nested score) via key args
     bundle_rows = [{"category": "tool-calling", "score_final": 0.9}]
     assert cap.observe(bundle_rows, score_key="score_final") == {"tools": True}

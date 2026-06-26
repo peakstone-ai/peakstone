@@ -6,12 +6,12 @@ from pathlib import Path
 from peakstone.engine.challenges import Challenge, filter_challenges
 
 
-def _ch(cid: str, family: str, published_at: str = "") -> Challenge:
+def _ch(cid: str, family: str, published_at: str = "", min_ctx: int = 0) -> Challenge:
     # family is derived from dir.parent.name, so place the challenge under challenges/<family>/<cid>
     return Challenge(
         id=cid, title=cid, language="python", difficulty=1, category="code-correctness",
         scoring="tests", solution_file="solution.py", timeout=30,
-        dir=Path(f"challenges/{family}/{cid}"), spec="", published_at=published_at,
+        dir=Path(f"challenges/{family}/{cid}"), spec="", published_at=published_at, min_ctx=min_ctx,
     )
 
 
@@ -53,3 +53,13 @@ def test_family_and_date_compose():
 def test_no_date_filter_keeps_undated():
     out = {c.id for c in filter_challenges(CHS, families=["python"])}
     assert out == {"py-1"}                       # no date bound -> undated kept
+
+
+def test_served_ctx_gates_long_context():
+    chs = [_ch("plain", "python"), _ch("lc-big", "longcontext", min_ctx=16384)]
+    # served window too small -> the long-context challenge is dropped (would only truncate + fail)
+    assert {c.id for c in filter_challenges(chs, served_ctx=8192)} == {"plain"}
+    # window large enough -> both kept
+    assert {c.id for c in filter_challenges(chs, served_ctx=16384)} == {"plain", "lc-big"}
+    # no served_ctx given (e.g. reference run) -> no ctx gating
+    assert {c.id for c in filter_challenges(chs)} == {"plain", "lc-big"}

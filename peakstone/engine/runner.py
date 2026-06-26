@@ -384,12 +384,16 @@ def main(argv=None):
             mem_used = {"vram_mib": model_vram, "ram_mib": _server_ram_used()}
 
         caps = model_capabilities(model)   # gated axes (tools/agentic) this model can attempt
+        served_ctx = _served_ctx(model)    # gate long-context challenges this run can't fit
         for ch in chs:
             label = f"{model:>18} | {ch.id:<28}"
             print(f"{label}  → solving [{ch.scoring}] …")   # live progress: what's running now
 
             if not relevant(ch.family, caps):
                 print(f"{label}  SKIP (model lacks '{GATED_CAP.get(ch.family)}')")
+                continue
+            if ch.min_ctx and served_ctx is not None and ch.min_ctx > served_ctx:
+                print(f"{label}  SKIP (needs ctx {ch.min_ctx}, served {served_ctx})")
                 continue
 
             if ch.scoring in ("tool_calls", "injection"):
@@ -1115,6 +1119,16 @@ def run_exec_plans(args, chs, host, ports, run_cfg, use_judge, judge_model, judg
     if args.bundle:
         _emit_bundle(meta, results, outdir)
     return 0
+
+
+def _served_ctx(model: str) -> int | None:
+    """The context window this run serves `model` at: PEAKSTONE_CTX overrides the registry ctx.
+    Used to gate long-context challenges a model can't fit (avoids unfair truncation failures)."""
+    ov = os.environ.get("PEAKSTONE_CTX")
+    if ov and ov.isdigit():
+        return int(ov)
+    ctx = capabilities._model_cfg(model).get("ctx")
+    return int(ctx) if isinstance(ctx, int) else None
 
 
 def _row(model, ch, run, sc, judge_res, response="", tps=None, lat=None, ptoks=0, ctoks=0,

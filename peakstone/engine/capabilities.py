@@ -200,4 +200,6 @@ def observe(results, *, score_key="final_score", cat_key="category") -> dict:
             caps["tools"] = True
         if cat == "math" and score > 0:
             caps["reasoner"] = True
+        if cat == "long-context" and score > 0:   # actually used a long window, not just declared one
+            caps["long_ctx"] = True
     return caps

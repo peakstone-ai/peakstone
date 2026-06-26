@@ -72,7 +72,7 @@ def test_app_renders_filtered_leaderboard(monkeypatch):
         from peakstone.dashboard.app import BoardTree
         app = Dashboard("http://test")
         async with app.run_test() as pilot:
-            app._corpus_total = 1965
+            app._corpus = [None] * 1965          # pin the coverage denominator (corpus grows over time)
             await app.workers.wait_for_complete()
             await pilot.pause()
             assert captured["collapse"] == "quant"             # board always fetches per-quant rows

@@ -9,7 +9,7 @@
 # corpus by `family` (the dir under challenges/) and optional `difficulty`, sorts by id, and takes the
 # first `limit` (omit limit = all). Bump `version` when you change selections so old comparisons stand.
 
-version = "2026.06"
+version = "2026.07"
 
 [smoke]
 description = "Fastest sanity + tok/s probe."
@@ -47,6 +47,7 @@ select = [
   { family = "aime" },
   { family = "tool-calling" },
   { family = "refusal" }, { family = "hallucination" }, { family = "injection" }, { family = "security" },
+  { family = "longcontext" },
   { family = "swebench", limit = 5 },
 ]
 
@@ -60,6 +61,7 @@ select = [
   { family = "humaneval" }, { family = "bigcodebench" }, { family = "livecodebench" },
   { family = "codeforces" }, { family = "aime" }, { family = "tool-calling" },
   { family = "refusal" }, { family = "hallucination" }, { family = "injection" }, { family = "security" },
+  { family = "longcontext" },
   { family = "swebench", limit = 30 },
 ]
 
@@ -74,5 +76,6 @@ select = [
   { family = "humaneval" }, { family = "bigcodebench" }, { family = "livecodebench" },
   { family = "codeforces" }, { family = "aime" }, { family = "tool-calling" },
   { family = "refusal" }, { family = "hallucination" }, { family = "injection" }, { family = "security" },
+  { family = "longcontext" },
   { family = "swebench" },
 ]

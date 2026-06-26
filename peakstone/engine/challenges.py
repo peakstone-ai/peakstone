@@ -53,6 +53,7 @@ class Challenge:
     spec: str
     ctype: str = "other"
     expect: str = ""          # for refusal challenges: "answer" | "refuse"
+    min_ctx: int = 0          # long-context: minimum served context window to attempt (0 = no requirement)
     published_at: str = ""    # date the challenge content first became public (YYYY-MM-DD)
     published_at_source: str = ""  # upstream | platform-first-seen | git | author | unknown
     judge_weight: float = 0.3
@@ -99,7 +100,7 @@ def load_challenges(root: Path) -> list[Challenge]:
             difficulty=int(m["difficulty"]), category=cat,
             scoring=m.get("scoring", "tests"), solution_file=m.get("solution_file", ""),
             timeout=int(m.get("timeout", 30)), dir=d, spec=spec, ctype=ctype,
-            expect=m.get("expect", ""),
+            expect=m.get("expect", ""), min_ctx=int(m.get("min_ctx", 0)),
             published_at=str(m.get("published_at", "")),
             published_at_source=m.get("published_at_source", ""),
             judge_weight=float(j.get("weight", 0.3)),
@@ -115,13 +116,17 @@ def _date10(s) -> str:
 
 
 def filter_challenges(chs, langs=None, difficulties=None, ids=None, categories=None, types=None,
-                      families=None, published_after=None, published_before=None):
+                      families=None, published_after=None, published_before=None, served_ctx=None):
     """Keep challenges matching ALL active filters. families filters on Challenge.family; the
     published_* bounds (YYYY-MM-DD) compare on published_at and EXCLUDE undated challenges when a
-    date bound is active (an unknown date can't be proven in-range)."""
+    date bound is active (an unknown date can't be proven in-range). served_ctx drops long-context
+    challenges whose min_ctx exceeds the run's served window (the model literally can't fit them —
+    attempting would just truncate and fail unfairly)."""
     after, before = _date10(published_after), _date10(published_before)
 
     def keep(c):
+        if served_ctx is not None and c.min_ctx and c.min_ctx > served_ctx:
+            return False
         if langs and c.language not in langs:
             return False
         if difficulties and c.difficulty not in difficulties:

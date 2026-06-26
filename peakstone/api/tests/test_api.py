@@ -126,6 +126,22 @@ def test_ctx_efficiency_on_leaderboard(client):
     assert client.get("/leaderboard", params={"sort": "score_per_1k_tokens"}).status_code == 200
 
 
+def test_long_context_axis(client):
+    ap, a = _newkey()
+    b = bundle.produce_bundle(
+        {"models": ["lcm"], "judge": None, "timestamp": "lcts",
+         "gpu": {"name": "RTX 4090", "driver_version": "595"}},
+        [_result("arch-0", "architecture", 0.2),                     # code axis
+         _result("lc-01-buried-routes", "long-context", 1.0)],       # long-context axis
+        sign=False)
+    bundle.sign_inplace(b, ap, a)
+    assert client.post("/submissions", json=b).status_code == 201
+    row = next(r for r in client.get("/leaderboard").json()["leaderboard"] if r["family"] == "lcm")
+    assert row["long_ctx_score"] == 1.0 and row["n_long_ctx"] == 1   # its own axis
+    assert row["code_score"] == 0.2                                  # long-context excluded from code
+    assert client.get("/leaderboard", params={"sort": "long_ctx_score"}).status_code == 200
+
+
 def test_coverage_and_sol_per_s(client):
     ap, a = _newkey()
     # 3 arch challenges + 1 refusal = 4 results, each latency 2.0s -> sol/s = 4 / 8 = 0.5

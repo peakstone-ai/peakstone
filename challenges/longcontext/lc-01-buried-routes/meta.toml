@@ -1,0 +1,13 @@
+id            = "lc-01-buried-routes"
+title         = "Service-route resolver (needle in a 66-module codebase)"
+language      = "python"
+difficulty    = 4
+category      = "long-context"
+type          = "long-context"
+scoring       = "tests"
+solution_file = "solution.py"
+timeout       = 60
+min_ctx       = 16384
+
+published_at        = "2026-06-30"
+published_at_source = "author"
