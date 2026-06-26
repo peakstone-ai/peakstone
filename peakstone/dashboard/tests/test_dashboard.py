@@ -424,6 +424,28 @@ def test_reproduce_screen_routes_generation_stream():
     asyncio.run(scenario())
 
 
+def test_reproduce_screen_coverage_and_rate():
+    from peakstone.dashboard.app import Dashboard, ReproduceScreen
+    from textual.widgets import Static
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            scr = ReproduceScreen("m", None, "http://x", level="smoke")
+            await app.push_screen(scr)
+            await pilot.pause()
+            scr._on_line("Running 1 model(s) over 3 challenge(s). judge=False")   # total parsed from here
+            scr._on_line("   m | a   → solving [tests] …")
+            scr._on_line("   m | a   ok  tests 10/10")                            # result -> 1 done
+            scr._on_line("   m | b   → solving [tests] …")
+            scr._on_line("   m | b   !! tests 3/10")                              # result -> 2 done
+            await pilot.pause()
+            stat = str(scr.query_one("#repro-stat", Static).render())
+            assert "coverage 2/3" in stat and "sol/s" in stat
+
+    asyncio.run(scenario())
+
+
 def test_pretty_progress():
     from peakstone.dashboard.app import _pretty_progress
     assert "[green]✓[/]" in _pretty_progress("m | ch  ok  tests 10/10")

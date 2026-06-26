@@ -5,6 +5,9 @@ Run:  peakstone            (or)  python -m dashboard  [--api URL]
 """
 from __future__ import annotations
 
+import re
+import time
+
 from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Vertical, VerticalScroll
@@ -196,6 +199,7 @@ class ReproduceScreen(ModalScreen):
     CSS = """
     ReproduceScreen { align: center middle; }
     #repro { width: 92%; height: 90%; border: thick $accent; background: $surface; padding: 1; }
+    #repro-stat { height: auto; padding-bottom: 1; }
     #repro-log { height: 1fr; border: round $primary; }
     #repro-gen-wrap { height: 40%; border: round $secondary; margin-top: 1; }
     #repro-gen { width: 1fr; }
@@ -215,12 +219,16 @@ class ReproduceScreen(ModalScreen):
         self._result: reproduce.ReproduceResult | None = None
         self._gen_buf = ""       # accumulated live model output for the current challenge
         self._gen_ch = ""        # the challenge currently being solved (from the runner's progress)
+        self._n_total = len(self.challenge_ids) if not level else 0   # tests in the run (refined live)
+        self._n_done = 0         # challenges completed so far (one result line each)
+        self._t0 = None          # monotonic clock at the first solve, for sol/sec
 
     def compose(self) -> ComposeResult:
         scope = f"level {self.level}" if self.level else f"{len(self.challenge_ids)} peakstones"
         with Vertical(id="repro"):
             yield Static(f"[b]Run[/b] {self.model}  ·  {scope}  ·  "
                          f"published {_fmt(self.published_tps, '{:.0f}')} tok/s", id="repro-title")
+            yield Static("", id="repro-stat")
             yield RichLog(id="repro-log", wrap=True, max_lines=300)
             with VerticalScroll(id="repro-gen-wrap"):
                 yield Static("[dim]model output appears here as it solves each task[/]", id="repro-gen")
@@ -245,17 +253,35 @@ class ReproduceScreen(ModalScreen):
 
     def _on_line(self, s: str) -> None:
         """Route a streamed line: generation deltas (control-prefixed) to the output panel, everything
-        else to the progress log. A new 'solving' line resets the output panel to the new challenge."""
+        else to the progress log. Also track coverage (done/total) and sol/sec from the markers."""
         if s.startswith(GEN_MARK):
             self._gen_buf += s[len(GEN_MARK):].replace(GEN_NL, "\n")
             self._gen_buf = self._gen_buf[-8000:]
             self._render_gen()
             return
         if "→ solving" in s:
+            if self._t0 is None:
+                self._t0 = time.monotonic()
             self._gen_ch = s.split("→ solving")[0].split("|")[-1].strip()
             self._gen_buf = ""
             self._render_gen()
+        elif " | " in s:                       # a per-challenge result line (one per challenge)
+            self._n_done += 1
+        else:                                  # "Running … over N challenge(s)" / "Level …: N challenges"
+            m = re.search(r"over (\d+) challenge", s) or re.search(r":\s*(\d+) challenges", s)
+            if m:
+                self._n_total = int(m.group(1))
+        self._update_stat()
         self.query_one("#repro-log", RichLog).write(_pretty_progress(s))
+
+    def _update_stat(self) -> None:
+        elapsed = (time.monotonic() - self._t0) if self._t0 else 0.0
+        rate = (self._n_done / elapsed) if elapsed > 0 else 0.0
+        done = min(self._n_done, self._n_total) if self._n_total else self._n_done
+        total = self._n_total or "?"
+        self.query_one("#repro-stat", Static).update(
+            f"[b]coverage[/] {done}/{total}   ·   [b]{rate:.2f}[/] sol/s   ·   "
+            f"elapsed {int(elapsed // 60)}:{int(elapsed % 60):02d}")
 
     def _render_gen(self) -> None:
         head = f"[b]solving[/] {self._gen_ch}" if self._gen_ch else "[dim]model output[/]"
