@@ -483,6 +483,19 @@ class Dashboard(App):
         """Challenges to run: the user's Challenges-screen selection, else the quick default set."""
         return self.selected_ids or REPRODUCE_IDS
 
+    def effective_ids(self) -> list[str]:
+        """The challenge ids a run will actually cover: a selected level resolves to its set, else
+        the explicit selection / default. Used by the ctx picker to count long-context skips."""
+        if self.selected_level:
+            try:
+                _, lvls = eng_levels.load_levels()
+                lv = lvls.get(self.selected_level)
+                if lv:
+                    return eng_levels.resolve(lv, self.corpus())
+            except Exception:  # noqa: BLE001
+                pass
+        return self.run_ids()
+
     def on_tree_node_expanded(self, ev) -> None:
         d = ev.node.data or {}
         if d.get("kind") == "quant" and not d.get("filled"):   # lazily load this run's per-challenge results
@@ -1085,6 +1098,78 @@ def run_with_preflight(screen, name: str, *, challenge_ids=None, level=None, pub
         launch(False)
 
 
+class CtxScreen(ModalScreen):
+    """Pick the served context window for the next run. Each option is annotated with VRAM fit
+    (weights + KV-cache vs the card) and how many selected long-context challenges it would skip.
+    Options above the model's native ctx are dropped — llama-server can't serve beyond it."""
+    CSS = """
+    CtxScreen { align: center middle; }
+    #ctx { width: 64; height: auto; max-height: 90%; border: thick $accent; background: $surface; padding: 1; }
+    #ctx-tbl { height: auto; }
+    #ctx-note { height: auto; padding-top: 1; }
+    """
+    BINDINGS = [("escape", "dismiss", "Close"), ("enter", "choose", "Select")]
+
+    def __init__(self, entry, current):
+        super().__init__()
+        self.entry = entry            # the selected model's registry entry (None if unknown)
+        self.current = current        # app.run_ctx
+        self._rows: list = []         # row index -> ctx value (None = default/native)
+
+    def compose(self) -> ComposeResult:
+        native = getattr(self.entry, "ctx", None) if self.entry else None
+        name = getattr(self.entry, "name", "model") if self.entry else "model"
+        head = f"[b]Context[/b] for {name}" + (f"  ·  native {_ctx_k(native)}" if native else "")
+        with Vertical(id="ctx"):
+            yield Static(head + "  ·  ⏎ select · Esc cancel")
+            yield DataTable(id="ctx-tbl", cursor_type="row", zebra_stripes=True)
+            yield Static("", id="ctx-note")
+
+    def on_mount(self) -> None:
+        t = self.query_one("#ctx-tbl", DataTable)
+        t.add_columns(" ", "Context", "VRAM", "Long-ctx")
+        native = getattr(self.entry, "ctx", None) if self.entry else None
+        total = hardware.snapshot().max_vram_gb or 24.0
+        ids = set(self.app.effective_ids())
+        lc = [c for c in self.app.corpus() if c.id in ids and c.min_ctx]   # selected long-ctx challenges
+        choices = [None] + [c for c in CTX_CHOICES if c and (native is None or c <= native)]
+        self._rows = choices
+        cur = 0
+        for i, ctx in enumerate(choices):
+            eff = ctx or native or 32768          # "default" serves at the native window
+            if ctx == self.current:
+                cur = i
+            label = (f"default ({_ctx_k(native)})" if (ctx is None and native)
+                     else "default" if ctx is None else _ctx_k(ctx))
+            need = preflight.vram_needed_gb(self.entry, eff) if self.entry else None
+            if need is None:
+                fit = "—"
+            elif need <= 0.9 * total:
+                fit = f"[green]✓[/] {need:.0f}G"
+            elif need <= total:
+                fit = f"[yellow]⚠[/] {need:.0f}G"
+            else:
+                fit = f"[red]✗[/] {need:.0f}G"
+            nskip = sum(1 for c in lc if c.min_ctx > eff)
+            skip = f"[yellow]skips {nskip}[/]" if nskip else ("[green]all[/]" if lc else "—")
+            t.add_row(">" if ctx == self.current else " ", label, fit, skip)
+        t.move_cursor(row=cur)
+        note = f"VRAM ≈ weights + KV-cache vs {total:.0f}G card (rough)."
+        if lc:
+            note += f"  {len(lc)} long-context challenge(s) in this run."
+        self.query_one("#ctx-note", Static).update(note)
+
+    def on_data_table_row_selected(self, _event) -> None:
+        self.action_choose()          # ⏎ on a row: the DataTable consumes enter, so route it here
+
+    def action_choose(self) -> None:
+        t = self.query_one("#ctx-tbl", DataTable)
+        if t.cursor_row is None or t.cursor_row >= len(self._rows):
+            return
+        self.app.run_ctx = self._rows[t.cursor_row]   # None = default (native window)
+        self.dismiss()
+
+
 class ModelsScreen(ModalScreen):
     """Pick a model to run the selected peakstones on. Models are grouped as family → quant: the
     registry (serve/models.toml) provides the runnable/present quants; expanding a family lists the
@@ -1111,9 +1196,9 @@ class ModelsScreen(ModalScreen):
             yield ModelTree("models", id="models-tree")
 
     def action_ctx(self) -> None:
-        cur = CTX_CHOICES.index(self.app.run_ctx) if self.app.run_ctx in CTX_CHOICES else 0
-        self.app.run_ctx = CTX_CHOICES[(cur + 1) % len(CTX_CHOICES)]
-        self.query_one("#models-hdr", Static).update(self._header())
+        self.app.push_screen(
+            CtxScreen(self._target_entry(), self.app.run_ctx),
+            lambda _=None: self.query_one("#models-hdr", Static).update(self._header()))
 
     def on_mount(self) -> None:
         tree = self.query_one("#models-tree", Tree)

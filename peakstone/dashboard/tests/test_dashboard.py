@@ -598,6 +598,35 @@ def test_fmt_dur():
     assert _fmt_dur(None) == "—" and _fmt_dur(0) == "—"
 
 
+def test_ctx_picker_caps_skips_and_selects():
+    from peakstone.dashboard.app import Dashboard, CtxScreen
+    from peakstone.dashboard import models as _m
+    from textual.widgets import DataTable
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            app.selected_ids = ["lc-01-buried-routes"]          # a min_ctx=16384 long-context challenge
+            entry = _m.ModelEntry("m", "r", "models/m/x.gguf", 8081, 32768, "")  # native 32K
+            scr = CtxScreen(entry, None)
+            await app.push_screen(scr)
+            await pilot.pause()
+            t = app.screen.query_one("#ctx-tbl", DataTable)
+            labels = " ".join(str(t.get_row_at(i)[1]) for i in range(t.row_count))
+            assert "32K" in labels and "64K" not in labels and "128K" not in labels   # capped at native
+            assert scr._rows == [None, 4096, 8192, 16384, 32768]
+            # the 8K option would skip the 16K long-context challenge; 32K skips none
+            assert "skips 1" in str(t.get_row_at(2)[3])          # 8192 row
+            assert "skips" not in str(t.get_row_at(4)[3])        # 32768 row
+            # selecting the 16K row sets run_ctx and closes
+            t.move_cursor(row=3)
+            scr.action_choose()
+            await pilot.pause()
+            assert app.run_ctx == 16384
+
+    asyncio.run(scenario())
+
+
 def test_quant_label_shows_efficiency():
     from peakstone.dashboard.app import Dashboard
     app = Dashboard("http://x")
@@ -719,12 +748,19 @@ def test_run_ctx_selection_threads_through(monkeypatch):
                         lambda model, **k: seen.update(ctx=k.get("ctx")) or R.ReproduceResult(model, True))
 
     async def scenario():
+        from peakstone.dashboard.app import CtxScreen
+        from textual.widgets import DataTable
         app = Dashboard("http://x")
         async with app.run_test() as pilot:
             scr = ModelsScreen()
             await app.push_screen(scr)
             await pilot.pause()
-            await pilot.press("k")                              # cycle ctx: default -> 4096
+            await pilot.press("k")                              # open the ctx picker
+            await pilot.pause()
+            assert isinstance(app.screen, CtxScreen)
+            t = app.screen.query_one("#ctx-tbl", DataTable)
+            t.move_cursor(row=1)                                # [default, 4096, …] -> pick 4096
+            app.screen.action_choose()
             await pilot.pause()
             assert app.run_ctx == CTX_CHOICES[1]
             run_with_preflight(scr, "m")

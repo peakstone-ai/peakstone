@@ -16,16 +16,17 @@ from dataclasses import dataclass, field
 from . import hardware
 
 
-def vram_needed_gb(entry) -> float | None:
+def vram_needed_gb(entry, ctx: int | None = None) -> float | None:
     """Rough accelerator memory (GiB) a model needs to serve: weights + KV-cache + a small buffer.
     None when the file isn't present yet (size unknown — we can't check until it downloads).
 
     Weights are the GGUF size converted decimal-GB -> GiB so it matches hardware.gpu_free_gb (also
-    GiB); KV-cache scales with ctx. Kept conservative-but-not-alarmist so a model that genuinely fits
-    (e.g. a 24 GiB card running a ~21 GiB model) doesn't trip a false warning."""
+    GiB); KV-cache scales with ctx. `ctx` overrides the entry's configured context (so the ctx picker
+    can estimate fit at an arbitrary window). Kept conservative-but-not-alarmist so a model that
+    genuinely fits (e.g. a 24 GiB card running a ~21 GiB model) doesn't trip a false warning."""
     if not entry or not entry.size_gb:
         return None
-    ctx = getattr(entry, "ctx", None) or 32768
+    ctx = ctx or getattr(entry, "ctx", None) or 32768
     weights_gib = entry.size_gb * (10**9 / 1024**3)
     return round(weights_gib + max(0.8, ctx / 32768) + 0.5, 1)
 
