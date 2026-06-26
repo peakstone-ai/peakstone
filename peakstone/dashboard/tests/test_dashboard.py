@@ -167,31 +167,24 @@ def test_registry_add_and_list(monkeypatch, tmp_path):
         models.add_model("bad name!", "r")       # invalid name rejected
 
 
-def test_download_invokes_hf_with_progress(monkeypatch, tmp_path):
+def test_download_streams_with_progress(monkeypatch, tmp_path):
+    from pathlib import Path
     from peakstone.dashboard import models
     monkeypatch.setattr(models, "REPO", tmp_path)
-    monkeypatch.setattr(models, "remote_size", lambda repo, fn: 1000)   # known total -> real bar
-    monkeypatch.setattr(models.time, "sleep", lambda s: None)
+    monkeypatch.setattr(models, "remote_size", lambda r, f: 1000)   # seeds the bar without a network call
     e = models.ModelEntry("m", "org/repo", "models/m/x.gguf", 8081, 32768, "")
-    calls, progress = {}, []
+    progress = []
 
-    class FakeProc:
-        returncode = 0
+    def fake_fetch(repo, filename, local_dir, *, progress, cancel, log):
+        assert repo == "org/repo" and filename == "x.gguf"
+        progress(400, 1000)                            # byte-accurate updates as bytes arrive
+        progress(1000, 1000)
+        (Path(local_dir) / filename).write_bytes(b"x" * 1000)   # hf materializes the file
 
-        def __init__(self):
-            self._n = 0
-
-        def poll(self):
-            self._n += 1
-            return None if self._n == 1 else 0   # one loop iteration, then done
-
-    def fake_popen(cmd, **kw):
-        calls["cmd"] = cmd
-        return FakeProc()
-
-    models.download(e, popen=fake_popen, progress=lambda d, t: progress.append((d, t)))
-    assert calls["cmd"][:3] == ["hf", "download", "org/repo"] and "--local-dir" in calls["cmd"]
-    assert progress and progress[-1][1] == 1000        # total reported to the progress bar
+    ok = models.download(e, progress=lambda d, t: progress.append((d, t)), _fetch=fake_fetch)
+    assert ok is True and e.present                     # file materialized
+    assert progress[0] == (0, 1000)                     # size shown immediately during the quiet startup
+    assert progress[1] == (400, 1000) and progress[-1] == (1000, 1000)  # byte-accurate updates
 
 
 def test_submit_bundle(monkeypatch):
@@ -803,26 +796,24 @@ def test_job_status_tracks_phase_and_progress():
     asyncio.run(scenario())
 
 
-def test_download_registers_proc_for_cancel(monkeypatch, tmp_path):
+def test_download_cancels_cooperatively(monkeypatch, tmp_path):
     from peakstone.dashboard import models
     monkeypatch.setattr(models, "REPO", tmp_path)
-    monkeypatch.setattr(models, "remote_size", lambda r, f: None)
-    monkeypatch.setattr(models.time, "sleep", lambda s: None)
+    monkeypatch.setattr(models, "remote_size", lambda r, f: 1000)
     e = models.ModelEntry("m", "org/r", "models/m/x.gguf", 8081, 32768, "")
-    regd = []
 
-    class FakeProc:
-        returncode = 0
+    def fake_fetch(repo, filename, local_dir, *, progress, cancel, log):
+        # mimic the real tap: per-chunk, report progress then honour cancel by raising _Cancelled
+        for i in range(100):
+            progress(i * 10, 1000)
+            if cancel and cancel():
+                raise models._Cancelled()
 
-        def __init__(self):
-            self._n = 0
-
-        def poll(self):
-            self._n += 1
-            return None if self._n == 1 else 0
-
-    models.download(e, popen=lambda *a, **k: FakeProc(), on_proc=regd.append)
-    assert len(regd) == 1            # the hf process is registered so a queue-tab cancel can kill it
+    seen = []
+    ok = models.download(e, progress=lambda d, t: None,
+                         cancel=lambda: bool(seen.append(1)) or len(seen) > 2,  # stop after a couple
+                         _fetch=fake_fetch)
+    assert ok is False and not e.present                 # aborted, file not materialized
 
 
 def test_cancel_active_kills_and_marks(monkeypatch):

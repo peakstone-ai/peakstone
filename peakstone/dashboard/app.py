@@ -275,7 +275,8 @@ class Dashboard(App):
             self.call_from_thread(self._viewer_reset)
             if spec.get("download_only"):       # a queued download job — fetch weights, no serve/bench
                 res = reproduce.fetch(spec["name"], on_proc=self._run_procs.append,
-                                      on_dl_progress=self._dl_progress, log=self._run_emit)
+                                      on_dl_progress=self._dl_progress, log=self._run_emit,
+                                      cancel=lambda: self._run_cancelled)
                 if self._run_cancelled:
                     res = reproduce.ReproduceResult(spec["name"], False, download=True, note="cancelled")
                 self._run_result = res
@@ -288,7 +289,8 @@ class Dashboard(App):
             res = reproduce.reproduce(spec["name"], challenge_ids=spec["challenge_ids"],
                                       level=spec["level"], published_tps=spec["published_tps"],
                                       ctx=spec.get("ctx"), on_proc=self._run_procs.append,
-                                      on_dl_progress=self._dl_progress, log=self._run_emit)
+                                      on_dl_progress=self._dl_progress, log=self._run_emit,
+                                      cancel=lambda: self._run_cancelled)
             if self._run_cancelled:            # killed mid-run → record as cancelled, move to next
                 res = reproduce.ReproduceResult(spec["name"], False, note="cancelled")
             history.append({"model": res.model, "ok": res.ok, "your_tps": res.your_tps,

@@ -186,11 +186,42 @@ def _dir_size(d: Path) -> int:
     return sum(f.stat().st_size for f in d.rglob("*") if f.is_file()) if d.exists() else 0
 
 
-def download(entry: ModelEntry, log=lambda s: None, *, progress=None,
-             popen=subprocess.Popen, on_proc=None) -> bool:
-    """Fetch the GGUF via `hf download`. `progress(done_bytes, total_bytes|None)` is called while it
-    runs (poll of the on-disk size). `on_proc(proc)` registers the process so it can be cancelled.
-    `popen` is injectable for tests."""
+class _Cancelled(Exception):
+    """Raised from the progress tap to abort an in-flight hf_hub_download."""
+
+
+def _hf_fetch(repo: str, filename: str, local_dir: str, *, progress, cancel, log) -> None:
+    """Download one file via huggingface_hub (keeps Xet acceleration, stored credentials, redirect
+    handling and resume), tapping its tqdm progress bar so we get byte-accurate updates. Both the
+    HTTP and Xet backends route progress through huggingface_hub.utils.tqdm.tqdm, so subclassing it
+    and forwarding update() captures progress regardless of backend. cancel() aborts via _Cancelled."""
+    import importlib
+    from huggingface_hub import hf_hub_download
+    tqmod = importlib.import_module("huggingface_hub.utils.tqdm")   # the submodule (shadowed by the class)
+    orig = tqmod.tqdm
+
+    class _Tap(orig):
+        def update(self, n=1):
+            r = super().update(n)
+            if self.n is not None and progress is not None:
+                progress(self.n, self.total or None)
+            if cancel and cancel():
+                raise _Cancelled()
+            return r
+
+    tqmod.tqdm = _Tap
+    try:
+        hf_hub_download(repo, filename, local_dir=local_dir)
+    finally:
+        tqmod.tqdm = orig
+
+
+def download(entry: ModelEntry, log=lambda s: None, *, progress=None, cancel=None,
+             on_proc=None, _fetch=_hf_fetch) -> bool:
+    """Fetch the GGUF via huggingface_hub (Xet + credentials + resume), reporting byte progress by
+    tapping its progress bar — the `hf` CLI's xet backend buffers in a separate cache and only
+    materializes the file at the end, so polling the output dir shows no progress. `progress(done,
+    total)` fires as bytes arrive; `cancel()` aborts; `_fetch` is injectable for tests."""
     if not entry.repo or not entry.file:
         log("no repo/file in registry for this model")
         return False
@@ -198,24 +229,22 @@ def download(entry: ModelEntry, log=lambda s: None, *, progress=None,
         log(f"{entry.name} already present ({entry.size_gb} GB)")
         return True
     local_dir = REPO / "models" / entry.name
+    local_dir.mkdir(parents=True, exist_ok=True)
     filename = Path(entry.file).name
     log(f"downloading {entry.repo} / {filename} → {local_dir} …")
-    total = remote_size(entry.repo, filename) if progress is not None else None
-    env = {**os.environ, "HF_HUB_ENABLE_HF_TRANSFER": "1"}
+    if progress is not None:                          # show the right size immediately — the xet backend
+        progress(0, remote_size(entry.repo, filename))   # has a quiet startup before the first byte
     t0 = time.monotonic()
-    proc = popen(["hf", "download", entry.repo, filename, "--local-dir", str(local_dir)],
-                 env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT, start_new_session=True)
-    if on_proc:
-        on_proc(proc)          # register so a queue-tab cancel can kill the download
-    while proc.poll() is None:
-        if progress is not None:
-            progress(_dir_size(local_dir), total)
-        time.sleep(0.5)
-    if progress is not None:
-        progress(_dir_size(local_dir), total)
-    if proc.returncode != 0:
-        log(f"download failed (rc={proc.returncode})")
+    try:
+        _fetch(entry.repo, filename, str(local_dir), progress=progress, cancel=cancel, log=log)
+    except _Cancelled:
+        log("download cancelled")
         return False
-    bandwidth.record(_dir_size(local_dir), time.monotonic() - t0, "hf")  # calibrate run estimates
+    except Exception as e:  # noqa: BLE001  (network/auth/missing file)
+        log(f"download failed: {e}")
+        return False
+    elapsed = time.monotonic() - t0
+    if elapsed > 0 and entry.present and entry.path:
+        bandwidth.record(entry.path.stat().st_size, elapsed, "hf")   # calibrate run estimates
     log(f"downloaded {entry.name} ({entry.size_gb} GB)")
     return entry.present

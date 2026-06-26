@@ -144,7 +144,7 @@ def stop(proc) -> None:
                 pass
 
 
-def fetch(name: str, *, on_proc=None, on_dl_progress=None, log=lambda s: None,
+def fetch(name: str, *, on_proc=None, on_dl_progress=None, cancel=None, log=lambda s: None,
           _download=models.download) -> ReproduceResult:
     """Download a model's weights as a standalone queued job — no serve/bench. Used by the quant
     menu so a download is just another job on the queue (with the same progress bar / cancel)."""
@@ -154,12 +154,13 @@ def fetch(name: str, *, on_proc=None, on_dl_progress=None, log=lambda s: None,
     if entry.present:
         return ReproduceResult(name, True, download=True, note="already downloaded")
     log(f"downloading {name}…")
-    ok = _download(entry, log, progress=on_dl_progress, on_proc=on_proc)
+    ok = _download(entry, log, progress=on_dl_progress, on_proc=on_proc, cancel=cancel)
     return ReproduceResult(name, bool(ok), download=True, note="downloaded" if ok else "download failed")
 
 
 def reproduce(name: str, *, challenge_ids: list[str] | None = None, level: str | None = None,
-              published_tps: float | None = None, on_proc=None, on_dl_progress=None, ctx: int | None = None,
+              published_tps: float | None = None, on_proc=None, on_dl_progress=None, cancel=None,
+              ctx: int | None = None,
               log=lambda s: None, _serve=serve, _wait=wait_healthy, _bench=bench, _stop=stop,
               _download=models.download) -> ReproduceResult:
     entry = models.load_registry().get(name)
@@ -167,7 +168,7 @@ def reproduce(name: str, *, challenge_ids: list[str] | None = None, level: str |
         return ReproduceResult(name, False, note=f"{name} not in serve/models.toml — add it first")
     if not entry.present:
         log("model file missing; downloading…")
-        if not _download(entry, log, progress=on_dl_progress, on_proc=on_proc):
+        if not _download(entry, log, progress=on_dl_progress, on_proc=on_proc, cancel=cancel):
             return ReproduceResult(name, False, published_tps=published_tps, note="download failed")
     log(f"serving {name} on :{entry.port}{f' (ctx {ctx})' if ctx else ''} …")
     proc = _serve(name, ctx=ctx)
