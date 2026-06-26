@@ -21,6 +21,25 @@ class ChatResult:
     latency_s: float = 0.0
     tok_per_s: float = 0.0
     error: str | None = None
+    aborted: bool = False        # generation cut short (e.g. a degenerate repetition loop)
+
+
+def is_looping(tail: str, *, max_period: int = 50, min_reps: int = 6, min_span: int = 200) -> bool:
+    """True if the end of the generated text is a short unit repeated over and over — the degenerate
+    loop low-bit quants fall into. Requires a long run of EXACT repetition (>= min_span chars, the
+    smallest period repeated >= min_reps times) so normal repetitive code doesn't trip it."""
+    n = len(tail)
+    if n < min_span:
+        return False
+    for p in range(1, max_period + 1):
+        unit = tail[n - p:]
+        reps, i = 1, n - p
+        while i - p >= 0 and tail[i - p:i] == unit:
+            reps += 1
+            i -= p
+        if reps >= min_reps and reps * p >= min_span:
+            return True
+    return False
 
 
 class LLMClient:
@@ -95,6 +114,7 @@ class LLMClient:
             headers["Authorization"] = f"Bearer {self.api_key}"
         req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST")
         text_parts, reason_parts, usage, pending = [], [], {}, []
+        tail, since_check, aborted = "", 0, False   # for early repetition-loop detection
 
         def flush():
             if pending:
@@ -127,6 +147,14 @@ class LLMClient:
                         pending.append(piece)
                         if sum(len(p) for p in pending) >= 48 or "\n" in piece:
                             flush()
+                        tail, since_check = (tail + piece)[-400:], since_check + len(piece)
+                        if since_check >= 150:      # throttle the check; abort on a degenerate loop
+                            since_check = 0
+                            if is_looping(tail):
+                                aborted = True
+                                flush()
+                                on_delta("\n⚠ aborted: repetition loop\n")
+                                break               # closing the connection stops the server's generation
         except urllib.error.HTTPError as e:
             return ChatResult(text="", error=f"HTTP {e.code}: {e.read().decode()[:500]}")
         except Exception as e:  # noqa: BLE001
@@ -138,7 +166,7 @@ class LLMClient:
         tps = (ct / dt) if (dt > 0 and ct) else 0.0
         return ChatResult(text=text, reasoning=reasoning,
                           prompt_tokens=int(usage.get("prompt_tokens", 0)), completion_tokens=ct,
-                          latency_s=round(dt, 2), tok_per_s=round(tps, 1))
+                          latency_s=round(dt, 2), tok_per_s=round(tps, 1), aborted=aborted)
 
     def chat_tools(
         self,
