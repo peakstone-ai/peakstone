@@ -129,10 +129,11 @@ def test_board_quant_groups_results_like_peakstones(monkeypatch):
             quant.expand()                                 # drill into the run's per-challenge results
             await app.workers.wait_for_complete()
             await pilot.pause()
-            # grouped like peakstones: collection -> date -> family -> challenge
-            assert any("Native" in str(c.label) for c in quant.children)
+            # grouped like peakstones: collection -> date -> family -> challenge, with avg scores
+            assert any("Native" in str(c.label) and "0.50" in str(c.label) for c in quant.children)
             allnodes = leaves(quant)
-            assert any("2026-06" in n for n in allnodes) and any("python" in n for n in allnodes)
+            assert any("2026-06" in n for n in allnodes)
+            assert any("python" in n and "1.00" in n for n in allnodes)   # family avg score
             assert any("py-05-calc" in n for n in allnodes) and any("go-03-detect-cycle" in n for n in allnodes)
             # opening a test result still shows the split view with solution + output + reaction
             app.open_solution({"challenge": "py-05-calc", "final": 1.0, "passed": 10, "total": 10,

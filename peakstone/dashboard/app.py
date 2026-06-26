@@ -445,24 +445,34 @@ class Dashboard(App):
         # family -> challenge. Challenges we have locally drive the grouping; any others go under "other".
         by_id = {r["challenge"]: r for r in results}
         known = [c for c in self.corpus() if c.id in by_id]
+
+        def grp_label(label, chs):   # name (count) + average score over the group's challenges
+            return self._grp_label(label, [by_id[c.id] for c in chs])
+
         for grp in ch_browse.group_by_collection(known):
             chs = grp["chs"]
-            coll = node.add(f"{grp['label']} ({len(chs)})")
+            coll = node.add(grp_label(grp["label"], chs))
             if grp["kind"] == "native":
                 for bucket, dchs in ch_browse.group_by_date(chs).items():
-                    dnode = coll.add(f"{bucket} ({len(dchs)})")
+                    dnode = coll.add(grp_label(bucket, dchs))
                     for fam, fchs in ch_browse.group_by_family(dchs).items():
-                        fnode = dnode.add(f"{fam} ({len(fchs)})")
+                        fnode = dnode.add(grp_label(fam, fchs))
                         self._add_result_leaves(fnode, fchs, by_id)
             else:
                 for bucket, dchs in ch_browse.group_by_date(chs).items():
-                    dnode = coll.add(f"{bucket} ({len(dchs)})")
+                    dnode = coll.add(grp_label(bucket, dchs))
                     self._add_result_leaves(dnode, dchs, by_id)
         extra = [by_id[i] for i in by_id if i not in {c.id for c in known}]
         if extra:
-            other = node.add(f"other ({len(extra)})")        # ran but not in the local corpus
+            other = node.add(self._grp_label("other", extra))   # ran but not in the local corpus
             for r in extra:
                 other.add_leaf(self._result_leaf(r), data={"kind": "result", "row": r})
+
+    @staticmethod
+    def _grp_label(label: str, results: list) -> str:
+        vals = [r["final"] for r in results if r.get("final") is not None]
+        avg = f"   [b]{sum(vals) / len(vals):.2f}[/]" if vals else ""
+        return f"{label} ({len(results)}){avg}"
 
     def _add_result_leaves(self, parent, challenges, by_id) -> None:
         for c in sorted(challenges, key=lambda c: c.id):
