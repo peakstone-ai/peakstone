@@ -305,6 +305,8 @@ class Dashboard(App):
                     msg = f"submit failed: {e}"
                 self.call_from_thread(self._viewer_show, res)   # refresh the result line's submit state
                 self.call_from_thread(self.notify, f"{spec['name']}: {msg}")
+                if self._run_submitted:          # pull the new result into the leaderboard
+                    self.call_from_thread(self.load_board)
 
     def _dl_progress(self, done, total) -> None:
         with self._run_lock:

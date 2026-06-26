@@ -896,13 +896,21 @@ def test_run_auto_submits(monkeypatch):
     monkeypatch.setattr(R, "reproduce", lambda model, **k: R.ReproduceResult(model, True, bundle={"bundle_version": "1"}))
     submitted = []
     monkeypatch.setattr(client, "submit_bundle", lambda url, b, **k: submitted.append(b) or (201, "ok"))
+    lb_calls = []
+    monkeypatch.setattr(client, "get_leaderboard",
+                        lambda *a, **k: lb_calls.append(1) or {"count": 0, "leaderboard": []})
 
     async def scenario():
         app = Dashboard("http://x")
-        async with app.run_test():
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()           # initial mount load
+            before = len(lb_calls)
             app.start_run("m")
             await app.workers.wait_for_complete()
+            await pilot.pause()                             # let the post-submit refresh worker spawn
+            await app.workers.wait_for_complete()
             assert submitted == [{"bundle_version": "1"}]   # completed run auto-submitted
+            assert len(lb_calls) > before                   # leaderboard refreshed to show the result
 
     asyncio.run(scenario())
 
