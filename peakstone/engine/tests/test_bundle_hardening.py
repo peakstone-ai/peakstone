@@ -14,6 +14,16 @@ def test_nominal_ram_gib():
     assert _nominal_ram_gib(8 * 2**30 - 400 * 2**20) == 8  # just under 8 GiB -> 8
 
 
+def test_quant_from_filename():
+    from peakstone.engine.bundle import _quant_from_filename as q
+    assert q("Phi-4-mini-instruct-Q2_K.gguf") == "Q2_K"
+    assert q("Phi-4-mini-instruct.Q8_0.gguf") == "Q8_0"      # unsloth uses "." before Q8_0/BF16
+    assert q("Phi-4-mini-instruct.BF16.gguf") == "BF16"
+    assert q("Qwen3-Coder-30B-A3B-Instruct-UD-TQ1_0.gguf") == "UD-TQ1_0"
+    assert q("model-IQ4_XS-00001-of-00002.gguf") == "IQ4_XS"  # split shards
+    assert q("no-quant-here.gguf") == "unknown"
+
+
 def test_bundle_carries_error_type():
     b = bundle.produce_bundle(
         {"models": ["m"], "judge": None, "timestamp": "t", "gpu": {"name": "x"}},

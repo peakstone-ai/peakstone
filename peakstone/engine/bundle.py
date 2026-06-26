@@ -217,7 +217,9 @@ def _engine_info() -> dict:
 
 
 def _quant_from_filename(name: str) -> str:
-    m = re.search(r"-((?:UD-)?(?:IQ|Q|TQ|BF|F)\w*?)(?:-\d{5}-of-\d{5})?\.gguf$", name)
+    # separator before the quant token is "-" for most repos but "." for some unsloth files
+    # (e.g. Phi-4-mini-instruct.Q8_0.gguf, ...BF16.gguf).
+    m = re.search(r"[-.]((?:UD-)?(?:IQ|Q|TQ|BF|F)\w*?)(?:-\d{5}-of-\d{5})?\.gguf$", name)
     return m.group(1) if m else "unknown"
 
 
