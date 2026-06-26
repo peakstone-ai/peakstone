@@ -254,6 +254,22 @@ def test_challenge_grouping_and_selection():
     assert sel.state(lcb_ids) == "all"
 
 
+def test_group_by_collection():
+    from peakstone.dashboard import challenges as cb
+    groups = cb.group_by_collection(_FAKE_CORPUS)
+    kinds = [(g["kind"], g["label"], len(g["chs"])) for g in groups]
+    # native first (our authored peakstones collapsed), then imported suites largest-first
+    assert kinds == [("native", "Native", 1), ("suite", "livecodebench", 2), ("suite", "humaneval", 1)]
+    native = next(g for g in groups if g["kind"] == "native")
+    assert [c.id for c in native["chs"]] == ["py-1"]
+    # a single-month native set captions with that month; mixed/undated handled by date_span
+    assert cb.date_span([_fake_ch("a", "python", "2026-07-01")]) == "2026-07"
+    assert cb.date_span(_FAKE_CORPUS) == "2021-07…2025-03"
+    assert cb.date_span([_fake_ch("u", "python", "")]) == ""
+    # rough at-a-glance ETA (1 solve/sec): empty when nothing selected, then s -> m -> h
+    assert (cb.rough_eta(0), cb.rough_eta(4), cb.rough_eta(278), cb.rough_eta(1934)) == ("", "~4s", "~5m", "~32m")
+
+
 def test_challenges_screen_selects_and_runs(monkeypatch):
     from peakstone.dashboard import challenges as cb
     from peakstone.dashboard.app import Dashboard, ChallengesScreen, ModelsScreen
@@ -275,9 +291,99 @@ def test_challenges_screen_selects_and_runs(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_challenges_screen_level_shortcut(monkeypatch):
+    from peakstone.dashboard import challenges as cb
+    from peakstone.engine import levels as eng_levels
+    from peakstone.dashboard.app import Dashboard, ChallengesScreen, ModelsScreen
+    monkeypatch.setattr(cb, "load_corpus", lambda: _FAKE_CORPUS)
+    _, lvls = eng_levels.load_levels()
+    quick_ids = sorted(eng_levels.resolve(lvls["quick"], _FAKE_CORPUS))
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await app.push_screen(ChallengesScreen())
+            await pilot.pause()
+            await pilot.press("2")      # quick level shortcut -> loads its bench selection
+            await pilot.pause()
+            scr = app.screen
+            assert scr._chosen_level == "quick"
+            assert sorted(scr.sel.ids) == quick_ids
+            await pilot.press("r")      # run -> stash ids + level, open ModelsScreen
+            await pilot.pause()
+            assert app.selected_ids == quick_ids
+            assert app.selected_level == "quick"     # carries level settings into the run
+            assert isinstance(app.screen, ModelsScreen)
+
+    asyncio.run(scenario())
+
+
+def test_challenges_screen_manual_edit_clears_level(monkeypatch):
+    from peakstone.dashboard import challenges as cb
+    from peakstone.dashboard.app import Dashboard, ChallengesScreen
+    monkeypatch.setattr(cb, "load_corpus", lambda: _FAKE_CORPUS)
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await app.push_screen(ChallengesScreen())
+            await pilot.pause()
+            await pilot.press("2")          # pick a level
+            await pilot.pause()
+            assert app.screen._chosen_level == "quick"
+            await pilot.press("a")          # select-all is a manual edit -> custom selection
+            await pilot.pause()
+            assert app.screen._chosen_level is None
+            await pilot.press("r")
+            await pilot.pause()
+            assert app.selected_level is None   # plain id run, not a level run
+
+    asyncio.run(scenario())
+
+
+def test_quant_label_and_grouping():
+    from peakstone.dashboard import models
+    assert models.quant_label("Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf") == "UD-Q4_K_XL"
+    assert models.quant_label("Phi-4-mini-instruct-Q6_K.gguf") == "Q6_K"
+    assert models.quant_label("vibethinker-3b-q8_0.gguf") == "Q8_0"
+    assert models.quant_label("model.gguf") == "?"
+
+    reg = {
+        "a-q4": models.ModelEntry("a-q4", "org/A", "models/a/A-Q4_K_M.gguf", 8081, 32768, "", "fam-a"),
+        "a-q6": models.ModelEntry("a-q6", "org/A", "models/a/A-Q6_K.gguf", 8082, 32768, "", "fam-a"),
+        "b": models.ModelEntry("b", "org/B", "models/b/B-Q8_0.gguf", 8083, 32768, ""),  # family defaults to name
+    }
+    g = models.group_by_family(reg)
+    assert list(g) == ["b", "fam-a"]                          # families alphabetical
+    assert [e.quant for e in g["fam-a"]] == ["Q4_K_M", "Q6_K"]  # quants sorted within a family
+
+
+def test_available_quants_uses_cache(tmp_path):
+    import json
+    from peakstone.dashboard import models
+    cache = tmp_path / "hf.json"
+    cache.write_text(json.dumps({"org/Repo": [{"quant": "Q6_K", "file": "x-Q6_K.gguf", "size_gb": 27.0}]}))
+    assert models.available_quants("org/Repo", cache_path=cache) == \
+        [{"quant": "Q6_K", "file": "x-Q6_K.gguf", "size_gb": 27.0}]   # cache hit, no network
+
+
+def test_register_quant(tmp_path, monkeypatch):
+    from peakstone.dashboard import models
+    toml = tmp_path / "models.toml"
+    toml.write_text('["base-q4"]\nrepo  = "org/R"\nfile  = "models/base/R-Q4_K_M.gguf"\nport  = 8081\nfamily = "base"\n')
+    monkeypatch.setattr(models, "MODELS_TOML", toml)
+    e = models.register_quant("base", "org/R", "R-Q6_K.gguf", "Q6_K")
+    assert e.name == "base-q6_k" and e.family == "base"
+    assert "base" in {x.fam for x in models.load_registry().values()}
+    again = models.register_quant("base", "org/R", "models/base/R-Q4_K_M.gguf", "Q4_K_M")  # already registered
+    assert again.name == "base-q4"
+
+
 def test_models_screen_shows_caps(monkeypatch):
     from peakstone.dashboard.app import Dashboard, ModelsScreen
-    from textual.widgets import DataTable
+    from textual.widgets import Tree
     monkeypatch.setattr("peakstone.engine.capabilities.effective_capabilities",
                         lambda m, **k: {"tools", "agentic"})
 
@@ -287,10 +393,10 @@ def test_models_screen_shows_caps(monkeypatch):
             await pilot.pause()
             await app.push_screen(ModelsScreen())
             await pilot.pause()
-            t = app.screen.query_one("#models-tbl", DataTable)
-            assert t.row_count > 0
-            assert "Caps" in [str(c.label) for c in t.columns.values()]
-            assert any(str(t.get_row_at(i)[5]) == "TA" for i in range(t.row_count))  # caps col
+            t = app.screen.query_one("#models-tree", Tree)
+            assert t.root.children                              # families present
+            leaves = [str(leaf.label) for fam in t.root.children for leaf in fam.children]
+            assert leaves and any(lbl.rstrip().endswith("TA") for lbl in leaves)   # caps in quant label
 
     asyncio.run(scenario())
 

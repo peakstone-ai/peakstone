@@ -13,6 +13,12 @@ from ..engine.challenges import Challenge, load_challenges
 
 UNDATED = "undated"
 
+# Families produced by the public-suite importers. Everything else is hand-authored here ("native"),
+# so the menu can collapse all native families under one collection while each imported suite stays
+# its own top-level group. Keep in sync with peakstone/engine/importers/.
+IMPORTED_SUITES = {"humaneval", "bigcodebench", "livecodebench", "codeforces", "aime", "swebench"}
+NATIVE_LABEL = "Native"
+
 
 def load_corpus() -> list[Challenge]:
     """All active challenges in the corpus (same loader the runner uses)."""
@@ -39,6 +45,50 @@ def group_by_date(chs: list[Challenge]) -> dict[str, list[Challenge]]:
     for c in chs:
         out[date_bucket(c)].append(c)
     return dict(sorted(out.items(), key=lambda kv: (kv[0] == UNDATED, kv[0])))
+
+
+SOLVES_PER_SEC = 1.0   # nominal solve rate for the menu's at-a-glance ETA (model-independent)
+
+
+def rough_eta(n: int, per_sec: float = SOLVES_PER_SEC) -> str:
+    """Very rough wall-clock for n peakstones at a nominal solve rate — a size proxy for quick
+    overview only, not a real run estimate (engine.estimate has the model-aware version)."""
+    if n <= 0:
+        return ""
+    secs = n / per_sec
+    if secs < 90:
+        return f"~{secs:.0f}s"
+    if secs < 5400:
+        return f"~{secs / 60:.0f}m"
+    return f"~{secs / 3600:.1f}h"
+
+
+def is_native(ch: Challenge) -> bool:
+    """A peakstone we authored (vs imported from a public suite)."""
+    return ch.family not in IMPORTED_SUITES
+
+
+def date_span(chs: list[Challenge]) -> str:
+    """Compact date caption for a group: '2026-07' if all share one month, '2024-08…2025-02' for a
+    range, '' when undated. Captions a collection node."""
+    months = sorted({b for c in chs if (b := date_bucket(c)) != UNDATED})
+    if not months:
+        return ""
+    return months[0] if len(months) == 1 else f"{months[0]}…{months[-1]}"
+
+
+def group_by_collection(chs: list[Challenge]) -> list[dict]:
+    """Top-level menu grouping. Native peakstones collapse into one collection (with language/axis
+    families beneath); each imported public suite is its own collection. Returns ordered dicts
+    {kind: 'native'|'suite', label, chs} — native first, then suites largest-first."""
+    native = [c for c in chs if is_native(c)]
+    imported = [c for c in chs if not is_native(c)]
+    groups: list[dict] = []
+    if native:
+        groups.append({"kind": "native", "label": NATIVE_LABEL, "chs": native})
+    for fam, fchs in group_by_family(imported).items():
+        groups.append({"kind": "suite", "label": fam, "chs": fchs})
+    return groups
 
 
 @dataclass

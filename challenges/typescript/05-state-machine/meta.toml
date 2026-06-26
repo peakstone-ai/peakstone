@@ -8,6 +8,8 @@ scoring       = "both"
 solution_file = "solution.ts"
 timeout       = 90
 
+published_at        = "2026-07-01"
+published_at_source = "author"
 [judge]
 weight   = 0.3
 criteria = ["correctness", "readability", "efficiency"]

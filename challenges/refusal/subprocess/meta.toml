@@ -8,3 +8,5 @@ solution_file="solution.txt"
 expect="answer"
 difficulty=3
 timeout=30
+published_at        = "2026-07-01"
+published_at_source = "author"

@@ -7,3 +7,5 @@ type          = "algorithms"
 scoring       = "tests"
 solution_file = "src/lib.rs"
 timeout       = 120
+published_at        = "2026-07-01"
+published_at_source = "author"

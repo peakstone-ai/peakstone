@@ -78,6 +78,9 @@ class Dashboard(App):
         self._board_rows: list[dict] = []
         # peakstones chosen in the Challenges screen; empty = use the quick default repro set.
         self.selected_ids: list[str] = []
+        # set when the selection came from a level shortcut (1-5) — runs via --level so the level's
+        # judge/agent/prebuilt settings apply; None for a hand-picked selection (plain id run).
+        self.selected_level: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -273,85 +276,163 @@ class AddModelScreen(ModalScreen):
 
 
 class ModelsScreen(ModalScreen):
+    """Pick a model to run the selected peakstones on. Models are grouped as family → quant: the
+    registry (serve/models.toml) provides the runnable/present quants; expanding a family lists the
+    other quants its HF repo offers (downloadable). The header shows how many peakstones will run."""
     CSS = """
     ModelsScreen { align: center middle; }
-    #models { width: 90; height: 24; border: thick $accent; background: $surface; padding: 1; }
-    #models-tbl { height: 1fr; }
+    #models { width: 92; height: 26; border: thick $accent; background: $surface; padding: 1; }
+    #models-tree { height: 1fr; }
     #dl-bar { margin-top: 1; }
     """
     BINDINGS = [("escape", "dismiss", "Close"), ("a", "add", "Add"),
                 ("d", "download", "Download"), ("l", "levels", "Levels"), ("r", "run", "Run")]
 
     def compose(self) -> ComposeResult:
+        ids, lvl = self.app.run_ids(), self.app.selected_level
+        scope = f"level [b]{lvl}[/]" if lvl else f"[b]{len(ids)}[/] peakstones"
         with Vertical(id="models"):
-            yield Static("[b]Local models[/b] (serve/models.toml)  ·  l levels  ·  r run  ·  "
-                         "a add  ·  d download  ·  Esc close")
-            yield DataTable(id="models-tbl", cursor_type="row", zebra_stripes=True)
+            yield Static(f"[b]Models[/b] — will run {scope}  ·  space expand  ·  r run  ·  l levels  "
+                         "·  d download  ·  a add  ·  Esc close")
+            yield Tree("models", id="models-tree")
             yield ProgressBar(id="dl-bar", show_eta=False)
 
     def on_mount(self) -> None:
-        self.query_one("#models-tbl", DataTable).add_columns(
-            "Model", "Present", "Size", "Fit", "TPS", "Caps", "Port")
         self.query_one("#dl-bar", ProgressBar).display = False
+        tree = self.query_one("#models-tree", Tree)
+        tree.show_root = False
+        tree.auto_expand = False
         self.refresh_models()
+        tree.focus()
+
+    def _last_tps(self, name: str):
+        for h in reversed(history.load()):
+            if h.get("model") == name and h.get("your_tps"):
+                return h["your_tps"]
+        return None
+
+    @staticmethod
+    def _fitmark(size, max_vram) -> str:
+        if not size:
+            return "?"
+        return "✓" if (max_vram and size <= max_vram) else "✗"
+
+    def _family_label(self, fam: str, n_local: int, n_hf: int | None = None) -> str:
+        extra = f", +{n_hf} on HF" if n_hf else ""
+        return f"[b]{fam}[/]  ({n_local} local{extra})"
+
+    def _registry_label(self, e, max_vram) -> str:
+        present = "✓" if e.present else "·"
+        size = f"{e.size_gb} GB" if e.size_gb else "—"
+        tps = self._last_tps(e.name)
+        caps = eng_caps.effective_capabilities(e.name)
+        caps_s = "".join(c for c, on in [("T", "tools" in caps), ("A", "agentic" in caps),
+                                         ("R", "reasoner" in caps)] if on) or "-"
+        return (f"{present} {e.quant:13} {size:>8}  {self._fitmark(e.size_gb, max_vram)}fit  "
+                f"{(f'{tps:.0f} tps' if tps else '—'):>8}  {caps_s}")
+
+    def _hf_label(self, q, max_vram) -> str:
+        sz = q.get("size_gb")
+        size = f"~{sz} GB" if sz else "—"
+        return f"· {q['quant']:13} {size:>8}  {self._fitmark(sz, max_vram)}fit  (download)"
 
     def refresh_models(self) -> None:
-        t = self.query_one("#models-tbl", DataTable)
-        t.clear()
+        tree = self.query_one("#models-tree", Tree)
+        tree.clear()
         max_vram = hardware.snapshot().max_vram_gb
-        hist = history.load()
+        for fam, entries in models.group_by_family(models.load_registry()).items():
+            repo = next((e.repo for e in entries if e.repo), None)
+            present = next((e for e in entries if e.present), None)
+            node = tree.root.add(self._family_label(fam, len(entries)),
+                                 data={"kind": "family", "family": fam, "repo": repo,
+                                       "entries": entries, "entry": present or entries[0], "hf_done": False})
+            for e in entries:
+                node.add_leaf(self._registry_label(e, max_vram), data={"kind": "registry", "entry": e})
+        if tree.root.children:
+            tree.cursor_line = 0
 
-        def last_tps(name):
-            for h in reversed(hist):
-                if h.get("model") == name and h.get("your_tps"):
-                    return h["your_tps"]
-            return None
+    def on_tree_node_expanded(self, ev: "Tree.NodeExpanded") -> None:
+        d = ev.node.data or {}
+        if d.get("kind") == "family" and d.get("repo") and not d.get("hf_done"):
+            d["hf_done"] = True   # set now so a quick re-expand doesn't double-fetch
+            self.discover_hf(ev.node)
 
-        for e in models.load_registry().values():
-            fit = "?" if not e.size_gb else ("✓" if (max_vram and e.size_gb <= max_vram) else "✗")
-            tps = last_tps(e.name)
-            caps = eng_caps.effective_capabilities(e.name)
-            caps_s = "".join(c for c, on in [("T", "tools" in caps), ("A", "agentic" in caps),
-                                             ("R", "reasoner" in caps)] if on) or "-"
-            t.add_row(e.name, "✓" if e.present else "—", f"{e.size_gb} GB" if e.size_gb else "—",
-                      fit, _fmt(tps, "{:.0f}"), caps_s, str(e.port or ""))
+    @work(thread=True)
+    def discover_hf(self, node) -> None:
+        d = node.data or {}
+        quants = models.available_quants(d["repo"])
+        have = {e.quant for e in d["entries"]}
+        extra = [q for q in quants if q["quant"] not in have]
+        if extra:
+            self.app.call_from_thread(self._add_hf, node, extra)
+
+    def _add_hf(self, node, extra) -> None:
+        max_vram = hardware.snapshot().max_vram_gb
+        d = node.data
+        for q in extra:
+            node.add_leaf(self._hf_label(q, max_vram),
+                          data={"kind": "hf", "family": d["family"], "repo": d["repo"],
+                                "file": q["file"], "quant": q["quant"], "size_gb": q.get("size_gb")})
+        node.set_label(self._family_label(d["family"], len(d["entries"]), len(extra)))
+
+    def _node_data(self) -> dict:
+        n = self.query_one("#models-tree", Tree).cursor_node
+        return (n.data if n else None) or {}
+
+    def _target_entry(self):
+        """The registry entry to act on: a quant leaf's entry, or a family's present/first quant."""
+        d = self._node_data()
+        return d.get("entry") if d.get("kind") in ("registry", "family") else None
 
     def action_add(self) -> None:
         self.app.push_screen(AddModelScreen(), lambda _ok: self.refresh_models())
 
-    def _selected(self) -> str | None:
-        t = self.query_one("#models-tbl", DataTable)
-        if t.row_count == 0 or t.cursor_row is None:
-            return None
-        return str(t.get_row_at(t.cursor_row)[0])
-
-    def action_download(self) -> None:
-        name = self._selected()
-        if name:
-            self.download_model(name)
-
     def action_run(self) -> None:
-        """Benchmark the selected model locally (download if needed) → a real, submittable run. No
+        """Benchmark the selected quant locally (download if needed) → a real, submittable run. No
         published baseline since this isn't a leaderboard row; press `s` in the run view to submit."""
-        name = self._selected()
-        if name:
-            self.app.push_screen(ReproduceScreen(name, None, self.app.base_url,
-                                                 challenge_ids=self.app.run_ids()))
+        e = self._target_entry()
+        if not e:
+            self.notify("pick a registered quant — press d to download an HF-only quant first")
+            return
+        self.app.push_screen(ReproduceScreen(e.name, None, self.app.base_url,
+                                             challenge_ids=self.app.run_ids(),
+                                             level=self.app.selected_level))
 
     def action_levels(self) -> None:
-        name = self._selected()
-        if name:
-            self.app.push_screen(LevelScreen(name, self.app.base_url))
+        e = self._target_entry()
+        if e:
+            self.app.push_screen(LevelScreen(e.name, self.app.base_url))
+
+    def action_download(self) -> None:
+        d = self._node_data()
+        if d.get("kind") == "hf":
+            self.download_hf(d)
+        elif d.get("entry"):
+            self.download_model(d["entry"].name)
+
+    @work(thread=True, exclusive=True)
+    def download_hf(self, d: dict) -> None:
+        try:
+            e = models.register_quant(d["family"], d["repo"], d["file"], d["quant"])
+        except Exception as ex:  # noqa: BLE001
+            self.app.call_from_thread(self.app.notify, f"register failed: {ex}")
+            return
+        self._download_entry(e)
 
     @work(thread=True, exclusive=True)
     def download_model(self, name: str) -> None:
         entry = models.load_registry().get(name)
         if entry:
-            self.app.call_from_thread(self.app.notify, f"downloading {name}…")
-            self.app.call_from_thread(self._bar_show, True)
-            models.download(entry, lambda s: self.app.call_from_thread(self.app.notify, s, timeout=8),
-                            progress=lambda done, total: self.app.call_from_thread(self._bar_update, done, total))
-            self.app.call_from_thread(self._bar_show, False)
+            self._download_entry(entry)
+        else:
+            self.app.call_from_thread(self.refresh_models)
+
+    def _download_entry(self, entry) -> None:
+        self.app.call_from_thread(self.app.notify, f"downloading {entry.name}…")
+        self.app.call_from_thread(self._bar_show, True)
+        models.download(entry, lambda s: self.app.call_from_thread(self.app.notify, s, timeout=8),
+                        progress=lambda done, total: self.app.call_from_thread(self._bar_update, done, total))
+        self.app.call_from_thread(self._bar_show, False)
         self.app.call_from_thread(self.refresh_models)
 
     def _bar_show(self, show: bool) -> None:
@@ -398,16 +479,24 @@ class ChallengesScreen(ModalScreen):
     #ch-status { height: auto; padding-top: 1; }
     """
     BINDINGS = [("escape", "dismiss", "Close"), ("a", "all", "All"),
-                ("c", "clear", "Clear"), ("r", "run", "Run")]
+                ("c", "clear", "Clear"), ("r", "run", "Run"),
+                ("1", "select_level(0)", "smoke"), ("2", "select_level(1)", "quick"),
+                ("3", "select_level(2)", "standard"), ("4", "select_level(3)", "deep"),
+                ("5", "select_level(4)", "max")]
 
     def __init__(self):
         super().__init__()
         self.sel = ch_browse.Selection()
         self._all_ids: list[str] = []
+        self._corpus: list = []
+        self._levels: dict = {}
+        self._level_names: list[str] = []
+        self._chosen_level: str | None = None   # set by a level shortcut; cleared on manual edit
 
     def compose(self) -> ComposeResult:
         with Vertical(id="challenges"):
-            yield Static("[b]Peakstones[/b]  ·  ⏎ select  ·  space expand  ·  a all  ·  c clear  ·  r run  ·  Esc close")
+            yield Static("[b]Peakstones[/b]  ·  [b]1-5[/] level (smoke→max)  ·  ⏎ select  ·  space expand  "
+                         "·  a all  ·  c clear  ·  r run  ·  Esc close")
             yield Tree("peakstones", id="ch-tree")
             yield Static("", id="ch-status")
 
@@ -420,14 +509,30 @@ class ChallengesScreen(ModalScreen):
         except Exception as e:  # noqa: BLE001
             self.query_one("#ch-status", Static).update(f"[red]could not load corpus: {e}[/]")
             return
+        self._corpus = corpus
+        try:
+            _, self._levels = eng_levels.load_levels()
+            self._level_names = list(self._levels)
+        except Exception:  # noqa: BLE001 — level shortcuts just stay inert if levels.toml is unreadable
+            self._levels, self._level_names = {}, []
         self._all_ids = [c.id for c in corpus]
         root = tree.root
         root.data = {"ids": self._all_ids, "base": f"All peakstones ({len(corpus)})", "kind": "root"}
-        for family, chs in ch_browse.group_by_family(corpus).items():
-            fam = root.add("", data={"ids": [c.id for c in chs], "base": f"{family} ({len(chs)})"})
-            for bucket, dchs in ch_browse.group_by_date(chs).items():
-                fam.add("", data={"ids": [c.id for c in dchs], "base": f"{bucket} ({len(dchs)})",
-                                  "chs": dchs, "filled": False})
+        for grp in ch_browse.group_by_collection(corpus):
+            chs = grp["chs"]
+            ids = [c.id for c in chs]
+            if grp["kind"] == "native":   # our peakstones: collection -> language/axis family -> challenges
+                span = ch_browse.date_span(chs)
+                label = f"{grp['label']}" + (f" · {span}" if span else "") + f" ({len(chs)})"
+                node = root.add("", data={"ids": ids, "base": label, "kind": "native"})
+                for family, fchs in ch_browse.group_by_family(chs).items():
+                    node.add("", data={"ids": [c.id for c in fchs], "base": f"{family} ({len(fchs)})",
+                                       "chs": fchs, "filled": False})
+            else:                          # imported suite: suite -> month -> challenges
+                node = root.add("", data={"ids": ids, "base": f"{grp['label']} ({len(chs)})", "kind": "suite"})
+                for bucket, dchs in ch_browse.group_by_date(chs).items():
+                    node.add("", data={"ids": [c.id for c in dchs], "base": f"{bucket} ({len(dchs)})",
+                                       "chs": dchs, "filled": False})
         root.expand()
         self._refresh()
 
@@ -444,35 +549,71 @@ class ChallengesScreen(ModalScreen):
         for c in node.children:
             yield from self._walk(c)
 
+    @staticmethod
+    def _level_tags(level) -> str:
+        """Compact run-settings caption for a level, e.g. 'judge·agent·prebuilt'."""
+        tags = [t for t, on in [("judge", level.judge), ("agent", level.agent),
+                                ("prebuilt", level.prebuilt), ("retry", level.retries)] if on]
+        return "·".join(tags)
+
     def _refresh(self) -> None:
         tree = self.query_one("#ch-tree", Tree)
         for node in self._walk(tree.root):
             if node.data:
                 node.set_label(f"{ch_browse.MARKER[self.sel.state(node.data['ids'])]} {node.data['base']}")
         n, total = len(self.sel.ids), len(self._all_ids)
+        if self._chosen_level:
+            tags = self._level_tags(self._levels[self._chosen_level])
+            scope = f"level [b]{self._chosen_level}[/]" + (f" ({tags})" if tags else "")
+        else:
+            scope = "custom selection" if n else ""
+        eta = ch_browse.rough_eta(n)
         self.query_one("#ch-status", Static).update(
-            f"[b]{n}[/] / {total} selected" + ("  ·  press [b]r[/] to run" if n else ""))
+            f"[b]{n}[/] / {total} selected" + (f"  ·  {scope}" if scope else "")
+            + (f"  ·  {eta} @ 1/s" if eta else "")
+            + ("  ·  press [b]r[/] to run" if n else ""))
+
+    def action_select_level(self, idx: int) -> None:
+        """Load a level's exact bench selection (1=smoke … 5=max), ready to run with its settings."""
+        if idx >= len(self._level_names):
+            self.notify("no such level")
+            return
+        name = self._level_names[idx]
+        ids = eng_levels.resolve(self._levels[name], self._corpus)
+        if not ids:
+            self.notify(f"{name}: no matching peakstones in the current corpus")
+            return
+        self.sel.ids = set(ids)
+        self._chosen_level = name
+        self._refresh()
+        tags = self._level_tags(self._levels[name])
+        self.notify(f"{name}: {len(ids)} peakstones" + (f" · {tags}" if tags else "") + " — press r to run")
 
     def on_tree_node_selected(self, ev: "Tree.NodeSelected") -> None:
         if ev.node.data:                       # ⏎ on any node toggles its whole id-set
             self.sel.toggle(ev.node.data["ids"])
+            self._chosen_level = None          # hand-edited -> custom selection, not a level
             self._refresh()
 
     def action_all(self) -> None:
         self.sel.ids = set(self._all_ids)
+        self._chosen_level = None
         self._refresh()
 
     def action_clear(self) -> None:
         self.sel.ids = set()
+        self._chosen_level = None
         self._refresh()
 
     def action_run(self) -> None:
         ids = self.sel.resolve()
         if not ids:
-            self.notify("select at least one peakstone (space), or press a for all")
+            self.notify("select at least one peakstone (1-5 for a level, space to pick, or a for all)")
             return
         self.app.selected_ids = ids
-        self.notify(f"{len(ids)} peakstones selected — pick a model to run")
+        self.app.selected_level = self._chosen_level   # level run (settings apply) vs plain id run
+        scope = f"level {self._chosen_level}" if self._chosen_level else f"{len(ids)} peakstones"
+        self.notify(f"{scope} selected — pick a model to run")
         self.dismiss()
         self.app.push_screen(ModelsScreen())
 
