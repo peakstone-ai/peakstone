@@ -59,9 +59,11 @@ def serve(name: str, *, popen=subprocess.Popen, ctx: int | None = None) -> subpr
     env = {**os.environ}
     if ctx:
         env["PEAKSTONE_CTX"] = str(ctx)   # serve.sh + the bundle pick this up
-    # capture stdout+stderr to a file so a failed launch (OOM, missing binary) is diagnosable
-    return popen(["bash", str(SERVE_SH), name], cwd=str(REPO), stdout=open(log, "wb"),
-                 stderr=subprocess.STDOUT, start_new_session=True, env=env)
+    # capture stdout+stderr to a file so a failed launch (OOM, missing binary) is diagnosable.
+    # close the parent's handle once spawned — the child keeps its own dup (no fd leak per serve).
+    with open(log, "wb") as logf:
+        return popen(["bash", str(SERVE_SH), name], cwd=str(REPO), stdout=logf,
+                     stderr=subprocess.STDOUT, start_new_session=True, env=env)
 
 
 def wait_healthy(port: int, *, timeout: float = 180, opener=urllib.request.urlopen, proc=None) -> bool:

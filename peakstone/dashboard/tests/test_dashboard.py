@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 from textual.widgets import DataTable, Static
@@ -104,11 +105,12 @@ def test_board_quant_groups_results_like_peakstones(monkeypatch):
           "run": {"artifact": "Q6_K", "bundle_hash": "bh1", "vram_gb": 24}}]}
     monkeypatch.setattr(client, "get_leaderboard", lambda *a, **k: LB)
     # real native corpus ids, so they group under Native -> date -> family like the peakstones window
-    monkeypatch.setattr(client, "get_run", lambda url, bh, **k: {"results": [
-        {"challenge": "py-05-calc", "final": 1.0, "passed": 10, "total": 10, "category": "code",
-         "transcript": {"raw_output": "def solution(): return 42", "stdout": "all tests passed"}},
-        {"challenge": "go-03-detect-cycle", "final": 0.0, "passed": 0, "total": 1, "category": "code",
-         "transcript": {"raw_output": "broken"}}]})
+    monkeypatch.setattr(client, "get_run", lambda url, bh, **k: {"results": [   # lite: scores only
+        {"challenge": "py-05-calc", "final": 1.0, "passed": 10, "total": 10, "category": "code"},
+        {"challenge": "go-03-detect-cycle", "final": 0.0, "passed": 0, "total": 1, "category": "code"}]})
+    monkeypatch.setattr(client, "get_run_challenge", lambda url, bh, cid, **k: {   # transcript on demand
+        "challenge": cid, "final": 1.0, "passed": 10, "total": 10,
+        "transcript": {"raw_output": "def solution(): return 42", "stdout": "all tests passed"}})
 
     def leaves(node):
         out = []
@@ -136,9 +138,10 @@ def test_board_quant_groups_results_like_peakstones(monkeypatch):
             assert any("2026-06" in n for n in allnodes)
             assert any("python" in n and "1.00" in n for n in allnodes)   # family avg score
             assert any("py-05-calc" in n for n in allnodes) and any("go-03-detect-cycle" in n for n in allnodes)
-            # opening a test result still shows the split view with solution + output + reaction
-            app.open_solution({"challenge": "py-05-calc", "final": 1.0, "passed": 10, "total": 10,
-                               "transcript": {"raw_output": "def solution(): return 42", "stdout": "all tests passed"}})
+            # opening a test result fetches the transcript on demand and shows solution + output + reaction
+            app.open_solution({"row": {"challenge": "py-05-calc"}, "bundle_hash": "bh1"})
+            await pilot.pause()
+            await app.workers.wait_for_complete()
             await pilot.pause()
             out = str(app.screen.query_one("#sol-out", Static).render())
             assert isinstance(app.screen, SolutionScreen) and "def solution(): return 42" in out
@@ -568,17 +571,14 @@ def test_reproduce_screen_coverage_and_rate():
 
     async def scenario():
         app = Dashboard("http://x")
-        app._corpus_total = 1965                                              # fixed suite denominator
+        app._corpus = [None] * 1965                                           # fixed suite denominator
+        # app owns the run counters now; the viewer just renders run_progress()
+        app._run_total, app._run_done, app._run_t0 = 3, 2, time.monotonic()
         async with app.run_test() as pilot:
             scr = ReproduceScreen()
             await app.push_screen(scr)
             await pilot.pause()
-            scr._on_line("Running 1 model(s) over 3 challenge(s). judge=False")   # total parsed from here
-            scr._on_line("   m | a   → solving [tests] …")
-            scr._on_line("   m | a   ok  tests 10/10")                            # result -> 1 done
-            scr._on_line("   m | b   → solving [tests] …")
-            scr._on_line("   m | b   !! tests 3/10")                              # result -> 2 done
-            await pilot.pause()
+            scr._update_stat()
             stat = str(scr.query_one("#repro-stat", Static).render())
             assert "coverage 2/3" in stat and "3/1965 of suite" in stat and "sol/s" in stat
 
@@ -587,8 +587,8 @@ def test_reproduce_screen_coverage_and_rate():
 
 def test_repetition_loop_shows_as_error_type():
     from peakstone.dashboard.app import Dashboard, _solution_body
-    leaf = Dashboard._result_leaf({"challenge": "c1", "final": 0.0,
-                                   "transcript": {"error": "repetition-loop"}})
+    leaf = Dashboard._result_leaf({"challenge": "c1", "final": 0.0,    # lite leaf: top-level error
+                                   "error": "repetition-loop"})
     assert "⟳" in leaf and "repetition loop" in leaf          # distinct marker, not a plain ✗
     body = _solution_body({"challenge": "c1", "final": 0.0,
                            "transcript": {"error": "repetition-loop", "raw_output": "loop loop"}})

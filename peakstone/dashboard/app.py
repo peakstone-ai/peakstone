@@ -6,6 +6,7 @@ Run:  peakstone            (or)  python -m dashboard  [--api URL]
 from __future__ import annotations
 
 import re
+import threading
 import time
 
 from textual import work
@@ -85,7 +86,7 @@ class BoardTree(NavTree):
         node = self.cursor_node
         d = (node.data if node else None) or {}
         if d.get("kind") == "result":
-            self.app.open_solution(d.get("row") or {})
+            self.app.open_solution(d)
         elif node is not None:
             node.collapse() if node.is_expanded else node.expand()
 
@@ -209,14 +210,17 @@ class Dashboard(App):
         # run view, and a second run while one is active is queued rather than started concurrently.
         self.run_queue: list[dict] = []
         self.run_active = False
+        self._run_lock = threading.Lock()      # guards queue + run-state across the worker and UI threads
         self._run_log: list[str] = []          # raw streamed lines of the current run (for viewer replay)
         self._run_result = None
         self._run_spec: dict | None = None
+        self._run_submitted: bool | None = None  # None=not yet, True/False=auto-submit outcome
         self._viewer = None                    # the ReproduceScreen currently viewing the active run
         self._run_procs: list = []             # serve + bench + download subprocesses (for cancel)
         self._run_cancelled = False
         self._run_phase: str | None = None     # None | "download" | "run" — for the global status line
         self._run_done = self._run_total = 0   # coverage of the active run
+        self._run_t0: float | None = None       # monotonic at first solve (elapsed / sol-s)
         self._dl_done = self._dl_total = 0      # bytes of the active download
         self._corpus = None                     # cached local peakstone corpus (coverage + spec lookup)
 
@@ -239,9 +243,12 @@ class Dashboard(App):
                   free_procs=None, ctx=None) -> bool:
         """Queue a run. Returns True if it started immediately, False if it was queued behind an active
         run. Runs execute one at a time on _run_loop (one model on the GPU at a time)."""
-        self.run_queue.append({"name": name, "published_tps": published_tps, "challenge_ids": challenge_ids,
-                               "level": level, "free_procs": free_procs, "ctx": ctx})
-        if self.run_active:
+        spec = {"name": name, "published_tps": published_tps, "challenge_ids": challenge_ids,
+                "level": level, "free_procs": free_procs, "ctx": ctx}
+        with self._run_lock:                 # append + active-check atomically vs the drain loop
+            self.run_queue.append(spec)
+            active = self.run_active
+        if active:
             self.notify(f"queued {name} — {len(self.run_queue)} in queue")
             return False
         self._run_loop()
@@ -249,13 +256,17 @@ class Dashboard(App):
 
     @work(thread=True, exclusive=True, group="run")
     def _run_loop(self) -> None:
-        while self.run_queue:
-            spec = self.run_queue.pop(0)
-            self.run_active = True
-            self._run_spec, self._run_log, self._run_result = spec, [], None
-            self._run_procs, self._run_cancelled = [], False
-            self._run_phase, self._run_done, self._run_total = "start", 0, 0
-            self._dl_done = self._dl_total = 0
+        while True:
+            with self._run_lock:             # pop + reset run-state atomically (no race with start_run/cancel)
+                if not self.run_queue:
+                    self.run_active, self._run_phase = False, None
+                    return
+                spec = self.run_queue.pop(0)
+                self.run_active = True
+                self._run_spec, self._run_log, self._run_result, self._run_submitted = spec, [], None, None
+                self._run_procs, self._run_cancelled = [], False
+                self._run_phase, self._run_done, self._run_total, self._run_t0 = "start", 0, 0, None
+                self._dl_done = self._dl_total = 0
             self.call_from_thread(self._viewer_reset)
             if spec["free_procs"]:
                 self._run_emit(f"freeing GPU: stopping {len(spec['free_procs'])} llama-server process(es)…")
@@ -273,15 +284,17 @@ class Dashboard(App):
             if res.ok and res.bundle and not self._run_cancelled:   # auto-submit completed runs (for now)
                 try:
                     status, _ = client.submit_bundle(self.base_url, res.bundle)
+                    self._run_submitted = status in (201, 409)
                     msg = {201: "submitted ✓", 409: "already submitted"}.get(status, f"submit: {status}")
                 except Exception as e:  # noqa: BLE001
+                    self._run_submitted = False
                     msg = f"submit failed: {e}"
+                self.call_from_thread(self._viewer_show, res)   # refresh the result line's submit state
                 self.call_from_thread(self.notify, f"{spec['name']}: {msg}")
-        self.run_active = False
-        self._run_phase = None
 
     def _dl_progress(self, done, total) -> None:
-        self._dl_done, self._dl_total = done or 0, total or 0
+        with self._run_lock:
+            self._dl_done, self._dl_total = done or 0, total or 0
 
     def _run_emit(self, line: str) -> None:
         self._run_log.append(line)
@@ -290,32 +303,44 @@ class Dashboard(App):
             self.call_from_thread(self._viewer._on_line, line)
 
     def _track(self, line: str) -> None:
-        """Maintain a coarse job status (phase + coverage) for the global overview, from the stream."""
+        """Single source of truth for the active run's phase + coverage (read by the global overview AND
+        the run view), parsed from the stream under the lock."""
         if line.startswith(GEN_MARK):
             return
-        if "downloading" in line.lower():
-            self._run_phase = "download"
-        elif "→ solving" in line or "benchmarking" in line:
-            self._run_phase = "run"
-        if "→ solving" not in line and " | " in line:
-            self._run_done += 1
-        else:
-            m = re.search(r"over (\d+) challenge", line) or re.search(r":\s*(\d+) challenges", line)
-            if m:
-                self._run_total = int(m.group(1))
+        with self._run_lock:
+            if "downloading" in line.lower():
+                self._run_phase = "download"
+            elif "→ solving" in line or "benchmarking" in line:
+                self._run_phase = "run"
+            if "→ solving" in line and self._run_t0 is None:
+                self._run_t0 = time.monotonic()
+            if "→ solving" not in line and " | " in line:
+                self._run_done += 1
+            else:
+                m = re.search(r"over (\d+) challenge", line) or re.search(r":\s*(\d+) challenges", line)
+                if m:
+                    self._run_total = int(m.group(1))
+
+    def run_progress(self) -> dict:
+        """Atomic snapshot of the active run's progress (for the overview + run view)."""
+        with self._run_lock:
+            return {"active": self.run_active, "model": (self._run_spec or {}).get("name", "?"),
+                    "phase": self._run_phase, "done": self._run_done, "total": self._run_total,
+                    "t0": self._run_t0, "dl_done": self._dl_done, "dl_total": self._dl_total,
+                    "queued": len(self.run_queue)}
 
     def job_status(self) -> str:
         """One-line status of the active/queued job for the performance overview (incl. a progress bar)."""
-        if self.run_active:
-            model = (self._run_spec or {}).get("name", "?")
-            queued = f"   ·   {len(self.run_queue)} queued" if self.run_queue else ""
-            if self._run_phase == "download" and self._dl_total:
-                return f"[b]⬇ {model}[/] downloading  {_bar(self._dl_done, self._dl_total)}{queued}"
-            if self._run_total:
-                return f"[b]▶ {model}[/] running  {_bar(self._run_done, self._run_total)} peakstones{queued}"
-            return f"[b]▶ {model}[/] {self._run_phase or 'starting'}…{queued}"
-        if self.run_queue:
-            return f"[dim]{len(self.run_queue)} run(s) queued[/]"
+        p = self.run_progress()
+        if p["active"]:
+            queued = f"   ·   {p['queued']} queued" if p["queued"] else ""
+            if p["phase"] == "download" and p["dl_total"]:
+                return f"[b]⬇ {p['model']}[/] downloading  {_bar(p['dl_done'], p['dl_total'])}{queued}"
+            if p["total"]:
+                return f"[b]▶ {p['model']}[/] running  {_bar(p['done'], p['total'])} peakstones{queued}"
+            return f"[b]▶ {p['model']}[/] {p['phase'] or 'starting'}…{queued}"
+        if p["queued"]:
+            return f"[dim]{p['queued']} run(s) queued[/]"
         return ""
 
     def _viewer_reset(self) -> None:
@@ -329,35 +354,42 @@ class Dashboard(App):
     def cancel_active(self) -> bool:
         """Stop the active run: kill its serve + benchmark subprocesses so the run loop unblocks and
         advances to the next queued run. Returns False if nothing is running."""
-        if not self.run_active:
-            self.notify("no active run")
-            return False
-        self._run_cancelled = True
-        for p in list(self._run_procs):
+        with self._run_lock:
+            if not self.run_active:
+                self.notify("no active run")
+                return False
+            self._run_cancelled = True
+            procs = list(self._run_procs)
+        for p in procs:
             reproduce.stop(p)
         self.notify("cancelling active run…")
         return True
 
     def shutdown_runs(self) -> None:
         """Kill any run subprocesses — called on quit so nothing is left orphaned."""
-        self._run_cancelled = True
-        for p in list(self._run_procs):
+        with self._run_lock:
+            self._run_cancelled = True
+            procs = list(self._run_procs)
+        for p in procs:
             reproduce.stop(p)
 
-    # queue management (the QueueScreen drives these) ----------------------------------------------
+    # queue management (the QueueScreen drives these) — locked vs the drain loop on the run worker
     def cancel_queued(self, i: int):
-        return self.run_queue.pop(i) if 0 <= i < len(self.run_queue) else None
+        with self._run_lock:
+            return self.run_queue.pop(i) if 0 <= i < len(self.run_queue) else None
 
     def clear_queued(self) -> None:
-        self.run_queue.clear()
+        with self._run_lock:
+            self.run_queue.clear()
 
     def move_queued(self, i: int, delta: int) -> int:
         """Reorder a queued run; returns its new index (unchanged if the move was out of bounds)."""
-        j = i + delta
-        if 0 <= i < len(self.run_queue) and 0 <= j < len(self.run_queue):
-            self.run_queue[i], self.run_queue[j] = self.run_queue[j], self.run_queue[i]
-            return j
-        return i
+        with self._run_lock:
+            j = i + delta
+            if 0 <= i < len(self.run_queue) and 0 <= j < len(self.run_queue):
+                self.run_queue[i], self.run_queue[j] = self.run_queue[j], self.run_queue[i]
+                return j
+            return i
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -427,18 +459,18 @@ class Dashboard(App):
     @work(thread=True)
     def load_run_results(self, node, bundle_hash) -> None:
         if not bundle_hash:
-            self.call_from_thread(self._add_results, node, [])
+            self.call_from_thread(self._add_results, node, [], None)
             return
         try:
             data = client.get_run(self.base_url, bundle_hash)
         except client.APIError:
-            self.call_from_thread(self._add_results, node, None)
+            self.call_from_thread(self._add_results, node, None, bundle_hash)
             return
-        self.call_from_thread(self._add_results, node, data.get("results", []))
+        self.call_from_thread(self._add_results, node, data.get("results", []), bundle_hash)
 
     @staticmethod
     def _result_leaf(r: dict) -> str:
-        if (r.get("transcript") or {}).get("error") == "repetition-loop":
+        if r.get("error") == "repetition-loop":
             return f"[magenta]⟳[/] {r.get('challenge', '?'):30} repetition loop"
         final = r.get("final") or 0.0
         mark = "[green]✓[/]" if final >= 0.999 else ("[red]✗[/]" if final == 0 else "[yellow]◐[/]")
@@ -446,7 +478,7 @@ class Dashboard(App):
         cat = r.get("category") or r.get("verification") or ""
         return f"{mark} {r.get('challenge', '?'):30} {final:.2f}{pt}  [dim]{cat}[/]"
 
-    def _add_results(self, node, results) -> None:
+    def _add_results(self, node, results, bundle_hash) -> None:
         if results is None:
             node.add_leaf("[red]could not load results[/]")
             return
@@ -469,16 +501,17 @@ class Dashboard(App):
                     dnode = coll.add(grp_label(bucket, dchs))
                     for fam, fchs in ch_browse.group_by_family(dchs).items():
                         fnode = dnode.add(grp_label(fam, fchs))
-                        self._add_result_leaves(fnode, fchs, by_id)
+                        self._add_result_leaves(fnode, fchs, by_id, bundle_hash)
             else:
                 for bucket, dchs in ch_browse.group_by_date(chs).items():
                     dnode = coll.add(grp_label(bucket, dchs))
-                    self._add_result_leaves(dnode, dchs, by_id)
+                    self._add_result_leaves(dnode, dchs, by_id, bundle_hash)
         extra = [by_id[i] for i in by_id if i not in {c.id for c in known}]
         if extra:
             other = node.add(self._grp_label("other", extra))   # ran but not in the local corpus
             for r in extra:
-                other.add_leaf(self._result_leaf(r), data={"kind": "result", "row": r})
+                other.add_leaf(self._result_leaf(r),
+                               data={"kind": "result", "row": r, "bundle_hash": bundle_hash})
 
     @staticmethod
     def _grp_label(label: str, results: list) -> str:
@@ -486,14 +519,15 @@ class Dashboard(App):
         avg = f"   [b]{sum(vals) / len(vals):.2f}[/]" if vals else ""
         return f"{label} ({len(results)}){avg}"
 
-    def _add_result_leaves(self, parent, challenges, by_id) -> None:
+    def _add_result_leaves(self, parent, challenges, by_id, bundle_hash) -> None:
         for c in sorted(challenges, key=lambda c: c.id):
             r = by_id[c.id]
-            parent.add_leaf(self._result_leaf(r), data={"kind": "result", "row": r})
+            parent.add_leaf(self._result_leaf(r),
+                            data={"kind": "result", "row": r, "bundle_hash": bundle_hash})
 
-    def open_solution(self, r: dict) -> None:
-        cid = r.get("challenge", "?")
-        self.push_screen(SolutionScreen(cid, self.challenge_spec(cid), _solution_body(r)))
+    def open_solution(self, d: dict) -> None:
+        cid = (d.get("row") or {}).get("challenge", "?")
+        self.push_screen(SolutionScreen(cid, self.challenge_spec(cid), self.base_url, d.get("bundle_hash")))
 
     @work(thread=True, exclusive=True)
     def load_board(self) -> None:
@@ -574,9 +608,7 @@ class ReproduceScreen(ModalScreen):
         self._result: reproduce.ReproduceResult | None = None
         self._gen_buf = ""       # accumulated live model output for the current challenge
         self._gen_ch = ""        # the challenge currently being solved (from the runner's progress)
-        self._n_total = 0        # tests in the run (refined live)
-        self._n_done = 0         # challenges completed so far (one result line each)
-        self._t0 = None          # monotonic clock at the first solve, for sol/sec
+        # coverage/done/total/elapsed are owned by the app (single source of truth); the view reads them.
 
     def compose(self) -> ComposeResult:
         with Vertical(id="repro"):
@@ -605,8 +637,7 @@ class ReproduceScreen(ModalScreen):
         model, level = spec.get("name", "—"), spec.get("level")
         ids = spec.get("challenge_ids") or REPRODUCE_IDS
         self._result = None
-        self._gen_buf, self._gen_ch, self._n_done, self._t0 = "", "", 0, None
-        self._n_total = 0 if level else len(ids)
+        self._gen_buf, self._gen_ch = "", ""
         scope = f"level {level}" if level else f"{len(ids)} peakstones"
         ctx = f"  ·  ctx {_ctx_k(spec.get('ctx'))}" if spec.get("ctx") else ""
         queued = f"  ·  {len(self.app.run_queue)} queued" if self.app.run_queue else ""
@@ -619,34 +650,27 @@ class ReproduceScreen(ModalScreen):
 
     def _on_line(self, s: str) -> None:
         """Route a streamed line: generation deltas (control-prefixed) to the output panel, everything
-        else to the progress log. Also track coverage (done/total) and sol/sec from the markers."""
+        else to the progress log. Coverage/sol-s come from the app's counters (single source of truth)."""
         if s.startswith(GEN_MARK):
             self._gen_buf += s[len(GEN_MARK):].replace(GEN_NL, "\n")
             self._gen_buf = self._gen_buf[-8000:]
             self._render_gen()
             return
         if "→ solving" in s:
-            if self._t0 is None:
-                self._t0 = time.monotonic()
             self._gen_ch = s.split("→ solving")[0].split("|")[-1].strip()
             self._gen_buf = ""
             self._render_gen()
-        elif " | " in s:                       # a per-challenge result line (one per challenge)
-            self._n_done += 1
-        else:                                  # "Running … over N challenge(s)" / "Level …: N challenges"
-            m = re.search(r"over (\d+) challenge", s) or re.search(r":\s*(\d+) challenges", s)
-            if m:
-                self._n_total = int(m.group(1))
         self._update_stat()
         self.query_one("#repro-log", RichLog).write(_pretty_progress(s))
 
     def _update_stat(self) -> None:
-        elapsed = (time.monotonic() - self._t0) if self._t0 else 0.0
-        rate = (self._n_done / elapsed) if elapsed > 0 else 0.0
-        done = min(self._n_done, self._n_total) if self._n_total else self._n_done
-        total = self._n_total or "?"
+        p = self.app.run_progress()             # app owns the counters; the view just renders them
+        elapsed = (time.monotonic() - p["t0"]) if p["t0"] else 0.0
+        rate = (p["done"] / elapsed) if elapsed > 0 else 0.0
+        total = p["total"] or "?"
+        done = min(p["done"], p["total"]) if p["total"] else p["done"]
         corpus = self.app.corpus_total()
-        suite = f"   ·   {self._n_total}/{corpus} of suite" if (self._n_total and corpus) else ""
+        suite = f"   ·   {p['total']}/{corpus} of suite" if (p["total"] and corpus) else ""
         self.query_one("#repro-stat", Static).update(
             f"[b]coverage[/] {done}/{total}{suite}   ·   [b]{rate:.2f}[/] sol/s   ·   "
             f"elapsed {int(elapsed // 60)}:{int(elapsed % 60):02d}")
@@ -661,7 +685,12 @@ class ReproduceScreen(ModalScreen):
         out = self.query_one("#repro-result", Static)
         if res.ok:
             ratio = f"  ([b]{res.tps_ratio}×[/b] published)" if res.tps_ratio else ""
-            submit_hint = "  ·  press [b]s[/] to submit" if res.bundle else ""
+            if not res.bundle:
+                submit_hint = ""
+            elif self.app._run_submitted:                       # auto-submitted already
+                submit_hint = "  ·  [dim]submitted ✓[/]"
+            else:
+                submit_hint = "  ·  press [b]s[/] to submit"
             out.update(f"[green b]done[/]  ·  your [b]{_fmt(res.your_tps, '{:.0f}')}[/] tok/s vs published "
                        f"{_fmt(res.published_tps, '{:.0f}')}{ratio}  ·  code {_fmt(res.code_score)} "
                        f"({res.passed}/{res.total}){submit_hint}")
@@ -721,11 +750,12 @@ class SolutionScreen(ModalScreen):
     """
     BINDINGS = [("escape", "dismiss", "Close")]
 
-    def __init__(self, challenge_id: str, spec: str | None, body: str):
+    def __init__(self, challenge_id: str, spec: str | None, base_url: str, bundle_hash: str | None):
         super().__init__()
         self.challenge_id = challenge_id
         self.spec = spec
-        self.body = body
+        self.base_url = base_url
+        self.bundle_hash = bundle_hash
 
     def compose(self) -> ComposeResult:
         with Vertical(id="sol"):
@@ -734,7 +764,22 @@ class SolutionScreen(ModalScreen):
                 # markup off: specs/solutions contain [ ] that Rich would try to parse
                 yield Static(self.spec or "(challenge spec not in the local corpus)", id="sol-spec", markup=False)
             with VerticalScroll(id="sol-out-wrap"):
-                yield Static(self.body, id="sol-out", markup=False)
+                yield Static("loading…", id="sol-out", markup=False)
+
+    def on_mount(self) -> None:
+        self.load_solution()                 # fetch the (potentially large) transcript on demand
+
+    @work(thread=True, exclusive=True)
+    def load_solution(self) -> None:
+        if not self.bundle_hash:
+            body = "(no run reference — solution unavailable)"
+        else:
+            try:
+                r = client.get_run_challenge(self.base_url, self.bundle_hash, self.challenge_id)
+                body = _solution_body(r)
+            except client.APIError as e:
+                body = f"(could not load solution: {e})"
+        self.app.call_from_thread(self.query_one("#sol-out", Static).update, body)
 
 
 class ConfirmScreen(ModalScreen):
