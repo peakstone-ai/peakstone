@@ -102,10 +102,13 @@ def test_board_quant_expands_to_results(monkeypatch):
           "run": {"artifact": "Q6_K", "bundle_hash": "bh1", "vram_gb": 24}}]}
     monkeypatch.setattr(client, "get_leaderboard", lambda *a, **k: LB)
     monkeypatch.setattr(client, "get_run", lambda url, bh, **k: {"results": [
-        {"challenge": "c1", "final": 1.0, "passed": 10, "total": 10, "category": "code"},
-        {"challenge": "c2", "final": 0.0, "passed": 0, "total": 10, "category": "code"}]})
+        {"challenge": "c1", "final": 1.0, "passed": 10, "total": 10, "category": "code",
+         "response": "def solution(): return 42"},
+        {"challenge": "c2", "final": 0.0, "passed": 0, "total": 10, "category": "code", "response": "broken"}]})
 
     async def scenario():
+        from peakstone.dashboard.app import SolutionScreen
+        from textual.widgets import Static
         app = Dashboard("http://x")
         async with app.run_test() as pilot:
             await app.workers.wait_for_complete()
@@ -120,6 +123,12 @@ def test_board_quant_expands_to_results(monkeypatch):
             await pilot.pause()
             leaves = [str(c.label) for c in quant.children]
             assert any("c1" in lbl for lbl in leaves) and any("c2" in lbl for lbl in leaves)
+            # ⏎ on a test opens the challenge/solution split view
+            t.move_cursor(quant.children[0])
+            await pilot.press("enter")
+            await pilot.pause()
+            assert isinstance(app.screen, SolutionScreen)
+            assert "def solution(): return 42" in str(app.screen.query_one("#sol-out", Static).render())
 
     asyncio.run(scenario())
 

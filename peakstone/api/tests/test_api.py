@@ -148,8 +148,9 @@ def test_run_results_endpoint(client):
     bh = next(r for r in client.get("/leaderboard").json()["leaderboard"]
               if r["family"] == "runres")["run"]["bundle_hash"]
     res = client.get(f"/runs/{bh}").json()
-    chs = {r["challenge"] for r in res["results"]}
-    assert {"arch-0", "arch-1", "refuse-x"} <= chs              # per-challenge breakdown of the run
+    by_ch = {r["challenge"]: r for r in res["results"]}
+    assert {"arch-0", "arch-1", "refuse-x"} <= set(by_ch)       # per-challenge breakdown of the run
+    assert by_ch["arch-0"]["response"] == "x"                   # the model's proposed solution
     assert client.get("/runs/nope").status_code == 404
 
 

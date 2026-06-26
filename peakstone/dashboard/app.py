@@ -77,7 +77,17 @@ class ModelTree(NavTree):
 
 class BoardTree(NavTree):
     """The leaderboard tree: model → quant run → per-challenge results. ⏎ (and →/←) drill in/out:
-    expand a model to its quant runs, a quant run to the tests it ran and how they scored."""
+    expand a model to its quant runs, a quant run to the tests it ran; ⏎ on a test opens the
+    challenge + the model's proposed solution side by side."""
+    BINDINGS = [Binding("enter", "activate", "Expand / open")]
+
+    def action_activate(self) -> None:
+        node = self.cursor_node
+        d = (node.data if node else None) or {}
+        if d.get("kind") == "result":
+            self.app.open_solution(d.get("row") or {})
+        elif node is not None:
+            node.collapse() if node.is_expanded else node.expand()
 
 
 def _mem(vram, ram) -> str:
@@ -196,16 +206,22 @@ class Dashboard(App):
         self._run_phase: str | None = None     # None | "download" | "run" — for the global status line
         self._run_done = self._run_total = 0   # coverage of the active run
         self._dl_done = self._dl_total = 0      # bytes of the active download
-        self._corpus_total: int | None = None  # total peakstones available (coverage denominator)
+        self._corpus = None                     # cached local peakstone corpus (coverage + spec lookup)
+
+    def corpus(self) -> list:
+        """Local peakstone corpus (cached) — for the coverage denominator and challenge spec lookup."""
+        if self._corpus is None:
+            try:
+                self._corpus = ch_browse.load_corpus()
+            except Exception:  # noqa: BLE001
+                self._corpus = []
+        return self._corpus
 
     def corpus_total(self) -> int:
-        """Total peakstones in the local corpus — the denominator for coverage ('N of our total')."""
-        if self._corpus_total is None:
-            try:
-                self._corpus_total = len(ch_browse.load_corpus())
-            except Exception:  # noqa: BLE001
-                self._corpus_total = 0
-        return self._corpus_total
+        return len(self.corpus())
+
+    def challenge_spec(self, challenge_id: str) -> str | None:
+        return next((c.spec for c in self.corpus() if c.id == challenge_id), None)
 
     def start_run(self, name: str, *, published_tps=None, challenge_ids=None, level=None,
                   free_procs=None) -> bool:
@@ -423,7 +439,11 @@ class Dashboard(App):
             node.add_leaf("[dim](no per-challenge results)[/]")
         else:
             for r in results:
-                node.add_leaf(self._result_leaf(r))
+                node.add_leaf(self._result_leaf(r), data={"kind": "result", "row": r})
+
+    def open_solution(self, r: dict) -> None:
+        cid = r.get("challenge", "?")
+        self.push_screen(SolutionScreen(cid, self.challenge_spec(cid), r.get("response")))
 
     @work(thread=True, exclusive=True)
     def load_board(self) -> None:
@@ -611,6 +631,33 @@ class ReproduceScreen(ModalScreen):
             return
         msg = {201: "submitted ✓", 409: "already submitted", 400: "rejected"}.get(status, f"status {status}")
         self.app.call_from_thread(self.app.notify, f"{msg}")
+
+
+class SolutionScreen(ModalScreen):
+    """A test's challenge spec (top) and the model's proposed solution (bottom), split like the runner."""
+    CSS = """
+    SolutionScreen { align: center middle; }
+    #sol { width: 92%; height: 90%; border: thick $accent; background: $surface; padding: 1; }
+    #sol-spec-wrap { height: 1fr; border: round $primary; }
+    #sol-out-wrap { height: 1fr; border: round $secondary; margin-top: 1; }
+    #sol-spec, #sol-out { width: 1fr; }
+    """
+    BINDINGS = [("escape", "dismiss", "Close")]
+
+    def __init__(self, challenge_id: str, spec: str | None, response: str | None):
+        super().__init__()
+        self.challenge_id = challenge_id
+        self.spec = spec
+        self.response = response
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="sol"):
+            yield Static(f"[b]{self.challenge_id}[/]  ·  challenge (top) · proposed solution (bottom)  ·  Esc close")
+            with VerticalScroll(id="sol-spec-wrap"):
+                # markup off: specs/solutions contain [ ] that Rich would try to parse
+                yield Static(self.spec or "(challenge spec not in the local corpus)", id="sol-spec", markup=False)
+            with VerticalScroll(id="sol-out-wrap"):
+                yield Static(self.response or "(no solution recorded for this run)", id="sol-out", markup=False)
 
 
 class ConfirmScreen(ModalScreen):

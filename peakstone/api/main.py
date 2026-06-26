@@ -235,7 +235,8 @@ def run_results(bundle_hash: str, db: Session = Depends(get_session)):
     if not sub:
         raise HTTPException(404, "unknown run")
     results = [{"challenge": r.challenge_id, "category": r.category, "verification": r.verification,
-                "final": r.final, "passed": r.passed, "total": r.total, "difficulty": r.difficulty}
+                "final": r.final, "passed": r.passed, "total": r.total, "difficulty": r.difficulty,
+                "response": r.response}
                for r in sub.results]
     results.sort(key=lambda r: (r["category"] or "", r["challenge"]))
     return {"bundle_hash": bundle_hash, "n": len(results), "results": results}
