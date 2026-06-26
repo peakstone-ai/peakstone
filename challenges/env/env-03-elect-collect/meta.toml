@@ -1,0 +1,9 @@
+id = "env-03-elect-collect"
+title = "Leader election + aggregation (highest-priority peer totals all values)"
+type = "goal-state-env"
+category = "multi-machine"
+difficulty = 5
+max_turns = 14
+timeout = 40
+published_at        = "2026-06-30"
+published_at_source = "author"

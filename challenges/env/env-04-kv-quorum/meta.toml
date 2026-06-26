@@ -1,0 +1,9 @@
+id = "env-04-kv-quorum"
+title = "Quorum-replicated key-value store (N=3, W=2, R=2)"
+type = "goal-state-env"
+category = "multi-machine"
+difficulty = 5
+max_turns = 14
+timeout = 60
+published_at        = "2026-06-30"
+published_at_source = "author"

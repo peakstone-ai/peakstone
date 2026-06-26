@@ -17,6 +17,9 @@ CH_DIR = Path(__file__).resolve().parents[4] / "challenges" / "env" / "01-file-s
 
 
 GOSSIP_DIR = Path(__file__).resolve().parents[4] / "challenges" / "env" / "02-gossip-max"
+_ENV = Path(__file__).resolve().parents[4] / "challenges" / "env"
+ELECT_DIR = _ENV / "env-03-elect-collect"
+KVQ_DIR = _ENV / "env-04-kv-quorum"
 
 
 @pytest.fixture(scope="module")
@@ -27,6 +30,16 @@ def challenge():
 @pytest.fixture(scope="module")
 def gossip():
     return load_env_challenge(GOSSIP_DIR)
+
+
+@pytest.fixture(scope="module")
+def elect():
+    return load_env_challenge(ELECT_DIR)
+
+
+@pytest.fixture(scope="module")
+def kvq():
+    return load_env_challenge(KVQ_DIR)
 
 
 def test_gossip_convergence_reference_local(gossip):
@@ -40,6 +53,44 @@ def test_gossip_convergence_reference_local(gossip):
 def test_gossip_convergence_reference_docker(gossip):
     res = run_reference(gossip, DockerComposeProvider())
     assert res["passed"] is True
+
+
+def test_elect_collect_reference_local(elect):
+    # 4 peers elect the highest-priority leader (peer1), which sums all values (=100); others write OK
+    res = run_reference(elect, LocalProvider())
+    assert res["passed"] is True
+    assert len(res["checks"]) == 4 and all(c["ok"] for c in res["checks"])
+
+
+def test_elect_collect_verifier_has_teeth(elect):
+    # a peer that always writes "OK" never produces the leader's SUM -> goal-state must FAIL
+    files = copy.deepcopy(elect.reference_files())
+    for node in files:
+        files[node]["peer.py"] = "open('result.txt','w').write('OK')\n"
+    with LocalProvider().provision(elect.env) as env:
+        res = run_once(env, elect.env, files, elect.load_verifier(), fixtures=elect.fixtures())
+    assert res["passed"] is False
+
+
+def test_kv_quorum_reference_local(kvq):
+    # Go quorum store: client reads from the replica that holds neither key -> needs a quorum read
+    res = run_reference(kvq, LocalProvider())
+    assert res["passed"] is True
+    assert res["checks"][0]["ok"] is True
+
+
+def test_kv_quorum_requires_quorum_read(kvq):
+    # cripple GET to a LOCAL-only read: peer2 (no copy) returns empty -> the verifier must FAIL,
+    # proving the challenge genuinely requires a quorum read, not just local lookup.
+    files = copy.deepcopy(kvq.reference_files())
+    local_only = files["peer2"]["peer.go"].replace(
+        'for _, n := range names {\n\t\t\tbody := fetch(peers[n] + "/local?key=" + key)',
+        'for _, n := range names[:0] {\n\t\t\tbody := fetch(peers[n] + "/local?key=" + key)')
+    assert local_only != files["peer2"]["peer.go"]   # the patch applied
+    files["peer2"]["peer.go"] = local_only
+    with LocalProvider().provision(kvq.env) as env:
+        res = run_once(env, kvq.env, files, kvq.load_verifier(), fixtures=kvq.fixtures())
+    assert res["passed"] is False
 
 
 def test_local_reference_reaches_goal_state(challenge):
