@@ -68,11 +68,11 @@ def test_app_renders_filtered_leaderboard(monkeypatch):
             table = app.query_one(DataTable)
             assert table.row_count == 2
             cols = [str(c.label) for c in table.columns.values()]
-            assert cols == ["#", "Model", "Code", "Agentic", "Planner", "TPS", "sol/s",
+            assert cols == ["#", "Model", "Quant", "Code", "Agentic", "Planner", "TPS", "sol/s",
                             "VRAM/RAM", "Trust", "Coverage"]
-            assert str(table.get_row_at(0)[6]) == "0.50"        # sol/s after TPS
-            assert str(table.get_row_at(0)[7]) == "24/26 GB"    # VRAM/RAM used (spilled to RAM)
-            assert str(table.get_row_at(0)[9]) == "50/1965"     # coverage: run / total peakstones
+            assert str(table.get_row_at(0)[7]) == "0.50"        # sol/s after TPS
+            assert str(table.get_row_at(0)[8]) == "24/26 GB"    # VRAM/RAM used (spilled to RAM)
+            assert str(table.get_row_at(0)[10]) == "50/1965"    # coverage: run / total peakstones
             # fit filter on by default -> the request was scoped to local VRAM (or None if no GPU)
             assert "max_vram_gb" in captured
             # cycling sort re-queries with the next axis
@@ -112,7 +112,8 @@ def test_board_per_quant_toggle(monkeypatch):
             await pilot.pause()
             assert captured["collapse"] == "quant"
             t = app.query_one(DataTable)
-            assert "UD-Q6_K" in str(t.get_row_at(0)[1])        # quant shown in the Model column
+            assert str(t.get_row_at(0)[1]) == "qz"             # Model column = family
+            assert str(t.get_row_at(0)[2]) == "UD-Q6_K"        # dedicated Quant column
 
     asyncio.run(scenario())
 

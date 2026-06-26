@@ -306,7 +306,7 @@ class Dashboard(App):
     def on_mount(self) -> None:
         self.title = "Peakstone"
         table = self.query_one(DataTable)
-        table.add_columns("#", "Model", "Code", "Agentic", "Planner", "TPS", "sol/s",
+        table.add_columns("#", "Model", "Quant", "Code", "Agentic", "Planner", "TPS", "sol/s",
                           "VRAM/RAM", "Trust", "Coverage")
         self.load_board()
 
@@ -390,15 +390,11 @@ class Dashboard(App):
                           f"⏎ reproduce  v quants  c peakstones  m models  u queue{sel}")
         rows = data.get("leaderboard", [])
         self._board_rows = rows
-        per_quant = self.collapse == "quant"
         for r in rows:
             run = r.get("run", {})
             n_total = r.get("n_total")
-            name = r.get("family", "")
-            if per_quant and run.get("artifact"):
-                name = f"{name} · {run['artifact']}"      # distinguish quant rows of the same model
             table.add_row(
-                str(r.get("rank", "")), name,
+                str(r.get("rank", "")), r.get("family", ""), run.get("artifact") or "—",
                 _fmt(r.get("code_score")), _fmt(r.get("agent_score")), _fmt(r.get("planner_score")),
                 _fmt(r.get("tok_per_s"), "{:.0f}"), _fmt(r.get("sol_per_s"), "{:.2f}"),
                 _mem(run.get("vram_used_gb") or run.get("vram_gb"),     # used footprint, total fallback
@@ -406,7 +402,7 @@ class Dashboard(App):
                 (run.get("trust_tier") or "").replace("-", " "),
                 f"{n_total}/{self.corpus_total()}" if n_total else "—")
         if not rows:
-            table.add_row("", "(no runs fit this filter)", "", "", "", "", "", "", "", "")
+            table.add_row("", "(no runs fit this filter)", "", "", "", "", "", "", "", "", "")
 
     def _render_error(self, msg: str) -> None:
         table = self.query_one(DataTable)
