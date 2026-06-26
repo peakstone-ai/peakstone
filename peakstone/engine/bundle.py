@@ -141,7 +141,7 @@ def challenge_publication(challenges_dir: Path) -> dict[str, dict]:
 # --------------------------------------------------------------------------- #
 # environment + model identity
 # --------------------------------------------------------------------------- #
-def capture_env(gpu_meta: dict | None) -> dict:
+def capture_env(gpu_meta: dict | None, mem_used: dict | None = None) -> dict:
     env: dict = {}
     gpu_meta = gpu_meta or {}
     env["gpu"] = gpu_meta.get("name", "unknown")
@@ -178,6 +178,14 @@ def capture_env(gpu_meta: dict | None) -> dict:
             env["vram_gb"] = round(int(out.stdout.split("\n")[0]) / 1024, 1)
     except Exception:  # noqa: BLE001
         pass
+    # measured footprint of the loaded model: VRAM in use + host RAM (RSS). The leaderboard shows these
+    # as "VRAM/RAM used" so a model too big for VRAM (spilled to RAM) reads sensibly. Totals above stay
+    # for the "fits ≤X GB VRAM" facet.
+    mem_used = mem_used or {}
+    if mem_used.get("vram_mib") is not None:
+        env["vram_used_gb"] = round(mem_used["vram_mib"] / 1024, 1)
+    if mem_used.get("ram_mib") is not None:
+        env["ram_used_gb"] = round(mem_used["ram_mib"] / 1024, 1)
     env["os"] = platform.platform()
     return env
 
@@ -340,7 +348,7 @@ def produce_bundle(meta: dict, results: list[dict], *, harness_version: str = "0
         "submitted_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "harness": {"name": "peakstone-engine", "version": harness_version},
         "model": model_identity(model_name, run_cfg),
-        "environment": capture_env(meta.get("gpu")),
+        "environment": capture_env(meta.get("gpu"), meta.get("mem_used")),
         "suite": {"id": meta.get("suite_id", "adhoc"),
                   "version": meta.get("suite_version", meta.get("timestamp", "unversioned")),
                   "content_hash": suite_hash},

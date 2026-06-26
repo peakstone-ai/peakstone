@@ -35,6 +35,16 @@ def _fmt(v, fmt: str = "{:.2f}") -> str:
     return fmt.format(v) if isinstance(v, (int, float)) else "—"
 
 
+def _mem(vram, ram) -> str:
+    """Memory a run used: 'VRAM/RAM' so a model too big for VRAM that spills to system RAM (and still
+    runs at usable tok/s) reads sensibly. Falls back to whichever is known."""
+    v = f"{vram:g}" if isinstance(vram, (int, float)) else None
+    r = f"{ram:g}" if isinstance(ram, (int, float)) else None
+    if v and r:
+        return f"{v}/{r} GB"
+    return f"{v or r} GB" if (v or r) else "?"
+
+
 # Live-generation stream protocol — must match peakstone.engine.runner (GEN_MARK / GEN_NL).
 GEN_MARK = "\x01"
 GEN_NL = "\x02"
@@ -111,7 +121,7 @@ class Dashboard(App):
         self.title = "Peakstone"
         table = self.query_one(DataTable)
         table.add_columns("#", "Model", "Code", "Agentic", "Planner", "TPS", "sol/s",
-                          "VRAM", "Trust", "Coverage")
+                          "VRAM/RAM", "Trust", "Coverage")
         self.load_board()
 
     def action_refresh(self) -> None:
@@ -185,7 +195,9 @@ class Dashboard(App):
                 str(r.get("rank", "")), r.get("family", ""),
                 _fmt(r.get("code_score")), _fmt(r.get("agent_score")), _fmt(r.get("planner_score")),
                 _fmt(r.get("tok_per_s"), "{:.0f}"), _fmt(r.get("sol_per_s"), "{:.2f}"),
-                f"{run.get('vram_gb', '?')} GB", (run.get("trust_tier") or "").replace("-", " "),
+                _mem(run.get("vram_used_gb") or run.get("vram_gb"),     # used footprint, total fallback
+                     run.get("ram_used_gb") or run.get("ram_gb")),
+                (run.get("trust_tier") or "").replace("-", " "),
                 str(n_total) if n_total else "—")
         if not rows:
             table.add_row("", "(no runs fit this filter)", "", "", "", "", "", "", "", "")

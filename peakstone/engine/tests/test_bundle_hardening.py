@@ -6,6 +6,12 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from peakstone.engine import bundle, keys, sandbox
 
 
+def test_capture_env_records_model_footprint():
+    env = bundle.capture_env({"name": "RTX 4090"}, {"vram_mib": 24576, "ram_mib": 26624})
+    assert env["vram_used_gb"] == 24.0 and env["ram_used_gb"] == 26.0   # measured model footprint
+    assert "vram_used_gb" not in bundle.capture_env({"name": "x"})      # old bundles: no used keys
+
+
 def test_effective_sandbox_records_truth():
     # config may ask for 'docker' but the test runner only implements subprocess -> record the truth
     assert sandbox.effective_sandbox("docker") == "subprocess"

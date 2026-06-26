@@ -86,6 +86,32 @@ def _gpu_mem_used():
         return None
 
 
+def _server_ram_used():
+    """Resident host memory (MiB) of the running llama-server(s) — the model's RAM footprint, which is
+    large when layers are CPU-offloaded (a model too big for VRAM still runs, spilling here). None if
+    it can't be determined. Sampled while the one model is loaded."""
+    import subprocess
+    try:
+        pids = subprocess.run(["pgrep", "-f", "llama-server"], capture_output=True, text=True,
+                              timeout=5).stdout.split()
+    except Exception:  # noqa: BLE001
+        return None
+    total = 0
+    for pid in pids:
+        try:
+            if sys.platform == "darwin":
+                r = subprocess.run(["ps", "-o", "rss=", "-p", pid], capture_output=True, text=True, timeout=5)
+                total += int(r.stdout.strip() or 0)          # KiB
+            else:
+                for line in Path(f"/proc/{pid}/status").read_text().splitlines():
+                    if line.startswith("VmRSS:"):
+                        total += int(line.split()[1])        # KiB
+                        break
+        except Exception:  # noqa: BLE001
+            continue
+    return round(total / 1024) if total else None            # KiB -> MiB
+
+
 def _gpu_info():
     """GPU name + NVIDIA driver version for the run (or None if nvidia-smi is unavailable).
 
@@ -335,6 +361,7 @@ def main(argv=None):
 
     models = _csv(args.models)
     results = []
+    mem_used: dict = {}   # the loaded model's measured footprint (VRAM + host RAM), for the bundle env
     print(f"Running {len(models)} model(s) over {len(chs)} challenge(s). "
           f"judge={judge_model if use_judge else False}")
 
@@ -353,6 +380,7 @@ def main(argv=None):
             if args.stream_output:
                 client.on_delta = _emit_gen   # live token stream for the dashboard
             model_vram = _gpu_mem_used()  # footprint of the one loaded model
+            mem_used = {"vram_mib": model_vram, "ram_mib": _server_ram_used()}
 
         caps = model_capabilities(model)   # gated axes (tools/agentic) this model can attempt
         for ch in chs:
@@ -677,7 +705,7 @@ def main(argv=None):
         "judge": (judge_model if use_judge else None),
         "sandbox": effective_sandbox(run_cfg.get("sandbox")), "reference": args.reference,
         "gpu": _gpu_info(), "retries": args.retries,
-        "agents_md": bool(agents_md),
+        "agents_md": bool(agents_md), "mem_used": mem_used,
         **level_meta,
     }
     write_report(results, outdir, meta)
