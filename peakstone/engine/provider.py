@@ -18,10 +18,19 @@ class ChatResult:
     reasoning: str = ""          # reasoning_content (chain-of-thought) when the server exposes it
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    reasoning_tokens: int | None = None   # only when the server reports it separately (else unknown)
     latency_s: float = 0.0
     tok_per_s: float = 0.0
     error: str | None = None
     aborted: bool = False        # generation cut short (e.g. a degenerate repetition loop)
+
+
+def _reasoning_tokens(usage: dict) -> int | None:
+    """Reasoning-token count IF the server reports it separately (OpenAI puts it under
+    completion_tokens_details.reasoning_tokens). None when unknown — we never fabricate it."""
+    details = usage.get("completion_tokens_details") or {}
+    rt = details.get("reasoning_tokens")
+    return int(rt) if isinstance(rt, (int, float)) else None
 
 
 def is_looping(tail: str, *, max_period: int = 1200) -> bool:
@@ -109,6 +118,7 @@ class LLMClient:
             reasoning=reasoning,
             prompt_tokens=int(usage.get("prompt_tokens", 0)),
             completion_tokens=ct,
+            reasoning_tokens=_reasoning_tokens(usage),
             latency_s=round(dt, 2),
             tok_per_s=round(tps, 1),
         )
@@ -177,6 +187,7 @@ class LLMClient:
         tps = (ct / dt) if (dt > 0 and ct) else 0.0
         return ChatResult(text=text, reasoning=reasoning,
                           prompt_tokens=int(usage.get("prompt_tokens", 0)), completion_tokens=ct,
+                          reasoning_tokens=_reasoning_tokens(usage),
                           latency_s=round(dt, 2), tok_per_s=round(tps, 1), aborted=aborted)
 
     def chat_tools(

@@ -39,12 +39,16 @@ def _newkey():
     return p, keys.public_key_b64(p)
 
 
-def _result(cid, typ, f, metrics=None):
+def _result(cid, typ, f, metrics=None, ctoks=None, ptoks=None):
     r = {"model": "m", "challenge": cid, "type": typ, "difficulty": 4, "scoring": "tests",
          "final_score": f, "passed": int(f * 10), "total": 10, "tok_per_s": 50, "latency_s": 2.0,
          "response": "x", "stdout": "ok"}
     if metrics:
         r["metrics"] = metrics
+    if ctoks is not None:
+        r["completion_tokens"] = ctoks
+    if ptoks is not None:
+        r["prompt_tokens"] = ptoks
     return r
 
 
@@ -86,6 +90,40 @@ def test_submission_trust_chain(client):
     again = _bundle("trustDup", [0.5], 24, ap, a, "s3")
     assert client.post("/submissions", json=again).status_code == 201
     assert client.post("/submissions", json=again).status_code == 409
+
+
+def test_ctx_efficiency():
+    from types import SimpleNamespace as NS
+    from peakstone.api.main import _ctx_efficiency
+    rs = [
+        NS(final=1.0, metrics={"tokens_to_solve": 1000, "gen_tokens": 300, "ctx_limited": 0}),
+        NS(final=0.5, metrics={"tokens_to_solve": 3000, "gen_tokens": 2500, "ctx_limited": 0}),
+        NS(final=0.0, metrics={"tokens_to_solve": 8000, "gen_tokens": 7000, "ctx_limited": 1}),  # excluded
+        NS(final=0.9, metrics={}),                                                               # unmeasured
+    ]
+    e = _ctx_efficiency(rs)
+    # honest like-for-like: mean over the 2 non-limited measured results (final .75, tokens 2000)
+    assert e["score_per_1k_tokens"] == 0.375          # 0.75 / (2000/1000)
+    assert e["tokens_to_solve"] == 2000 and e["gen_tokens"] == 1400
+    assert e["n_ctx_limited"] == 1                     # the truncated result is flagged, not averaged in
+    assert e["reasoning_tokens"] is None              # server never reported it
+
+
+def test_ctx_efficiency_on_leaderboard(client):
+    ap, a = _newkey()
+    b = bundle.produce_bundle(
+        {"models": ["effm"], "judge": None, "timestamp": "effts",
+         "gpu": {"name": "RTX 4090", "driver_version": "595"}},
+        [_result("arch-0", "architecture", 1.0, ctoks=300, ptoks=700),    # 1000 tok
+         _result("arch-1", "architecture", 0.5, ctoks=2500, ptoks=500)],  # 3000 tok
+        sign=False)
+    bundle.sign_inplace(b, ap, a)
+    assert client.post("/submissions", json=b).status_code == 201
+    row = next(r for r in client.get("/leaderboard").json()["leaderboard"] if r["family"] == "effm")
+    assert row["tokens_to_solve"] == 2000                  # mean of 1000 + 3000
+    assert row["score_per_1k_tokens"] == 0.375             # mean final .75 / (2000/1000)
+    assert row["n_ctx_limited"] == 0
+    assert client.get("/leaderboard", params={"sort": "score_per_1k_tokens"}).status_code == 200
 
 
 def test_coverage_and_sol_per_s(client):

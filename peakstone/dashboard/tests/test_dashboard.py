@@ -598,6 +598,17 @@ def test_fmt_dur():
     assert _fmt_dur(None) == "—" and _fmt_dur(0) == "—"
 
 
+def test_quant_label_shows_efficiency():
+    from peakstone.dashboard.app import Dashboard
+    app = Dashboard("http://x")
+    label = app._quant_label({"code_score": 0.7, "score_per_1k_tokens": 0.42, "n_ctx_limited": 3,
+                              "n_total": 2, "run": {"artifact": "Q6_K", "context": 32768}})
+    assert "0.42/1k tok" in label and "⚠3" in label          # efficiency + ctx-limited warning
+    clean = app._quant_label({"code_score": 0.7, "score_per_1k_tokens": 0.42, "n_ctx_limited": 0,
+                              "run": {"artifact": "Q6_K"}})
+    assert "0.42/1k tok" in clean and "⚠" not in clean       # no warning when nothing was truncated
+
+
 def test_pretty_progress():
     from peakstone.dashboard.app import _pretty_progress
     assert "[green]✓[/]" in _pretty_progress("m | ch  ok  tests 10/10")

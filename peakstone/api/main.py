@@ -62,7 +62,14 @@ SORT_ORDER = {"code_score": "desc", "held_out_score": "desc", "math_score": "des
               "agent_score": "desc", "planner_score": "desc", "safety_score": "desc",
               "solved": "desc", "tok_per_s": "desc", "sol_per_s": "desc", "n_total": "desc",
               "total_time_s": "asc",                  # quicker runs rank first
+              "score_per_1k_tokens": "desc",          # context-efficiency: capability per token
+              "tokens_to_solve": "asc", "gen_tokens": "asc",
               **METRIC_AXES}
+
+
+# token-efficiency keys live in result.metrics but are summarized specially (honest, ctx-limited-aware)
+# in _ctx_efficiency — keep them out of the generic leanness aggregate so each is reported once.
+_TOKEN_KEYS = {"gen_tokens", "prompt_tokens", "tokens_to_solve", "ctx_limited", "reasoning_tokens"}
 
 
 def _agg_metrics(rs) -> dict:
@@ -70,9 +77,37 @@ def _agg_metrics(rs) -> dict:
     buckets: dict[str, list] = defaultdict(list)
     for r in rs:
         for k, v in (r.metrics or {}).items():
-            if isinstance(v, (int, float)):
+            if k not in _TOKEN_KEYS and isinstance(v, (int, float)):
                 buckets[k].append(v)
     return {k: round(sum(v) / len(v), 2) for k, v in buckets.items() if v}
+
+
+def _ctx_efficiency(code_rs) -> dict:
+    """Context-efficiency over code results. Excludes ctx-limited results (whose token counts are
+    censored and scores depressed by window truncation, not capability) so the numbers are honest
+    like-for-like. Tokens are model-native — compare within a family/tokenizer (quant/ctx), not across
+    families. score_per_1k_tokens = mean code score per 1k tokens spent (capability per token)."""
+    measured = [r for r in code_rs if (r.metrics or {}).get("tokens_to_solve")]
+    n_ctx_limited = sum(1 for r in measured if (r.metrics or {}).get("ctx_limited"))
+    eff = [r for r in measured if not (r.metrics or {}).get("ctx_limited")]
+    if not eff:
+        return {"score_per_1k_tokens": None, "tokens_to_solve": None, "gen_tokens": None,
+                "reasoning_tokens": None, "n_ctx_limited": n_ctx_limited}
+
+    def _mean(vals):
+        vals = [v for v in vals if isinstance(v, (int, float))]
+        return (sum(vals) / len(vals)) if vals else None
+
+    mean_tts = _mean([r.metrics.get("tokens_to_solve") for r in eff])
+    mean_final = sum(r.final for r in eff) / len(eff)
+    rea = _mean([r.metrics.get("reasoning_tokens") for r in eff])    # None when the server never reported it
+    return {
+        "score_per_1k_tokens": round(mean_final / (mean_tts / 1000), 3) if mean_tts else None,
+        "tokens_to_solve": round(mean_tts) if mean_tts else None,
+        "gen_tokens": round(_mean([r.metrics.get("gen_tokens") for r in eff]) or 0) or None,
+        "reasoning_tokens": round(rea) if rea is not None else None,
+        "n_ctx_limited": n_ctx_limited,
+    }
 
 
 def _held_out(code_rs, fam: models.ModelFamily | None) -> dict:
@@ -119,6 +154,7 @@ def _summarize(sub: models.Submission, fam: models.ModelFamily | None = None) ->
     return {
         "code_score": _avg(code),
         **_held_out(code_rs, fam),
+        **_ctx_efficiency(code_rs),               # context-efficiency: score_per_1k_tokens, n_ctx_limited, …
         "math_score": _avg([r.final for r in math_rs]),
         "math_held_out": _held_out(math_rs, fam)["held_out"],
         "safety_score": _avg(safety),

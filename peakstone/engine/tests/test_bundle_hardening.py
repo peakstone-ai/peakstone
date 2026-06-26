@@ -24,6 +24,21 @@ def test_quant_from_filename():
     assert q("no-quant-here.gguf") == "unknown"
 
 
+def test_token_metrics():
+    from peakstone.engine.bundle import _token_metrics
+    # measured generation -> context-efficiency axes; within-window -> ctx_limited 0
+    m = _token_metrics({"prompt_tokens": 700, "completion_tokens": 300}, 2048)
+    assert m == {"gen_tokens": 300, "prompt_tokens": 700, "tokens_to_solve": 1000, "ctx_limited": 0}
+    # prompt+gen ≥ 95% of the served window -> flagged (its tokens are censored by truncation)
+    assert _token_metrics({"prompt_tokens": 1000, "completion_tokens": 1000}, 2048)["ctx_limited"] == 1
+    # reasoning tokens only when the server reported them
+    assert _token_metrics({"completion_tokens": 10, "reasoning_tokens": 4}, None)["reasoning_tokens"] == 4
+    assert "reasoning_tokens" not in _token_metrics({"completion_tokens": 10}, None)
+    # unmeasured (0/None completion) -> nothing (don't poison ascending efficiency aggregates)
+    assert _token_metrics({"completion_tokens": 0, "prompt_tokens": 5}, 2048) == {}
+    assert _token_metrics({}, 2048) == {}
+
+
 def test_bundle_carries_error_type():
     b = bundle.produce_bundle(
         {"models": ["m"], "judge": None, "timestamp": "t", "gpu": {"name": "x"}},

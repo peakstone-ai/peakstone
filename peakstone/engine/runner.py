@@ -661,7 +661,7 @@ def main(argv=None):
                     attempts = attempt
                     looped = looped or res.aborted   # generation hit a degenerate repetition loop
                     response, tps, lat = res.text, res.tok_per_s, res.latency_s
-                    ptoks, ctoks = res.prompt_tokens, res.completion_tokens
+                    ptoks, ctoks, rtoks = res.prompt_tokens, res.completion_tokens, res.reasoning_tokens
                     files = extract_files(res.text, ch.solution_file, ch.language)
                     run = run_tests(ch, files, run_cfg)
                     if run.ok:
@@ -698,7 +698,7 @@ def main(argv=None):
             extra = extra or None
             results.append(_row(model, ch, run, sc, judge_res,
                                 response=response, tps=tps, lat=lat,
-                                ptoks=ptoks, ctoks=ctoks, vram=model_vram, extra=extra))
+                                ptoks=ptoks, ctoks=ctoks, rtoks=rtoks, vram=model_vram, extra=extra))
             flag = "ok " if run.ok else ("!! " if looped else "   ")
             retry_note = ""
             if args.retries and attempts > 1:
@@ -1099,7 +1099,8 @@ def run_exec_plans(args, chs, host, ports, run_cfg, use_judge, judge_model, judg
             extra["metrics"] = run.metrics
         results.append(_row(planner, ch, run, sc, judge_res, response=res.text,
                             tps=res.tok_per_s, lat=res.latency_s, ptoks=res.prompt_tokens,
-                            ctoks=res.completion_tokens, vram=model_vram, extra=extra))
+                            ctoks=res.completion_tokens, rtoks=res.reasoning_tokens,
+                            vram=model_vram, extra=extra))
         print(f"{label}  {'ok ' if run.ok else '   '} final={sc['final_score']:.2f} "
               f"tests={sc['passed']}/{sc['total']}")
     meta = {
@@ -1117,13 +1118,14 @@ def run_exec_plans(args, chs, host, ports, run_cfg, use_judge, judge_model, judg
 
 
 def _row(model, ch, run, sc, judge_res, response="", tps=None, lat=None, ptoks=0, ctoks=0,
-         vram=None, extra=None):
+         rtoks=None, vram=None, extra=None):
     base = {
         "model": model, "challenge": ch.id, "language": ch.language,
         "difficulty": ch.difficulty, "category": ch.category, "type": ch.ctype,
         "scoring": ch.scoring,
         "response": response, "tok_per_s": tps, "latency_s": lat,
-        "prompt_tokens": ptoks, "completion_tokens": ctoks, "vram_mib": vram,
+        "prompt_tokens": ptoks, "completion_tokens": ctoks, "reasoning_tokens": rtoks,
+        "vram_mib": vram,
     }
     if sc is None:  # hard error before scoring
         base.update(final_score=0.0, test_score=0.0, judge_score=0.0,

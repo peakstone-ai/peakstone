@@ -299,7 +299,27 @@ def _verification(row: dict) -> str:
     return "deterministic-tests"
 
 
-def _result(row: dict, chash: dict, judge_model: str | None, cpub: dict | None = None) -> dict:
+def _token_metrics(row: dict, served_ctx: int | None) -> dict:
+    """Context-efficiency metrics for a result, derived from measured token usage. Only emitted when
+    generation was actually measured (completion_tokens > 0) — a 0/None placeholder means "unmeasured",
+    not "free", and would poison the ascending efficiency aggregates. ctx_limited flags a result whose
+    prompt+generation hit the served window (its tokens are censored and its score depressed by
+    truncation, not capability — excluded from honest efficiency aggregates downstream)."""
+    ct = row.get("completion_tokens")
+    if not isinstance(ct, int) or ct <= 0:
+        return {}
+    pt = row.get("prompt_tokens") if isinstance(row.get("prompt_tokens"), int) else 0
+    m = {"gen_tokens": ct, "prompt_tokens": pt, "tokens_to_solve": pt + ct}
+    rt = row.get("reasoning_tokens")
+    if isinstance(rt, int):                       # only when the server reported it (else unknown)
+        m["reasoning_tokens"] = rt
+    if isinstance(served_ctx, int) and served_ctx > 0:
+        m["ctx_limited"] = 1 if (pt + ct) >= 0.95 * served_ctx else 0
+    return m
+
+
+def _result(row: dict, chash: dict, judge_model: str | None, cpub: dict | None = None,
+            served_ctx: int | None = None) -> dict:
     score: dict = {"final": round(float(row.get("final_score", 0.0)), 4)}
     if row.get("total"):
         score["passed"] = row.get("passed", 0)
@@ -321,10 +341,12 @@ def _result(row: dict, chash: dict, judge_model: str | None, cpub: dict | None =
     for k in ("attempts", "passed_on_attempt", "tok_per_s", "latency_s"):
         if row.get(k) is not None:
             r[k] = row[k]
+    nums = {}
     if isinstance(row.get("metrics"), dict):
         nums = {k: v for k, v in row["metrics"].items() if isinstance(v, (int, float))}
-        if nums:
-            r["metrics"] = nums
+    nums.update(_token_metrics(row, served_ctx))   # context-efficiency axes (gen/prompt/total tokens)
+    if nums:
+        r["metrics"] = nums
     if isinstance(row.get("env"), dict) and row["env"]:
         r["env"] = row["env"]   # goal-state-env provenance: provider, image digests, checks, turns
     if row.get("mode") == "planner":
@@ -361,8 +383,10 @@ def produce_bundle(meta: dict, results: list[dict], *, harness_version: str = "0
     model_name = (meta.get("planner_model") or (meta.get("models") or ["unknown"])[0])
     chash = challenge_hashes(paths.challenges_dir())
     cpub = challenge_publication(paths.challenges_dir())
+    model = model_identity(model_name, run_cfg)
+    served_ctx = model.get("context")              # the window each result is judged for ctx-truncation against
 
-    bundle_results = [_result(r, chash, meta.get("judge"), cpub) for r in results]
+    bundle_results = [_result(r, chash, meta.get("judge"), cpub, served_ctx) for r in results]
     # hash the sorted list as canonical JSON (self-delimiting) — bare concatenation is ambiguous
     # (["ab","c"] and ["a","bc"] would collide) for a value that pins the exact challenge set.
     suite_hash = _sha256_bytes(canonical_bytes(sorted(r["challenge_hash"] for r in bundle_results)))
@@ -371,7 +395,7 @@ def produce_bundle(meta: dict, results: list[dict], *, harness_version: str = "0
         "bundle_version": BUNDLE_VERSION,
         "submitted_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "harness": {"name": "peakstone-engine", "version": harness_version},
-        "model": model_identity(model_name, run_cfg),
+        "model": model,
         "environment": capture_env(meta.get("gpu"), meta.get("mem_used")),
         "suite": {"id": meta.get("suite_id", "adhoc"),
                   "version": meta.get("suite_version", meta.get("timestamp", "unversioned")),
