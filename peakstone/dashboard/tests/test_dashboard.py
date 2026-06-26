@@ -408,15 +408,18 @@ def test_challenges_screen_manual_edit_clears_level(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_model_tree_enter_expands_then_downloads(monkeypatch):
-    from peakstone.dashboard import models
-    from peakstone.dashboard.app import Dashboard, ModelsScreen
+def test_model_tree_enter_expands_then_confirms_download_run(monkeypatch):
+    from peakstone.dashboard import models, history
+    from peakstone.dashboard import reproduce as R
+    from peakstone.dashboard.app import Dashboard, ModelsScreen, ConfirmScreen
     from textual.widgets import Tree
     entry = models.ModelEntry("m-q4", "org/r", "models/m/x-Q4_K_M.gguf", 8081, 32768, "", "fam")  # not present
     monkeypatch.setattr(models, "load_registry", lambda: {"m-q4": entry})
     monkeypatch.setattr(models, "available_quants", lambda repo, **k: [])
-    dl = []
-    monkeypatch.setattr(models, "download", lambda e, *a, **k: dl.append(e.name) or True)
+    monkeypatch.setattr("peakstone.dashboard.preflight.check", lambda e: None)
+    monkeypatch.setattr(history, "append", lambda e: None)
+    ran = []
+    monkeypatch.setattr(R, "reproduce", lambda model, **k: ran.append(model) or R.ReproduceResult(model, True))
 
     async def scenario():
         app = Dashboard("http://x")
@@ -430,10 +433,13 @@ def test_model_tree_enter_expands_then_downloads(monkeypatch):
             await pilot.pause()
             assert fam.is_expanded
             await pilot.press("down")                  # to the quant leaf (not downloaded)
-            await pilot.press("enter")                 # ⏎ on a not-present quant -> download it
+            await pilot.press("enter")                 # ⏎ on a not-present quant -> confirm download+run
+            await pilot.pause()
+            assert isinstance(app.screen, ConfirmScreen)
+            await pilot.press("y")                     # confirm -> queue a download+run job
             await pilot.pause()
             await app.workers.wait_for_complete()
-            assert dl == ["m-q4"]
+            assert ran == ["m-q4"]                     # the run executed (reproduce downloads first)
 
     asyncio.run(scenario())
 

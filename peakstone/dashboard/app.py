@@ -13,7 +13,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Footer, Header, Input, ProgressBar, RichLog, Static, Tree
+from textual.widgets import Button, DataTable, Footer, Header, Input, RichLog, Static, Tree
 
 from peakstone.engine import capabilities as eng_caps
 from peakstone.engine import estimate as eng_estimate
@@ -71,10 +71,8 @@ class ModelTree(NavTree):
         d = (node.data if node else None) or {}
         if d.get("kind") == "family":
             node.collapse() if node.is_expanded else node.expand()
-        elif d.get("kind") == "registry":
-            self.screen.action_run() if d["entry"].present else self.screen.action_download()
-        elif d.get("kind") == "hf":
-            self.screen.action_download()
+        else:
+            self.screen.action_enter()       # quant: run if local, else confirm download+run
 
 
 def _mem(vram, ram) -> str:
@@ -493,6 +491,29 @@ class ReproduceScreen(ModalScreen):
         self.app.call_from_thread(self.app.notify, f"{msg}")
 
 
+class ConfirmScreen(ModalScreen):
+    """Generic yes/no confirmation; runs on_yes when confirmed."""
+    CSS = """
+    ConfirmScreen { align: center middle; }
+    #confirm { width: 64; height: auto; border: thick $accent; background: $surface; padding: 1; }
+    """
+    BINDINGS = [("escape", "dismiss", "No"), ("n", "dismiss", "No"),
+                ("y", "yes", "Yes"), ("enter", "yes", "Yes")]
+
+    def __init__(self, message: str, on_yes):
+        super().__init__()
+        self.message = message
+        self._on_yes = on_yes
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="confirm"):
+            yield Static(f"{self.message}\n\n[b]y[/]/⏎ yes   ·   [b]Esc[/] no")
+
+    def action_yes(self) -> None:
+        self.dismiss()
+        self._on_yes()
+
+
 class ConfirmQuitScreen(ModalScreen):
     """Confirm quitting while runs are active/queued (quitting kills the run subprocesses)."""
     CSS = """
@@ -545,10 +566,10 @@ class QueueScreen(ModalScreen):
 
     @staticmethod
     def _scope(spec: dict) -> str:
-        if spec.get("level"):
-            return f"level {spec['level']}"
-        ids = spec.get("challenge_ids") or REPRODUCE_IDS
-        return f"{len(ids)} peakstones"
+        scope = f"level {spec['level']}" if spec.get("level") else \
+                f"{len(spec.get('challenge_ids') or REPRODUCE_IDS)} peakstones"
+        e = models.load_registry().get(spec["name"])
+        return (scope if (e and e.present) else f"⬇ download + {scope}")   # job downloads first
 
     def _signature(self):
         app = self.app
@@ -725,7 +746,6 @@ class ModelsScreen(ModalScreen):
     ModelsScreen { align: center middle; }
     #models { width: 92; height: 26; border: thick $accent; background: $surface; padding: 1; }
     #models-tree { height: 1fr; }
-    #dl-bar { margin-top: 1; }
     """
     BINDINGS = [("escape", "dismiss", "Close"), ("a", "add", "Add"),
                 ("l", "levels", "Levels"), ("r", "run", "Run"),
@@ -738,10 +758,8 @@ class ModelsScreen(ModalScreen):
             yield Static(f"[b]Models[/b] — will run {scope}  ·  ⏎ expand · download · run  ·  r run  "
                          "·  v quants  ·  l levels  ·  a add  ·  u queue  ·  Esc close")
             yield ModelTree("models", id="models-tree")
-            yield ProgressBar(id="dl-bar", show_eta=False)
 
     def on_mount(self) -> None:
-        self.query_one("#dl-bar", ProgressBar).display = False
         tree = self.query_one("#models-tree", Tree)
         tree.show_root = False
         tree.auto_expand = False
@@ -891,11 +909,10 @@ class ModelsScreen(ModalScreen):
             self.app.push_screen(QuantScreen(fam, self.app.base_url, repo=repo))
 
     def action_run(self) -> None:
-        """Benchmark the selected quant locally (download if needed) → a real, submittable run. No
-        published baseline since this isn't a leaderboard row; press `s` in the run view to submit."""
+        """Run the selected quant (download first if needed) — a real, submittable run."""
         e = self._target_entry()
         if not e:
-            self.notify("pick a registered quant — press d to download an HF-only quant first")
+            self.notify("pick a registered quant — ⏎ an HF quant to download + run it")
             return
         run_with_preflight(self, e.name, challenge_ids=self.app.run_ids(), level=self.app.selected_level)
 
@@ -904,45 +921,33 @@ class ModelsScreen(ModalScreen):
         if e:
             self.app.push_screen(LevelScreen(e.name, self.app.base_url))
 
-    def action_download(self) -> None:
+    def action_enter(self) -> None:
+        """⏎ on a quant: run it if it's downloaded; otherwise confirm, then queue a download+run job."""
         d = self._node_data()
-        if d.get("kind") == "hf":
-            self.download_hf(d)
-        elif d.get("entry"):
-            self.download_model(d["entry"].name)
+        if d.get("kind") == "registry":
+            e = d["entry"]
+            if e.present:
+                self._run(e.name)
+            else:
+                self._confirm_download_run(e.quant, name=e.name)
+        elif d.get("kind") == "hf":
+            self._confirm_download_run(d["quant"], register=(d["family"], d["repo"], d["file"], d["quant"]))
 
-    @work(thread=True, exclusive=True)
-    def download_hf(self, d: dict) -> None:
-        try:
-            e = models.register_quant(d["family"], d["repo"], d["file"], d["quant"])
-        except Exception as ex:  # noqa: BLE001
-            self.app.call_from_thread(self.app.notify, f"register failed: {ex}")
-            return
-        self._download_entry(e)
+    def _run(self, name: str) -> None:
+        run_with_preflight(self, name, challenge_ids=self.app.run_ids(), level=self.app.selected_level)
 
-    @work(thread=True, exclusive=True)
-    def download_model(self, name: str) -> None:
-        entry = models.load_registry().get(name)
-        if entry:
-            self._download_entry(entry)
-        else:
-            self.app.call_from_thread(self.refresh_models, self._leaderboard)
-
-    def _download_entry(self, entry) -> None:
-        self.app.call_from_thread(self.app.notify, f"downloading {entry.name}…")
-        self.app.call_from_thread(self._bar_show, True)
-        models.download(entry, lambda s: self.app.call_from_thread(self.app.notify, s, timeout=8),
-                        progress=lambda done, total: self.app.call_from_thread(self._bar_update, done, total))
-        self.app.call_from_thread(self._bar_show, False)
-        self.app.call_from_thread(self.refresh_models, self._leaderboard)
-
-    def _bar_show(self, show: bool) -> None:
-        self.query_one("#dl-bar", ProgressBar).display = show
-
-    def _bar_update(self, done: int, total: int | None) -> None:
-        bar = self.query_one("#dl-bar", ProgressBar)
-        if total:
-            bar.update(total=total, progress=done)
+    def _confirm_download_run(self, label: str, *, name: str | None = None, register=None) -> None:
+        def go() -> None:
+            nm = name
+            if register is not None:                 # HF-only quant: register it so it can be served
+                try:
+                    nm = models.register_quant(*register).name
+                except Exception as ex:  # noqa: BLE001
+                    self.notify(f"register failed: {ex}")
+                    return
+            self._run(nm)                            # reproduce downloads (as part of the queued job) then runs
+        self.app.push_screen(ConfirmScreen(
+            f"[b]{label}[/] isn't downloaded. Download and run it?\nThe download runs as a queued job.", go))
 
 
 class HistoryScreen(ModalScreen):
