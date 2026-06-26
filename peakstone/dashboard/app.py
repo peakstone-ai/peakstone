@@ -129,6 +129,7 @@ class Dashboard(App):
         ("c", "challenges", "Peakstones"),
         ("v", "quants", "Quants"),
         ("m", "models", "Models"),
+        ("u", "queue", "Queue"),
         ("h", "history", "History"),
     ]
     SORTS = ["code_score", "held_out_score", "agent_score", "planner_score", "tok_per_s"]
@@ -197,6 +198,21 @@ class Dashboard(App):
         if self._viewer is not None:
             self._viewer.show_result(res)
 
+    # queue management (the QueueScreen drives these) ----------------------------------------------
+    def cancel_queued(self, i: int):
+        return self.run_queue.pop(i) if 0 <= i < len(self.run_queue) else None
+
+    def clear_queued(self) -> None:
+        self.run_queue.clear()
+
+    def move_queued(self, i: int, delta: int) -> int:
+        """Reorder a queued run; returns its new index (unchanged if the move was out of bounds)."""
+        j = i + delta
+        if 0 <= i < len(self.run_queue) and 0 <= j < len(self.run_queue):
+            self.run_queue[i], self.run_queue[j] = self.run_queue[j], self.run_queue[i]
+            return j
+        return i
+
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         yield HardwarePanel()
@@ -223,6 +239,9 @@ class Dashboard(App):
 
     def action_models(self) -> None:
         self.push_screen(ModelsScreen())
+
+    def action_queue(self) -> None:
+        self.push_screen(QueueScreen())
 
     def action_history(self) -> None:
         self.push_screen(HistoryScreen())
@@ -421,6 +440,111 @@ class ReproduceScreen(ModalScreen):
         self.app.call_from_thread(self.app.notify, f"{msg}")
 
 
+class QueueScreen(ModalScreen):
+    """Run queue manager: the active run plus what's waiting. Cancel/reorder queued runs, or open the
+    live view of the active one. Refreshes as runs auto-dequeue."""
+    CSS = """
+    QueueScreen { align: center middle; }
+    #queue { width: 86; height: 24; border: thick $accent; background: $surface; padding: 1; }
+    #q-tbl { height: 1fr; }
+    #q-note { height: auto; padding-top: 1; }
+    """
+    BINDINGS = [("escape", "dismiss", "Close"), ("enter", "view", "View active"),
+                ("x", "cancel", "Cancel"), ("c", "clear", "Clear queued"),
+                ("shift+up", "move_up", "Up"), ("shift+down", "move_down", "Down")]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="queue"):
+            yield Static("[b]Run queue[/b]  ·  ⏎ view active  ·  x cancel  ·  c clear  ·  "
+                         "shift+↑/↓ reorder  ·  Esc close")
+            yield DataTable(id="q-tbl", cursor_type="row", zebra_stripes=True)
+            yield Static("", id="q-note")
+
+    def on_mount(self) -> None:
+        self.query_one("#q-tbl", DataTable).add_columns("#", "Status", "Model", "Scope")
+        self._sig = None
+        self._map: list = []     # row -> ("active", None) | ("queue", queue_index)
+        self.refill()
+        self.set_interval(1.0, self._tick)   # reflect auto-dequeue / completion while open
+
+    @staticmethod
+    def _scope(spec: dict) -> str:
+        if spec.get("level"):
+            return f"level {spec['level']}"
+        ids = spec.get("challenge_ids") or REPRODUCE_IDS
+        return f"{len(ids)} peakstones"
+
+    def _signature(self):
+        app = self.app
+        return (app.run_active, app._run_spec and app._run_spec["name"], tuple(s["name"] for s in app.run_queue))
+
+    def _tick(self) -> None:
+        if self._signature() != self._sig:   # only rebuild when something changed (keeps the cursor)
+            self.refill()
+
+    def refill(self) -> None:
+        t = self.query_one("#q-tbl", DataTable)
+        cur = t.cursor_row
+        t.clear()
+        self._map = []
+        app = self.app
+        if app.run_active and app._run_spec:
+            t.add_row("▶", "running", app._run_spec["name"], self._scope(app._run_spec))
+            self._map.append(("active", None))
+        for i, spec in enumerate(app.run_queue):
+            t.add_row(str(i + 1), "queued", spec["name"], self._scope(spec))
+            self._map.append(("queue", i))
+        if not self._map:
+            t.add_row("", "idle", "(no runs queued)", "")
+        else:
+            t.move_cursor(row=min(cur or 0, len(self._map) - 1))
+        self._sig = self._signature()
+        self.query_one("#q-note", Static).update(
+            f"[b]{len(app.run_queue)}[/] queued" + ("  ·  1 running" if app.run_active else ""))
+
+    def _selected(self):
+        t = self.query_one("#q-tbl", DataTable)
+        if t.cursor_row is None or t.cursor_row >= len(self._map):
+            return None, None
+        return self._map[t.cursor_row]
+
+    def action_cancel(self) -> None:
+        kind, idx = self._selected()
+        if kind == "queue":
+            spec = self.app.cancel_queued(idx)
+            if spec:
+                self.notify(f"cancelled {spec['name']}")
+            self.refill()
+        elif kind == "active":
+            self.notify("the active run can't be cancelled here — close its view to stop watching")
+
+    def action_clear(self) -> None:
+        if self.app.run_queue:
+            self.app.clear_queued()
+            self.notify("cleared the queue")
+            self.refill()
+
+    def action_view(self) -> None:
+        if self.app.run_active or self.app._run_result is not None:
+            self.app.push_screen(ReproduceScreen())
+        else:
+            self.notify("no active run")
+
+    def action_move_up(self) -> None:
+        self._move(-1)
+
+    def action_move_down(self) -> None:
+        self._move(1)
+
+    def _move(self, delta: int) -> None:
+        kind, idx = self._selected()
+        if kind == "queue":
+            self.app.move_queued(idx, delta)
+            self.refill()
+            t = self.query_one("#q-tbl", DataTable)
+            t.move_cursor(row=min(max((1 if self.app.run_active else 0) + idx + delta, 0), len(self._map) - 1))
+
+
 class AddModelScreen(ModalScreen):
     CSS = """
     AddModelScreen { align: center middle; }
@@ -527,14 +651,15 @@ class ModelsScreen(ModalScreen):
     #dl-bar { margin-top: 1; }
     """
     BINDINGS = [("escape", "dismiss", "Close"), ("a", "add", "Add"),
-                ("d", "download", "Download"), ("l", "levels", "Levels"), ("r", "run", "Run")]
+                ("d", "download", "Download"), ("l", "levels", "Levels"), ("r", "run", "Run"),
+                ("u", "queue", "Queue")]
 
     def compose(self) -> ComposeResult:
         ids, lvl = self.app.run_ids(), self.app.selected_level
         scope = f"level [b]{lvl}[/]" if lvl else f"[b]{len(ids)}[/] peakstones"
         with Vertical(id="models"):
             yield Static(f"[b]Models[/b] — will run {scope}  ·  ⏎ run/queue  ·  → expand  ·  l levels  "
-                         "·  d download  ·  a add  ·  Esc close")
+                         "·  d download  ·  a add  ·  u queue  ·  Esc close")
             yield ModelTree("models", id="models-tree")
             yield ProgressBar(id="dl-bar", show_eta=False)
 
@@ -675,6 +800,9 @@ class ModelsScreen(ModalScreen):
         """The registry entry to act on: a quant leaf's entry, or a family's present/first quant."""
         d = self._node_data()
         return d.get("entry") if d.get("kind") in ("registry", "family") else None
+
+    def action_queue(self) -> None:
+        self.app.push_screen(QueueScreen())
 
     def action_add(self) -> None:
         self.app.push_screen(AddModelScreen(), lambda _ok: self.refresh_models(self._leaderboard))

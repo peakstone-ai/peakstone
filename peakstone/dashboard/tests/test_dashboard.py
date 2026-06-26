@@ -599,6 +599,44 @@ def test_run_queues_when_active():
     asyncio.run(scenario())
 
 
+def test_queue_screen_manage():
+    from peakstone.dashboard.app import Dashboard, QueueScreen
+    from textual.widgets import DataTable
+
+    def spec(name, **k):
+        return {"name": name, "level": None, "challenge_ids": None, "published_tps": None,
+                "free_procs": None, **k}
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            app.run_active = True
+            app._run_spec = spec("A", level="smoke")
+            app.run_queue = [spec("B", challenge_ids=["x", "y"]), spec("C", level="deep")]
+            await app.push_screen(QueueScreen())
+            await pilot.pause()
+            t = app.screen.query_one("#q-tbl", DataTable)
+            assert t.row_count == 3                                   # active + 2 queued
+            assert str(t.get_row_at(0)[1]) == "running" and str(t.get_row_at(0)[2]) == "A"
+            assert [str(t.get_row_at(i)[2]) for i in (1, 2)] == ["B", "C"]
+
+            t.move_cursor(row=1)                                      # B (first queued)
+            await pilot.press("shift+down")                          # reorder B after C
+            await pilot.pause()
+            assert [s["name"] for s in app.run_queue] == ["C", "B"]
+
+            t.move_cursor(row=1)                                      # C now first queued
+            await pilot.press("x")                                   # cancel it
+            await pilot.pause()
+            assert [s["name"] for s in app.run_queue] == ["B"]
+
+            await pilot.press("c")                                   # clear remaining
+            await pilot.pause()
+            assert app.run_queue == []
+
+    asyncio.run(scenario())
+
+
 def test_models_screen_shows_caps(monkeypatch):
     from peakstone.dashboard import models
     from peakstone.dashboard.app import Dashboard, ModelsScreen
