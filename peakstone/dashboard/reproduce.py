@@ -40,14 +40,33 @@ class ReproduceResult:
         return None
 
 
+def serve_log_path(name: str) -> Path:
+    return REPO / "results" / f"serve-{name}.log"
+
+
+def serve_log_tail(name: str, lines: int = 12) -> str:
+    """Last few lines of a model's serve log — the crash reason (e.g. CUDA OOM) when it won't start."""
+    p = serve_log_path(name)
+    if not p.exists():
+        return ""
+    return "\n".join(p.read_text(errors="replace").splitlines()[-lines:]).strip()
+
+
 def serve(name: str, *, popen=subprocess.Popen) -> subprocess.Popen:
-    return popen(["bash", str(SERVE_SH), name], cwd=str(REPO), stdout=subprocess.DEVNULL,
+    log = serve_log_path(name)
+    log.parent.mkdir(parents=True, exist_ok=True)
+    # capture stdout+stderr to a file so a failed launch (OOM, missing binary) is diagnosable
+    return popen(["bash", str(SERVE_SH), name], cwd=str(REPO), stdout=open(log, "wb"),
                  stderr=subprocess.STDOUT, start_new_session=True)
 
 
-def wait_healthy(port: int, *, timeout: float = 180, opener=urllib.request.urlopen) -> bool:
+def wait_healthy(port: int, *, timeout: float = 180, opener=urllib.request.urlopen, proc=None) -> bool:
+    """Poll /health until the server answers. Fails fast if the serve process exits first (a crashed
+    llama-server otherwise leaves us polling a dead port for the whole timeout)."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
+        if proc is not None and getattr(proc, "poll", lambda: None)() is not None:
+            return False   # server process died before binding the port
         try:
             with opener(f"http://localhost:{port}/health", timeout=3) as r:
                 if getattr(r, "status", 200) == 200:
@@ -106,9 +125,17 @@ def reproduce(name: str, *, challenge_ids: list[str] | None = None, level: str |
     log(f"serving {name} on :{entry.port} …")
     proc = _serve(name)
     try:
-        if not _wait(entry.port):
-            return ReproduceResult(name, False, published_tps=published_tps,
-                                   note="model never became healthy (is llama-server installed?)")
+        if not _wait(entry.port, proc=proc):
+            died = proc is not None and getattr(proc, "poll", lambda: None)() is not None
+            if died:
+                tail = serve_log_tail(name)
+                hint = "CUDA out of memory" if "out of memory" in tail.lower() else \
+                       "is llama-server installed and the GPU free?"
+                log(f"serve failed:\n{tail}" if tail else "serve process exited")
+                note = f"llama-server for {name} exited before serving — {hint}"
+            else:
+                note = "model never became healthy in time (is llama-server installed / GPU free?)"
+            return ReproduceResult(name, False, published_tps=published_tps, note=note)
         log(f"benchmarking ({'level ' + level if level else 'selection'}) …")
         bundle = _bench(name, challenge_ids, level=level) if level else _bench(name, challenge_ids)
     finally:

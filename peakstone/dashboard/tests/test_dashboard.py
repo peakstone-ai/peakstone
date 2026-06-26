@@ -150,7 +150,7 @@ def test_reproduce_orchestration(monkeypatch):
     ]}
     res = reproduce.reproduce("m", challenge_ids=["a"], published_tps=100.0,
                               _download=lambda e, log: True, _serve=lambda n: object(),
-                              _wait=lambda p: True, _bench=lambda n, ids: bundle, _stop=lambda p: None)
+                              _wait=lambda p, **k: True, _bench=lambda n, ids: bundle, _stop=lambda p: None)
     assert res.ok and res.your_tps == 85.0 and res.code_score == 0.75
     assert res.passed == 13 and res.total == 20 and res.tps_ratio == 0.85
 
@@ -159,9 +159,18 @@ def test_reproduce_orchestration(monkeypatch):
     assert reproduce.reproduce("ghost", challenge_ids=["a"]).ok is False
     monkeypatch.setattr(models, "load_registry", lambda: {"m": entry})
     unhealthy = reproduce.reproduce("m", challenge_ids=["a"], _download=lambda e, log: True,
-                                    _serve=lambda n: object(), _wait=lambda p: False,
+                                    _serve=lambda n: object(), _wait=lambda p, **k: False,
                                     _bench=lambda n, ids: bundle, _stop=lambda p: None)
     assert unhealthy.ok is False and "healthy" in unhealthy.note
+
+    # a crashed serve process (poll() returns an exit code) fails fast with the crash reason, not "healthy"
+    class _Dead:
+        def poll(self):
+            return 1
+    crashed = reproduce.reproduce("m", challenge_ids=["a"], _download=lambda e, log: True,
+                                  _serve=lambda n: _Dead(), _wait=lambda p, proc=None: False,
+                                  _bench=lambda n, ids: bundle, _stop=lambda p: None)
+    assert crashed.ok is False and "exited before serving" in crashed.note
 
 
 def test_reproduce_screen_shows_result_and_records_history(monkeypatch):
