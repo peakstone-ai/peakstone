@@ -996,13 +996,13 @@ class ChallengesScreen(ModalScreen):
         for grp in ch_browse.group_by_collection(corpus):
             chs = grp["chs"]
             ids = [c.id for c in chs]
-            if grp["kind"] == "native":   # our peakstones: collection -> language/axis family -> challenges
-                span = ch_browse.date_span(chs)
-                label = f"{grp['label']}" + (f" · {span}" if span else "") + f" ({len(chs)})"
-                node = root.add("", data={"ids": ids, "base": label, "kind": "native"})
-                for family, fchs in ch_browse.group_by_family(chs).items():
-                    node.add("", data={"ids": [c.id for c in fchs], "base": f"{family} ({len(fchs)})",
-                                       "chs": fchs, "filled": False})
+            if grp["kind"] == "native":   # our peakstones: collection -> date -> language/axis family -> challenges
+                node = root.add("", data={"ids": ids, "base": f"{grp['label']} ({len(chs)})", "kind": "native"})
+                for bucket, dchs in ch_browse.group_by_date(chs).items():
+                    dnode = node.add("", data={"ids": [c.id for c in dchs], "base": f"{bucket} ({len(dchs)})"})
+                    for family, fchs in ch_browse.group_by_family(dchs).items():
+                        dnode.add("", data={"ids": [c.id for c in fchs], "base": f"{family} ({len(fchs)})",
+                                            "chs": fchs, "filled": False})
             else:                          # imported suite: suite -> month -> challenges
                 node = root.add("", data={"ids": ids, "base": f"{grp['label']} ({len(chs)})", "kind": "suite"})
                 for bucket, dchs in ch_browse.group_by_date(chs).items():

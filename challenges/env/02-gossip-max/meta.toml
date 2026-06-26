@@ -5,5 +5,5 @@ category = "multi-machine"
 difficulty = 4
 max_turns = 12
 timeout = 30
-published_at        = "2026-07-01"
+published_at        = "2026-06-30"
 published_at_source = "author"
