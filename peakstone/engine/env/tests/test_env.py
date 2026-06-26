@@ -20,6 +20,7 @@ GOSSIP_DIR = Path(__file__).resolve().parents[4] / "challenges" / "env" / "02-go
 _ENV = Path(__file__).resolve().parents[4] / "challenges" / "env"
 ELECT_DIR = _ENV / "env-03-elect-collect"
 KVQ_DIR = _ENV / "env-04-kv-quorum"
+PARTITION_DIR = _ENV / "env-05-partition-heal"
 
 
 @pytest.fixture(scope="module")
@@ -40,6 +41,11 @@ def elect():
 @pytest.fixture(scope="module")
 def kvq():
     return load_env_challenge(KVQ_DIR)
+
+
+@pytest.fixture(scope="module")
+def partition():
+    return load_env_challenge(PARTITION_DIR)
 
 
 def test_gossip_convergence_reference_local(gossip):
@@ -77,6 +83,36 @@ def test_kv_quorum_reference_local(kvq):
     res = run_reference(kvq, LocalProvider())
     assert res["passed"] is True
     assert res["checks"][0]["ok"] is True
+
+
+def test_partition_recovery_default_provider_cannot_heal(partition):
+    # LocalProvider has no runtime firewall -> heal() must refuse rather than silently "pass"
+    import pytest as _pytest
+    with LocalProvider().provision(partition.env) as env:
+        with _pytest.raises(NotImplementedError):
+            env.heal()
+
+
+@pytest.mark.skipif(not DockerComposeProvider().available(), reason="docker daemon not available")
+def test_partition_recovery_reference_docker(partition):
+    # peers diverge behind the firewall, then converge after the verifier heals the network
+    res = run_reference(partition, DockerComposeProvider())
+    assert res["passed"] is True
+    assert len(res["checks"]) == 2 and all(c["ok"] for c in res["checks"])
+
+
+@pytest.mark.skipif(not DockerComposeProvider().available(), reason="docker daemon not available")
+def test_partition_recovery_has_teeth(partition):
+    # a peer that records only its own element (never gossips) can't reconcile after the heal -> FAIL
+    files = copy.deepcopy(partition.reference_files())
+    for node in files:
+        files[node]["peer.py"] = ("import time\n"
+                                  "open('result.txt','w').write(open('element.txt').read().strip())\n"
+                                  "time.sleep(120)\n")
+    with DockerComposeProvider().provision(partition.env) as env:
+        res = run_once(env, partition.env, files, partition.load_verifier(),
+                       fixtures=partition.fixtures())
+    assert res["passed"] is False
 
 
 def test_kv_quorum_requires_quorum_read(kvq):

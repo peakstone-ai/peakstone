@@ -185,6 +185,26 @@ class DockerEnvironment(Environment):
                 applied["firewall"].append({"src": l.src, "dst": l.dst, "ok": ok})
         return applied
 
+    def partition(self, a: str, b: str) -> None:
+        """Cut a<->b at runtime by dropping each other's traffic in both netns (recorded so heal()
+        can undo it)."""
+        ipa, ipb = self._ips.get(a), self._ips.get(b)
+        if not (ipa and ipb):
+            return
+        ok = (self._sidecar(a, f"iptables -A OUTPUT -d {ipb} -j DROP")
+              and self._sidecar(b, f"iptables -A OUTPUT -d {ipa} -j DROP"))
+        self._applied_net.setdefault("firewall", []).append({"src": a, "dst": b, "ok": ok})
+
+    def heal(self) -> None:
+        """Delete every firewall DROP (declared in [[links]] or added via partition()) — both
+        directions — restoring full connectivity. tc shaping is left intact."""
+        for fw in self._applied_net.get("firewall", []):
+            ipa, ipb = self._ips.get(fw["src"]), self._ips.get(fw["dst"])
+            if ipa and ipb:
+                self._sidecar(fw["src"], f"iptables -D OUTPUT -d {ipb} -j DROP")
+                self._sidecar(fw["dst"], f"iptables -D OUTPUT -d {ipa} -j DROP")
+        self._applied_net["firewall"] = []
+
     def address_of(self, name: str) -> tuple[str, int | None]:
         spec = self.spec.node_map.get(name)
         return (name, spec.ports[0] if spec and spec.ports else None)

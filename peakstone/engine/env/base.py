@@ -96,6 +96,15 @@ class Environment(abc.ABC):
     @abc.abstractmethod
     def teardown(self) -> None: ...
 
+    def partition(self, a: str, b: str) -> None:
+        """Cut the link between two nodes at runtime. Requires a provider with a real firewall
+        (docker/microvm); the default raises so partition-recovery challenges can't silently pass."""
+        raise NotImplementedError("this provider cannot change the network at runtime")
+
+    def heal(self) -> None:
+        """Remove every partition (declared + runtime), restoring full connectivity."""
+        raise NotImplementedError("this provider cannot change the network at runtime")
+
     def provenance(self) -> dict:
         """Reproducibility metadata for the bundle (provider, image digests, ...)."""
         return {"provider": getattr(self, "provider_name", "unknown")}
