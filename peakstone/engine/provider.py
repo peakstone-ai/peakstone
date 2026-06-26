@@ -56,6 +56,9 @@ class LLMClient:
         # when set (callable taking a text delta), chat() streams and reports generation live;
         # the runner wires this up under --stream-output so the dashboard can show tokens as they land.
         self.on_delta = None
+        # stream the response even with no on_delta — enables repetition-loop detection/abort for every
+        # run (the runner sets this), not just dashboard runs that forward deltas.
+        self.stream = False
 
     def chat(
         self,
@@ -67,7 +70,7 @@ class LLMClient:
         on_delta=None,
     ) -> ChatResult:
         on_delta = on_delta or self.on_delta
-        if on_delta is not None:
+        if on_delta is not None or self.stream:   # stream to detect loops; forward deltas only if on_delta
             return self._chat_stream(model, messages, temperature, max_tokens, timeout, on_delta)
         url = f"{self.base_url}/v1/chat/completions"
         payload = {
@@ -124,9 +127,9 @@ class LLMClient:
         tail, since_check, aborted = "", 0, False   # for early repetition-loop detection
 
         def flush():
-            if pending:
+            if pending and on_delta:
                 on_delta("".join(pending))
-                pending.clear()
+            pending.clear()
 
         t0 = time.time()
         try:
@@ -160,7 +163,8 @@ class LLMClient:
                             if is_looping(tail):
                                 aborted = True
                                 flush()
-                                on_delta("\n⚠ aborted: repetition loop\n")
+                                if on_delta:
+                                    on_delta("\n⚠ aborted: repetition loop\n")
                                 break               # closing the connection stops the server's generation
         except urllib.error.HTTPError as e:
             return ChatResult(text="", error=f"HTTP {e.code}: {e.read().decode()[:500]}")

@@ -377,6 +377,7 @@ def main(argv=None):
                 print(f"!! {model} endpoint not reachable; is serve.sh {model} running?",
                       file=sys.stderr)
                 continue
+            client.stream = True              # detect/abort repetition loops on every run (not just dashboard)
             if args.stream_output:
                 client.on_delta = _emit_gen   # live token stream for the dashboard
             model_vram = _gpu_mem_used()  # footprint of the one loaded model
