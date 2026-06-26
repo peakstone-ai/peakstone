@@ -673,9 +673,13 @@ class ReproduceScreen(ModalScreen):
             self._render_gen()
             return
         if "→ solving" in s:
+            # the "solving" line shows live in the gen panel header; skip the log so each test is one
+            # line (the result), not a dim "solving" line followed by its ✓/✗.
             self._gen_ch = s.split("→ solving")[0].split("|")[-1].strip()
             self._gen_buf = ""
             self._render_gen()
+            self._update_stat()
+            return
         self._update_stat()
         self.query_one("#repro-log", RichLog).write(_pretty_progress(s))
 

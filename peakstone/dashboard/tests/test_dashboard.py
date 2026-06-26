@@ -553,14 +553,16 @@ def test_reproduce_screen_routes_generation_stream():
             scr = ReproduceScreen()
             await app.push_screen(scr)
             await pilot.pause()
-            scr._on_line("   m | py-05-calc          → solving [tests] …")   # progress -> log + sets challenge
+            scr._on_line("   m | py-05-calc          → solving [tests] …")   # sets challenge (gen panel only)
             scr._on_line(GEN_MARK + "def f():" + GEN_NL + "  return 1")       # gen delta -> output panel
             scr._on_line(GEN_MARK + " more")
+            scr._on_line("   m | py-05-calc          ok  tests 10/10")        # result -> the one log line
             await pilot.pause()
             gen = str(scr.query_one("#repro-gen", Static).render())
             assert "py-05-calc" in gen and "def f():\n  return 1 more" in gen
             log = str(scr.query_one("#repro-log", RichLog).lines)
-            assert "py-05-calc" in log and GEN_MARK not in gen   # control char stripped from display
+            # collapsed: the "solving" line stays in the gen panel; the log shows only the result
+            assert "py-05-calc" in log and "solving" not in log and GEN_MARK not in gen
 
     asyncio.run(scenario())
 
