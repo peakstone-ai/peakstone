@@ -294,9 +294,9 @@ class Dashboard(App):
         i = table.cursor_row
         if not self._board_rows or i is None or i >= len(self._board_rows):
             return
-        fam = self._board_rows[i].get("family")
-        if fam:
-            self.push_screen(QuantScreen(fam, self.base_url))
+        row = self._board_rows[i]
+        if row.get("family"):
+            self.push_screen(QuantScreen(row["family"], self.base_url, repo=row.get("run", {}).get("hf_repo")))
 
     def run_ids(self) -> list[str]:
         """Challenges to run: the user's Challenges-screen selection, else the quick default set."""
@@ -330,7 +330,7 @@ class Dashboard(App):
         scope = f"fits ≤{max_vram:g} GB" if max_vram else "all hardware"
         sel = f"  ·  ▶ {len(self.selected_ids)} peakstones selected" if self.selected_ids else ""
         self.sub_title = (f"{self.base_url}  ·  {scope}  ·  sort: {self.SORTS[self.sort_i]}  ·  "
-                          f"⏎ reproduce  v quants  c peakstones  m models{sel}")
+                          f"⏎ reproduce  v quants  c peakstones  m models  u queue{sel}")
         rows = data.get("leaderboard", [])
         self._board_rows = rows
         for r in rows:
@@ -721,14 +721,14 @@ class ModelsScreen(ModalScreen):
     """
     BINDINGS = [("escape", "dismiss", "Close"), ("a", "add", "Add"),
                 ("d", "download", "Download"), ("l", "levels", "Levels"), ("r", "run", "Run"),
-                ("u", "queue", "Queue")]
+                ("v", "quants", "Quants"), ("u", "queue", "Queue")]
 
     def compose(self) -> ComposeResult:
         ids, lvl = self.app.run_ids(), self.app.selected_level
         scope = f"level [b]{lvl}[/]" if lvl else f"[b]{len(ids)}[/] peakstones"
         with Vertical(id="models"):
-            yield Static(f"[b]Models[/b] — will run {scope}  ·  ⏎ run/queue  ·  → expand  ·  l levels  "
-                         "·  d download  ·  a add  ·  u queue  ·  Esc close")
+            yield Static(f"[b]Models[/b] — will run {scope}  ·  ⏎ run/queue  ·  → expand  ·  v quants  "
+                         "·  l levels  ·  d download  ·  a add  ·  u queue  ·  Esc close")
             yield ModelTree("models", id="models-tree")
             yield ProgressBar(id="dl-bar", show_eta=False)
 
@@ -873,8 +873,15 @@ class ModelsScreen(ModalScreen):
     def action_queue(self) -> None:
         self.app.push_screen(QueueScreen())
 
-    def action_add(self) -> None:
-        self.app.push_screen(AddModelScreen(), lambda _ok: self.refresh_models(self._leaderboard))
+    def action_quants(self) -> None:
+        d = self._node_data()
+        if d.get("kind") == "registry":
+            e = d["entry"]
+            fam, repo = e.fam, e.repo
+        else:
+            fam, repo = d.get("family"), d.get("repo")
+        if fam:
+            self.app.push_screen(QuantScreen(fam, self.app.base_url, repo=repo))
 
     def action_run(self) -> None:
         """Benchmark the selected quant locally (download if needed) → a real, submittable run. No
@@ -1106,56 +1113,101 @@ class ChallengesScreen(ModalScreen):
 
 
 class QuantScreen(ModalScreen):
-    """Compare a family's quant variants side by side: score axes vs speed vs VRAM. Pulls every run
-    (no collapsing) from the API; rows that share a suite are directly comparable."""
+    """Compare a model family's quants side by side: every quant it has — downloaded (✓), registered,
+    or just available on HF (·) — with leaderboard scores where someone has run it. Download the
+    highlighted quant with `d`. Merges the local registry, the HF repo listing, and the API."""
     CSS = """
     QuantScreen { align: center middle; }
-    #quants { width: 110; height: 24; border: thick $accent; background: $surface; padding: 1; }
+    #quants { width: 104; height: 24; border: thick $accent; background: $surface; padding: 1; }
     #q-tbl { height: 1fr; }
     #q-note { height: auto; padding-top: 1; }
     """
-    BINDINGS = [("escape", "dismiss", "Close")]
+    BINDINGS = [("escape", "dismiss", "Close"), ("d", "download", "Download")]
 
-    def __init__(self, family: str, base_url: str):
+    def __init__(self, family: str, base_url: str, repo: str | None = None):
         super().__init__()
         self.family = family
         self.base_url = base_url
+        self.repo = repo
+        self._rows: list[dict] = []
 
     def compose(self) -> ComposeResult:
         with Vertical(id="quants"):
-            yield Static(f"[b]Quants[/b] for {self.family}  ·  Esc close")
-            yield DataTable(id="q-tbl", zebra_stripes=True)
+            yield Static(f"[b]Quants[/b] for {self.family}  ·  d download  ·  Esc close")
+            yield DataTable(id="q-tbl", cursor_type="row", zebra_stripes=True)
             yield Static("loading…", id="q-note")
 
     def on_mount(self) -> None:
         self.query_one("#q-tbl", DataTable).add_columns(
-            "Quant", "Suite", "Code", "Held-out", "Agent", "Math", "TPS", "VRAM", "Trust")
-        self.load_quants()
+            "Quant", "State", "Size", "Code", "Held-out", "Agent", "Math", "TPS", "Trust")
+        self.load()
 
     @work(thread=True, exclusive=True)
-    def load_quants(self) -> None:
+    def load(self) -> None:
+        reg = {e.quant: e for e in models.load_registry().values() if e.fam == self.family}
+        repo = self.repo or next((e.repo for e in reg.values() if e.repo), None)
+        hf = {h["quant"]: h for h in (models.available_quants(repo) if repo else [])}
         try:
-            data = client.get_model(self.base_url, self.family)
-        except client.APIError as e:
-            self.app.call_from_thread(self._note, f"API unreachable: {e}")
-            return
-        self.app.call_from_thread(self._fill, data.get("runs", []))
+            runs = client.get_model(self.base_url, self.family).get("runs", [])
+        except client.APIError:
+            runs = []
+        run_by_q: dict[str, dict] = {}
+        for r in runs:                                   # keep the best code score per quant
+            q = r.get("run", {}).get("artifact", "?")
+            if q not in run_by_q or (r.get("code_score") or 0) > (run_by_q[q].get("code_score") or 0):
+                run_by_q[q] = r
+        rows = []
+        for q in sorted(set(reg) | set(hf) | set(run_by_q)):
+            e, h, run = reg.get(q), hf.get(q), run_by_q.get(q)
+            present = bool(e and e.present)
+            rinfo = (run or {}).get("run", {})
+            rows.append({
+                "quant": q,
+                "state": "✓ local" if present else ("· registered" if e else "· HF"),
+                "size": (f"{e.size_gb} GB" if (e and e.size_gb)
+                         else f"~{h['size_gb']} GB" if (h and h.get("size_gb")) else "—"),
+                "code": (run or {}).get("code_score"), "held": (run or {}).get("held_out_score"),
+                "agent": (run or {}).get("agent_score"), "math": (run or {}).get("math_score"),
+                "tps": (run or {}).get("tok_per_s"), "trust": (rinfo.get("trust_tier") or "").replace("-", " "),
+                "present": present, "entry": e, "repo": repo, "file": h["file"] if h else None})
+        self.app.call_from_thread(self._fill, rows)
 
-    def _fill(self, runs) -> None:
+    def _fill(self, rows) -> None:
         t = self.query_one("#q-tbl", DataTable)
         t.clear()
-        for r in sorted(runs, key=lambda r: (r.get("run", {}).get("artifact", ""), r.get("suite", ""))):
-            run = r.get("run", {})
-            t.add_row(run.get("artifact", "?"), r.get("suite", ""),
-                      _fmt(r.get("code_score")), _fmt(r.get("held_out_score")),
-                      _fmt(r.get("agent_score")), _fmt(r.get("math_score")),
-                      _fmt(r.get("tok_per_s"), "{:.0f}"),
-                      f"{run.get('vram_gb', '?')} GB", (run.get("trust_tier") or "").replace("-", " "))
-        self._note(f"{len(runs)} run(s). Same suite across quants = comparable (score vs tps vs VRAM)."
-                   if runs else "No runs for this family yet.")
+        self._rows = rows
+        for r in rows:
+            t.add_row(r["quant"], r["state"], r["size"], _fmt(r["code"]), _fmt(r["held"]),
+                      _fmt(r["agent"]), _fmt(r["math"]), _fmt(r["tps"], "{:.0f}"), r["trust"])
+        scored = sum(1 for r in rows if r["code"] is not None)
+        self.query_one("#q-note", Static).update(
+            f"{len(rows)} quant(s) · {scored} with leaderboard runs · ✓ local · · downloadable (d)"
+            if rows else "no quants found (registry / HF / leaderboard all empty)")
 
-    def _note(self, msg: str) -> None:
-        self.query_one("#q-note", Static).update(msg)
+    def action_download(self) -> None:
+        t = self.query_one("#q-tbl", DataTable)
+        if t.cursor_row is None or t.cursor_row >= len(self._rows):
+            return
+        self.download_quant(self._rows[t.cursor_row])
+
+    @work(thread=True, exclusive=True)
+    def download_quant(self, row: dict) -> None:
+        if row["present"]:
+            self.app.call_from_thread(self.app.notify, f"{row['quant']} already downloaded")
+            return
+        entry = row["entry"]
+        if entry is None:
+            if not (row["repo"] and row["file"]):
+                self.app.call_from_thread(self.app.notify, "no HF source for this quant")
+                return
+            try:
+                entry = models.register_quant(self.family, row["repo"], row["file"], row["quant"])
+            except Exception as ex:  # noqa: BLE001
+                self.app.call_from_thread(self.app.notify, f"register failed: {ex}")
+                return
+        self.app.call_from_thread(self.app.notify, f"downloading {entry.name}…")
+        models.download(entry, lambda s: self.app.call_from_thread(self.app.notify, s, timeout=6))
+        self.app.call_from_thread(self.load)
 
 
 class LevelScreen(ModalScreen):

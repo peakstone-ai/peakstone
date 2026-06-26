@@ -752,34 +752,37 @@ def test_get_model_client(monkeypatch):
     assert "/models/qwen3-coder" in captured["url"] and d["runs"][0]["run"]["artifact"] == "Q4"
 
 
-_QUANT_RUNS = {"family": "qwen3-coder", "runs": [
-    {"suite": "level-standard@2026.06", "code_score": 0.70, "held_out_score": 0.50, "agent_score": 0.30,
-     "math_score": 0.60, "tok_per_s": 90, "run": {"artifact": "UD-Q4_K_XL", "vram_gb": 22, "trust_tier": "self-reported"}},
-    {"suite": "level-standard@2026.06", "code_score": 0.75, "held_out_score": 0.55, "agent_score": 0.30,
-     "math_score": 0.62, "tok_per_s": 60, "run": {"artifact": "UD-Q6_K", "vram_gb": 30, "trust_tier": "self-reported"}},
-]}
-
-
-def test_quant_screen_renders(monkeypatch):
-    from peakstone.dashboard import client
+def test_quant_screen_merges_local_hf_and_leaderboard(monkeypatch):
+    from peakstone.dashboard import client, models
     from peakstone.dashboard.app import Dashboard, QuantScreen
     from textual.widgets import DataTable
-    monkeypatch.setattr(client, "get_model", lambda url, fam, **k: _QUANT_RUNS)
+    entry = models.ModelEntry("qc-q4", "unsloth/QC-GGUF", "models/qc/QC-UD-Q4_K_XL.gguf",
+                              8081, 32768, "", "qwen3-coder")
+    monkeypatch.setattr(models, "load_registry", lambda: {"qc-q4": entry})
+    monkeypatch.setattr(models, "available_quants", lambda repo, **k: [
+        {"quant": "UD-Q4_K_XL", "file": "a-UD-Q4_K_XL.gguf", "size_gb": 20.1},
+        {"quant": "Q6_K", "file": "a-Q6_K.gguf", "size_gb": 27.0}])
+    monkeypatch.setattr(client, "get_model", lambda url, fam, **k: {"runs": [
+        {"code_score": 0.9, "held_out_score": 0.6, "agent_score": None, "math_score": 0.5,
+         "tok_per_s": 85, "run": {"artifact": "UD-Q4_K_XL", "trust_tier": "community-verified"}}]})
 
     async def scenario():
         app = Dashboard("http://x")
         async with app.run_test() as pilot:
-            await app.push_screen(QuantScreen("qwen3-coder", "http://x"))
+            await app.push_screen(QuantScreen("qwen3-coder", "http://x", repo="unsloth/QC-GGUF"))
             await app.workers.wait_for_complete()
             await pilot.pause()
             t = app.screen.query_one("#q-tbl", DataTable)
-            assert t.row_count == 2
-            assert {str(t.get_row_at(i)[0]) for i in range(2)} == {"UD-Q4_K_XL", "UD-Q6_K"}
+            rows = {str(t.get_row_at(i)[0]): t.get_row_at(i) for i in range(t.row_count)}
+            assert set(rows) == {"UD-Q4_K_XL", "Q6_K"}          # registry + HF quants merged
+            assert str(rows["UD-Q4_K_XL"][3]) == "0.90"         # leaderboard code score attached
+            assert str(rows["Q6_K"][1]) == "· HF" and str(rows["Q6_K"][3]) == "—"   # downloadable, unscored
 
     asyncio.run(scenario())
 
 
-def test_dashboard_q_opens_quants(monkeypatch):
+def test_dashboard_v_opens_quants(monkeypatch):
+    from peakstone.dashboard import client
     from peakstone.dashboard.app import Dashboard, QuantScreen
     monkeypatch.setattr(client, "get_leaderboard", lambda *a, **k: _FAKE)
     monkeypatch.setattr(client, "get_model", lambda url, fam, **k: {"runs": []})
