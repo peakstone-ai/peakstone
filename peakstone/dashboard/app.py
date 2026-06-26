@@ -10,6 +10,7 @@ import time
 
 from textual import work
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Header, Input, ProgressBar, RichLog, Static, Tree
@@ -33,6 +34,31 @@ def _bar(used: int, total: int, width: int = 22) -> str:
 
 def _fmt(v, fmt: str = "{:.2f}") -> str:
     return fmt.format(v) if isinstance(v, (int, float)) else "—"
+
+
+class NavTree(Tree):
+    """Tree with file-explorer keys: ⏎ expands/collapses, space selects, ← collapses (or steps to
+    parent), → expands. (Default Textual maps ⏎→select and space→toggle; we swap them.)"""
+    BINDINGS = [
+        Binding("enter", "toggle_node", "Expand/collapse"),
+        Binding("space", "select_cursor", "Select"),
+        Binding("left", "collapse_node", "Collapse"),
+        Binding("right", "expand_node", "Expand"),
+    ]
+
+    def action_collapse_node(self) -> None:
+        node = self.cursor_node
+        if node is None:
+            return
+        if node.allow_expand and node.is_expanded:
+            node.collapse()
+        elif node.parent is not None:
+            self.move_cursor(node.parent)     # already collapsed/leaf → step up, like a file explorer
+
+    def action_expand_node(self) -> None:
+        node = self.cursor_node
+        if node is not None and node.allow_expand and not node.is_expanded:
+            node.expand()
 
 
 def _mem(vram, ram) -> str:
@@ -441,9 +467,9 @@ class ModelsScreen(ModalScreen):
         ids, lvl = self.app.run_ids(), self.app.selected_level
         scope = f"level [b]{lvl}[/]" if lvl else f"[b]{len(ids)}[/] peakstones"
         with Vertical(id="models"):
-            yield Static(f"[b]Models[/b] — will run {scope}  ·  space expand  ·  r run  ·  l levels  "
+            yield Static(f"[b]Models[/b] — will run {scope}  ·  ⏎/→ expand  ·  r run  ·  l levels  "
                          "·  d download  ·  a add  ·  Esc close")
-            yield Tree("models", id="models-tree")
+            yield NavTree("models", id="models-tree")
             yield ProgressBar(id="dl-bar", show_eta=False)
 
     def on_mount(self) -> None:
@@ -693,14 +719,14 @@ class ChallengesScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="challenges"):
-            yield Static("[b]Peakstones[/b]  ·  [b]1-5[/] level (smoke→max)  ·  ⏎ select  ·  space expand  "
+            yield Static("[b]Peakstones[/b]  ·  [b]1-5[/] level (smoke→max)  ·  space select  ·  ⏎/→ expand  ·  ← collapse  "
                          "·  a all  ·  c clear  ·  r run  ·  Esc close")
-            yield Tree("peakstones", id="ch-tree")
+            yield NavTree("peakstones", id="ch-tree")
             yield Static("", id="ch-status")
 
     def on_mount(self) -> None:
-        tree = self.query_one("#ch-tree", Tree)
-        tree.auto_expand = False   # so ⏎ only selects (no expand side-effect); space expands
+        tree = self.query_one("#ch-tree", NavTree)
+        tree.auto_expand = False   # selection (space) never auto-expands; ⏎/→ expand, ← collapse
         tree.focus()
         try:
             corpus = ch_browse.load_corpus()

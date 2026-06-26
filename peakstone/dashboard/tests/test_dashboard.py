@@ -302,6 +302,36 @@ def test_group_by_collection():
     assert (cb.rough_eta(0), cb.rough_eta(4), cb.rough_eta(278), cb.rough_eta(1934)) == ("", "~4s", "~5m", "~32m")
 
 
+def test_tree_nav_keys(monkeypatch):
+    from peakstone.dashboard import challenges as cb
+    from peakstone.dashboard.app import Dashboard, ChallengesScreen, NavTree
+    monkeypatch.setattr(cb, "load_corpus", lambda: _FAKE_CORPUS)
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            await app.push_screen(ChallengesScreen())
+            await pilot.pause()
+            scr = app.screen
+            tree = scr.query_one("#ch-tree", NavTree)
+            await pilot.press("space")          # space = select (root -> selects all)
+            await pilot.pause()
+            assert scr.sel.ids                  # selection happened on space, not expand
+            await pilot.press("down")           # to first collection node (collapsed)
+            await pilot.pause()
+            await pilot.press("right")          # right = expand
+            await pilot.pause()
+            assert tree.cursor_node.is_expanded
+            await pilot.press("left")           # left = collapse
+            await pilot.pause()
+            assert not tree.cursor_node.is_expanded
+            await pilot.press("enter")          # enter = toggle (expand)
+            await pilot.pause()
+            assert tree.cursor_node.is_expanded
+
+    asyncio.run(scenario())
+
+
 def test_challenges_screen_selects_and_runs(monkeypatch):
     from peakstone.dashboard import challenges as cb
     from peakstone.dashboard.app import Dashboard, ChallengesScreen, ModelsScreen
