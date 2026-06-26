@@ -61,6 +61,14 @@ class NavTree(Tree):
             node.expand()
 
 
+class ModelTree(NavTree):
+    """The models picker tree: ⏎ runs (or queues) the selected model/quant; →/← still expand/collapse."""
+    BINDINGS = [Binding("enter", "run_cursor", "Run/queue")]
+
+    def action_run_cursor(self) -> None:
+        self.screen.action_run()
+
+
 def _mem(vram, ram) -> str:
     """Memory a run used: 'VRAM/RAM' so a model too big for VRAM that spills to system RAM (and still
     runs at usable tok/s) reads sensibly. Falls back to whichever is known."""
@@ -136,6 +144,58 @@ class Dashboard(App):
         # set when the selection came from a level shortcut (1-5) — runs via --level so the level's
         # judge/agent/prebuilt settings apply; None for a hand-picked selection (plain id run).
         self.selected_level: str | None = None
+        # run manager: runs execute on an app-level worker (not the modal) so they survive leaving the
+        # run view, and a second run while one is active is queued rather than started concurrently.
+        self.run_queue: list[dict] = []
+        self.run_active = False
+        self._run_log: list[str] = []          # raw streamed lines of the current run (for viewer replay)
+        self._run_result = None
+        self._run_spec: dict | None = None
+        self._viewer = None                    # the ReproduceScreen currently viewing the active run
+
+    def start_run(self, name: str, *, published_tps=None, challenge_ids=None, level=None,
+                  free_procs=None) -> bool:
+        """Queue a run. Returns True if it started immediately, False if it was queued behind an active
+        run. Runs execute one at a time on _run_loop (one model on the GPU at a time)."""
+        self.run_queue.append({"name": name, "published_tps": published_tps,
+                               "challenge_ids": challenge_ids, "level": level, "free_procs": free_procs})
+        if self.run_active:
+            self.notify(f"queued {name} — {len(self.run_queue)} in queue")
+            return False
+        self._run_loop()
+        return True
+
+    @work(thread=True, exclusive=True, group="run")
+    def _run_loop(self) -> None:
+        while self.run_queue:
+            spec = self.run_queue.pop(0)
+            self.run_active = True
+            self._run_spec, self._run_log, self._run_result = spec, [], None
+            self.call_from_thread(self._viewer_reset)
+            if spec["free_procs"]:
+                self._run_emit(f"freeing GPU: stopping {len(spec['free_procs'])} llama-server process(es)…")
+                preflight.free(spec["free_procs"])
+            res = reproduce.reproduce(spec["name"], challenge_ids=spec["challenge_ids"],
+                                      level=spec["level"], published_tps=spec["published_tps"],
+                                      log=self._run_emit)
+            history.append({"model": res.model, "ok": res.ok, "your_tps": res.your_tps,
+                            "published_tps": res.published_tps, "code_score": res.code_score, "note": res.note})
+            self._run_result = res
+            self.call_from_thread(self._viewer_show, res)
+        self.run_active = False
+
+    def _run_emit(self, line: str) -> None:
+        self._run_log.append(line)
+        if self._viewer is not None:
+            self.call_from_thread(self._viewer._on_line, line)
+
+    def _viewer_reset(self) -> None:
+        if self._viewer is not None:
+            self._viewer.reset_view()
+
+    def _viewer_show(self, res) -> None:
+        if self._viewer is not None:
+            self._viewer.show_result(res)
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -191,8 +251,8 @@ class Dashboard(App):
         row = self._board_rows[i]
         if not row.get("family"):
             return
-        self.push_screen(ReproduceScreen(row["family"], row.get("tok_per_s"), self.base_url,
-                                         challenge_ids=self.run_ids()))
+        run_with_preflight(self, row["family"], challenge_ids=self.run_ids(),
+                           published_tps=row.get("tok_per_s"))
 
     @work(thread=True, exclusive=True)
     def load_board(self) -> None:
@@ -248,49 +308,52 @@ class ReproduceScreen(ModalScreen):
     """
     BINDINGS = [("escape", "dismiss", "Close"), ("s", "submit", "Submit")]
 
-    def __init__(self, model: str, published_tps: float | None, base_url: str,
-                 challenge_ids: list[str] | None = None, level: str | None = None, free_procs=None):
+    def __init__(self):
         super().__init__()
-        self.model = model
-        self.published_tps = published_tps
-        self.base_url = base_url
-        self.level = level
-        self.challenge_ids = challenge_ids or REPRODUCE_IDS
-        self.free_procs = free_procs or []   # llama-servers to free before serving (pre-flight)
         self._result: reproduce.ReproduceResult | None = None
         self._gen_buf = ""       # accumulated live model output for the current challenge
         self._gen_ch = ""        # the challenge currently being solved (from the runner's progress)
-        self._n_total = len(self.challenge_ids) if not level else 0   # tests in the run (refined live)
+        self._n_total = 0        # tests in the run (refined live)
         self._n_done = 0         # challenges completed so far (one result line each)
         self._t0 = None          # monotonic clock at the first solve, for sol/sec
 
     def compose(self) -> ComposeResult:
-        scope = f"level {self.level}" if self.level else f"{len(self.challenge_ids)} peakstones"
         with Vertical(id="repro"):
-            yield Static(f"[b]Run[/b] {self.model}  ·  {scope}  ·  "
-                         f"published {_fmt(self.published_tps, '{:.0f}')} tok/s", id="repro-title")
+            yield Static("", id="repro-title")
             yield Static("", id="repro-stat")
             yield RichLog(id="repro-log", wrap=True, max_lines=300)
             with VerticalScroll(id="repro-gen-wrap"):
                 yield Static("[dim]model output appears here as it solves each task[/]", id="repro-gen")
-            yield Static("running… (Esc to close)", id="repro-result")
+            yield Static("running… (Esc to close — the run keeps going)", id="repro-result")
 
     def on_mount(self) -> None:
-        self.run_reproduce()
+        self.app._viewer = self                 # the active run streams into this view
+        self.reset_view()
+        for line in list(self.app._run_log):    # backfill what already streamed (re-opened mid-run)
+            self._on_line(line)
+        if self.app._run_result is not None:
+            self.show_result(self.app._run_result)
 
-    @work(thread=True, exclusive=True)
-    def run_reproduce(self) -> None:
-        def emit(s: str) -> None:
-            self.app.call_from_thread(self._on_line, s)
+    def on_unmount(self) -> None:
+        if self.app._viewer is self:            # leaving the view doesn't stop the run
+            self.app._viewer = None
 
-        if self.free_procs:
-            emit(f"freeing GPU: stopping {len(self.free_procs)} llama-server process(es)…")
-            preflight.free(self.free_procs)
-        res = reproduce.reproduce(self.model, challenge_ids=self.challenge_ids, level=self.level,
-                                  published_tps=self.published_tps, log=emit)
-        history.append({"model": res.model, "ok": res.ok, "your_tps": res.your_tps,
-                        "published_tps": res.published_tps, "code_score": res.code_score, "note": res.note})
-        self.app.call_from_thread(self._show, res)
+    def reset_view(self) -> None:
+        """(Re)point the view at the app's current run — clears widgets and counters for a new run."""
+        spec = self.app._run_spec or {}
+        model, level = spec.get("name", "—"), spec.get("level")
+        ids = spec.get("challenge_ids") or REPRODUCE_IDS
+        self._result = None
+        self._gen_buf, self._gen_ch, self._n_done, self._t0 = "", "", 0, None
+        self._n_total = 0 if level else len(ids)
+        scope = f"level {level}" if level else f"{len(ids)} peakstones"
+        queued = f"  ·  {len(self.app.run_queue)} queued" if self.app.run_queue else ""
+        self.query_one("#repro-title", Static).update(
+            f"[b]Run[/b] {model}  ·  {scope}  ·  published "
+            f"{_fmt(spec.get('published_tps'), '{:.0f}')} tok/s{queued}")
+        self.query_one("#repro-log", RichLog).clear()
+        self.query_one("#repro-gen", Static).update("[dim]model output appears here as it solves each task[/]")
+        self.query_one("#repro-result", Static).update("running… (Esc to close — the run keeps going)")
 
     def _on_line(self, s: str) -> None:
         """Route a streamed line: generation deltas (control-prefixed) to the output panel, everything
@@ -329,7 +392,7 @@ class ReproduceScreen(ModalScreen):
         self.query_one("#repro-gen", Static).update(f"{head}\n{self._gen_buf}")
         self.query_one("#repro-gen-wrap", VerticalScroll).scroll_end(animate=False)
 
-    def _show(self, res: "reproduce.ReproduceResult") -> None:
+    def show_result(self, res: "reproduce.ReproduceResult") -> None:
         self._result = res
         out = self.query_one("#repro-result", Static)
         if res.ok:
@@ -345,12 +408,12 @@ class ReproduceScreen(ModalScreen):
         if not (self._result and self._result.ok and self._result.bundle):
             self.notify("nothing to submit yet")
             return
-        self.submit_run()
+        self.submit_bundle()
 
     @work(thread=True, exclusive=True)
-    def submit_run(self) -> None:
+    def submit_bundle(self) -> None:
         try:
-            status, detail = client.submit_bundle(self.base_url, self._result.bundle)
+            status, detail = client.submit_bundle(self.app.base_url, self._result.bundle)
         except client.APIError as e:
             self.app.call_from_thread(self.app.notify, f"submit failed: {e}", severity="error")
             return
@@ -432,17 +495,20 @@ class PreflightScreen(ModalScreen):
         self.dismiss()
 
 
-def run_with_preflight(screen, name: str, *, challenge_ids=None, level=None) -> None:
-    """Launch a reproduce run, first checking free accelerator memory. If a model won't fit, prompt to
-    free our llama-servers (or run anyway) before opening the run; otherwise launch straight away."""
+def run_with_preflight(screen, name: str, *, challenge_ids=None, level=None, published_tps=None) -> None:
+    """Queue a reproduce run, first checking free accelerator memory. If a model won't fit, prompt to
+    free our llama-servers (or run anyway) before queuing; a fresh run opens the live view, a run
+    started while one is active is queued behind it."""
     app = screen.app
     entry = models.load_registry().get(name)
     pf = preflight.check(entry) if entry else None
 
     def launch(free_first: bool) -> None:
         procs = pf.freeable if (free_first and pf) else None
-        app.push_screen(ReproduceScreen(name, None, app.base_url, challenge_ids=challenge_ids,
-                                        level=level, free_procs=procs))
+        started = app.start_run(name, published_tps=published_tps, challenge_ids=challenge_ids,
+                                level=level, free_procs=procs)
+        if started:
+            app.push_screen(ReproduceScreen())
 
     if pf and not pf.fits_now:
         app.push_screen(PreflightScreen(name, pf, on_proceed=launch))
@@ -467,9 +533,9 @@ class ModelsScreen(ModalScreen):
         ids, lvl = self.app.run_ids(), self.app.selected_level
         scope = f"level [b]{lvl}[/]" if lvl else f"[b]{len(ids)}[/] peakstones"
         with Vertical(id="models"):
-            yield Static(f"[b]Models[/b] — will run {scope}  ·  ⏎/→ expand  ·  r run  ·  l levels  "
+            yield Static(f"[b]Models[/b] — will run {scope}  ·  ⏎ run/queue  ·  → expand  ·  l levels  "
                          "·  d download  ·  a add  ·  Esc close")
-            yield NavTree("models", id="models-tree")
+            yield ModelTree("models", id="models-tree")
             yield ProgressBar(id="dl-bar", show_eta=False)
 
     def on_mount(self) -> None:

@@ -210,8 +210,9 @@ def test_reproduce_screen_shows_result_and_records_history(monkeypatch):
     async def scenario():
         app = Dashboard("http://x")
         async with app.run_test() as pilot:
-            await app.push_screen(ReproduceScreen("qwen3-coder", 100.0, "http://x"))
-            await app.workers.wait_for_complete()
+            app.start_run("qwen3-coder", published_tps=100.0)        # app-level run manager
+            await app.workers.wait_for_complete()                    # run completes on the app worker
+            await app.push_screen(ReproduceScreen())                 # viewer backfills the finished run
             await pilot.pause()
             result = str(app.screen.query_one("#repro-result", Static).render())
             assert "80" in result and "0.8" in result and "submit" in result
@@ -235,6 +236,7 @@ def test_models_screen_run_opens_reproduce(monkeypatch):
     monkeypatch.setattr(R, "reproduce", lambda model, **k: R.ReproduceResult(model, True, your_tps=70.0, note="done"))
     monkeypatch.setattr(history, "append", lambda e: None)
     monkeypatch.setattr(models, "available_quants", lambda repo, **k: [])   # no HF network in tests
+    monkeypatch.setattr("peakstone.dashboard.preflight.check", lambda e: None)   # skip GPU pre-flight
 
     async def scenario():
         app = Dashboard("http://x")
@@ -242,7 +244,7 @@ def test_models_screen_run_opens_reproduce(monkeypatch):
             await pilot.pause()
             await app.push_screen(ModelsScreen())   # the real registry has models -> a selectable row
             await pilot.pause()
-            await pilot.press("r")                   # run the selected model
+            await pilot.press("enter")               # ⏎ runs the selected model (was r)
             await pilot.pause()
             assert isinstance(app.screen, ReproduceScreen)
             await app.workers.wait_for_complete()
@@ -450,7 +452,7 @@ def test_reproduce_screen_routes_generation_stream():
     async def scenario():
         app = Dashboard("http://x")
         async with app.run_test() as pilot:
-            scr = ReproduceScreen("m", None, "http://x")
+            scr = ReproduceScreen()
             await app.push_screen(scr)
             await pilot.pause()
             scr._on_line("   m | py-05-calc          → solving [tests] …")   # progress -> log + sets challenge
@@ -472,7 +474,7 @@ def test_reproduce_screen_coverage_and_rate():
     async def scenario():
         app = Dashboard("http://x")
         async with app.run_test() as pilot:
-            scr = ReproduceScreen("m", None, "http://x", level="smoke")
+            scr = ReproduceScreen()
             await app.push_screen(scr)
             await pilot.pause()
             scr._on_line("Running 1 model(s) over 3 challenge(s). judge=False")   # total parsed from here
@@ -583,6 +585,20 @@ def test_run_with_preflight_routing(monkeypatch):
     asyncio.run(scenario(preflight.Preflight(20.0, 4.3, []), ReproduceScreen))  # fits -> straight to run
 
 
+def test_run_queues_when_active():
+    from peakstone.dashboard.app import Dashboard
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test():
+            app.run_active = True                                  # a run is already in progress
+            started = app.start_run("b", challenge_ids=["x"], level="smoke")
+            assert started is False                               # second run is queued, not started
+            assert [s["name"] for s in app.run_queue] == ["b"] and app.run_queue[0]["level"] == "smoke"
+
+    asyncio.run(scenario())
+
+
 def test_models_screen_shows_caps(monkeypatch):
     from peakstone.dashboard import models
     from peakstone.dashboard.app import Dashboard, ModelsScreen
@@ -626,7 +642,7 @@ def test_level_screen_estimates_and_runs(monkeypatch):
             assert app.screen.query_one("#lvl-tbl", DataTable).row_count >= 5   # smoke..max
             await pilot.press("r")                                              # run selected level
             await pilot.pause()
-            assert isinstance(app.screen, ReproduceScreen) and app.screen.level is not None
+            assert isinstance(app.screen, ReproduceScreen) and app._run_spec["level"] is not None
 
     asyncio.run(scenario())
 
