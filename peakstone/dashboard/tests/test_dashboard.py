@@ -52,7 +52,7 @@ def test_helpers():
 def test_app_renders_filtered_leaderboard(monkeypatch):
     captured = {}
 
-    def fake_get(base_url, *, max_vram_gb=None, sort="code_score", timeout=10):
+    def fake_get(base_url, *, max_vram_gb=None, sort="code_score", collapse="family", timeout=10):
         captured["max_vram_gb"] = max_vram_gb
         captured["sort"] = sort
         return _FAKE
@@ -85,6 +85,34 @@ def test_app_renders_filtered_leaderboard(monkeypatch):
             await app.workers.wait_for_complete()
             await pilot.pause()
             assert captured["max_vram_gb"] is None
+
+    asyncio.run(scenario())
+
+
+def test_board_per_quant_toggle(monkeypatch):
+    from peakstone.dashboard.app import Dashboard
+    captured = {}
+    fake = {"count": 1, "leaderboard": [{"rank": 1, "family": "qz", "code_score": 0.7, "tok_per_s": 80,
+            "n_total": 50, "run": {"artifact": "UD-Q6_K", "vram_gb": 24}}]}
+
+    def get(base, *, max_vram_gb=None, sort="code_score", collapse="family", timeout=10):
+        captured["collapse"] = collapse
+        return fake
+
+    monkeypatch.setattr(client, "get_leaderboard", get)
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert captured["collapse"] == "family"            # default: best per model
+            await pilot.press("g")                             # toggle per-quant
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert captured["collapse"] == "quant"
+            t = app.query_one(DataTable)
+            assert "UD-Q6_K" in str(t.get_row_at(0)[1])        # quant shown in the Model column
 
     asyncio.run(scenario())
 

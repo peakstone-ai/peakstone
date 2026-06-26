@@ -133,6 +133,7 @@ class Dashboard(App):
         ("q", "quit", "Quit"),
         ("r", "refresh", "Refresh"),
         ("f", "toggle_fit", "Fit filter"),
+        ("g", "toggle_quants", "Per-quant"),
         ("s", "cycle_sort", "Sort axis"),
         ("enter", "reproduce", "Reproduce"),
         ("c", "challenges", "Peakstones"),
@@ -147,6 +148,7 @@ class Dashboard(App):
         super().__init__()
         self.base_url = base_url
         self.fit = True          # filter to models that fit my VRAM
+        self.collapse = "family"  # board collapses to best run per model; "quant" = per-quant rows
         self.sort_i = 0
         self._board_rows: list[dict] = []
         # peakstones chosen in the Challenges screen; empty = use the quick default repro set.
@@ -315,6 +317,10 @@ class Dashboard(App):
         self.fit = not self.fit
         self.load_board()
 
+    def action_toggle_quants(self) -> None:
+        self.collapse = "quant" if self.collapse == "family" else "family"
+        self.load_board()
+
     def action_cycle_sort(self) -> None:
         self.sort_i = (self.sort_i + 1) % len(self.SORTS)
         self.load_board()
@@ -367,7 +373,8 @@ class Dashboard(App):
         snap = hardware.snapshot()
         max_vram = snap.max_vram_gb if (self.fit and snap.max_vram_gb) else None
         try:
-            data = client.get_leaderboard(self.base_url, max_vram_gb=max_vram, sort=self.SORTS[self.sort_i])
+            data = client.get_leaderboard(self.base_url, max_vram_gb=max_vram,
+                                           sort=self.SORTS[self.sort_i], collapse=self.collapse)
         except client.APIError as e:
             self.call_from_thread(self._render_error, str(e))
             return
@@ -377,16 +384,21 @@ class Dashboard(App):
         table = self.query_one(DataTable)
         table.clear()
         scope = f"fits ≤{max_vram:g} GB" if max_vram else "all hardware"
+        grouping = "per-quant" if self.collapse == "quant" else "best/model"
         sel = f"  ·  ▶ {len(self.selected_ids)} peakstones selected" if self.selected_ids else ""
-        self.sub_title = (f"{self.base_url}  ·  {scope}  ·  sort: {self.SORTS[self.sort_i]}  ·  "
+        self.sub_title = (f"{self.base_url}  ·  {scope}  ·  {grouping} (g)  ·  sort: {self.SORTS[self.sort_i]}  ·  "
                           f"⏎ reproduce  v quants  c peakstones  m models  u queue{sel}")
         rows = data.get("leaderboard", [])
         self._board_rows = rows
+        per_quant = self.collapse == "quant"
         for r in rows:
             run = r.get("run", {})
             n_total = r.get("n_total")
+            name = r.get("family", "")
+            if per_quant and run.get("artifact"):
+                name = f"{name} · {run['artifact']}"      # distinguish quant rows of the same model
             table.add_row(
-                str(r.get("rank", "")), r.get("family", ""),
+                str(r.get("rank", "")), name,
                 _fmt(r.get("code_score")), _fmt(r.get("agent_score")), _fmt(r.get("planner_score")),
                 _fmt(r.get("tok_per_s"), "{:.0f}"), _fmt(r.get("sol_per_s"), "{:.2f}"),
                 _mem(run.get("vram_used_gb") or run.get("vram_gb"),     # used footprint, total fallback

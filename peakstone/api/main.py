@@ -171,9 +171,11 @@ def _sort_value(row: dict, key: str):
 def leaderboard(db: Session = Depends(get_session), suite: str | None = None,
                 version: str | None = None, max_vram_gb: float | None = None,
                 quant: str | None = None, trust: str | None = None,
-                sort: str = "code_score", order: str | None = None):
+                sort: str = "code_score", order: str | None = None, collapse: str = "family"):
     """Faceted: under the active filters, each family collapses to its best-qualifying run (§6a),
-    then rows are ranked by `sort` (code_score, or an efficiency axis like peak_rss_mb/loc)."""
+    then rows are ranked by `sort` (code_score, or an efficiency axis like peak_rss_mb/loc).
+    collapse='quant' instead keeps the best run per (family, quant) so different quants of a model
+    appear as separate rows."""
     if sort not in SORT_ORDER:
         sort = "code_score"
     if order not in ("asc", "desc"):
@@ -204,16 +206,17 @@ def leaderboard(db: Session = Depends(get_session), suite: str | None = None,
         val = _sort_value(row, sort)
         if val is None:
             continue
-        cur = best.get(fam.name)
+        key = f"{fam.name}\x00{art.artifact}" if collapse == "quant" else fam.name
+        cur = best.get(key)
         better = cur is None or (val > cur["_v"] if order == "desc" else val < cur["_v"])
         if better:
-            best[fam.name] = {**row, "_v": val}
+            best[key] = {**row, "_v": val}
     rows = sorted(best.values(), key=lambda r: r["_v"], reverse=(order == "desc"))
     for i, r in enumerate(rows, 1):
         r["rank"] = i
         r.pop("_v", None)
     return {"filters": {"suite": suite, "version": version, "max_vram_gb": max_vram_gb,
-                        "quant": quant, "trust": trust, "sort": sort, "order": order},
+                        "quant": quant, "trust": trust, "sort": sort, "order": order, "collapse": collapse},
             "count": len(rows), "leaderboard": rows}
 
 

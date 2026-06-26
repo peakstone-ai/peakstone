@@ -25,8 +25,9 @@ def _get(base_url: str, path: str, params: dict, timeout: float) -> dict:
 
 
 def get_leaderboard(base_url: str, *, max_vram_gb: float | None = None,
-                    sort: str = "code_score", timeout: float = 10) -> dict:
-    return _get(base_url, "/leaderboard", {"max_vram_gb": max_vram_gb, "sort": sort}, timeout)
+                    sort: str = "code_score", collapse: str = "family", timeout: float = 10) -> dict:
+    return _get(base_url, "/leaderboard",
+                {"max_vram_gb": max_vram_gb, "sort": sort, "collapse": collapse}, timeout)
 
 
 def get_facets(base_url: str, *, timeout: float = 10) -> dict:

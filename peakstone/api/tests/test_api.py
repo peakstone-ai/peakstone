@@ -101,6 +101,28 @@ def test_coverage_and_sol_per_s(client):
     assert client.get("/leaderboard", params={"sort": "sol_per_s"}).status_code == 200
 
 
+def test_leaderboard_collapse_quant(client):
+    ap, a = _newkey()
+
+    def mk(artifact, sha, f):
+        b = bundle.produce_bundle({"models": ["qz"], "judge": None, "timestamp": artifact,
+                                   "gpu": {"name": "RTX 4090"}},
+                                  [_result(f"qz-{i}", "architecture", f) for i in range(2)], sign=False)
+        b["model"]["family"], b["model"]["artifact"], b["model"]["file_sha256"] = "qz", artifact, sha
+        bundle.sign_inplace(b, ap, a)
+        return b
+
+    assert client.post("/submissions", json=mk("UD-Q4_K_XL", "s4", 0.6)).status_code == 201
+    assert client.post("/submissions", json=mk("UD-Q6_K", "s6", 0.7)).status_code == 201
+    # default: family collapses to its best quant -> one row
+    fam = [r for r in client.get("/leaderboard").json()["leaderboard"] if r["family"] == "qz"]
+    assert len(fam) == 1 and fam[0]["run"]["artifact"] == "UD-Q6_K"
+    # collapse=quant: both quants as separate rows
+    pq = [r for r in client.get("/leaderboard", params={"collapse": "quant"}).json()["leaderboard"]
+          if r["family"] == "qz"]
+    assert {r["run"]["artifact"] for r in pq} == {"UD-Q4_K_XL", "UD-Q6_K"}
+
+
 def test_pubkey_swap_is_rejected(client):
     ap, a = _newkey()
     b = _bundle("pubkeyM", [0.5], 24, ap, a, "PK")
