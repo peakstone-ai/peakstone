@@ -252,6 +252,13 @@ class Dashboard(App):
                             "published_tps": res.published_tps, "code_score": res.code_score, "note": res.note})
             self._run_result = res
             self.call_from_thread(self._viewer_show, res)
+            if res.ok and res.bundle and not self._run_cancelled:   # auto-submit completed runs (for now)
+                try:
+                    status, _ = client.submit_bundle(self.base_url, res.bundle)
+                    msg = {201: "submitted ✓", 409: "already submitted"}.get(status, f"submit: {status}")
+                except Exception as e:  # noqa: BLE001
+                    msg = f"submit failed: {e}"
+                self.call_from_thread(self.notify, f"{spec['name']}: {msg}")
         self.run_active = False
         self._run_phase = None
 
@@ -717,6 +724,9 @@ class QueueScreen(ModalScreen):
             self.app.clear_queued()
             self.notify("cleared the queue")
             self.refill()
+
+    def on_data_table_row_selected(self, _event) -> None:
+        self.action_view()          # ⏎ on a row: the DataTable consumes enter, so route it here
 
     def action_view(self) -> None:
         if self.app.run_active or self.app._run_result is not None:

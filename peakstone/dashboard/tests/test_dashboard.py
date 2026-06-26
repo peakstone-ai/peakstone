@@ -736,6 +736,43 @@ def test_quit_warns_only_when_jobs(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_queue_enter_opens_viewer():
+    from peakstone.dashboard.app import Dashboard, QueueScreen, ReproduceScreen
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            app.run_active = True
+            app._run_spec = {"name": "A", "level": "smoke", "challenge_ids": None,
+                             "published_tps": None, "free_procs": None}
+            await app.push_screen(QueueScreen())
+            await pilot.pause()
+            await pilot.press("enter")          # ⏎ on the active row opens the live run view
+            await pilot.pause()
+            assert isinstance(app.screen, ReproduceScreen)
+
+    asyncio.run(scenario())
+
+
+def test_run_auto_submits(monkeypatch):
+    from peakstone.dashboard import history, client
+    from peakstone.dashboard import reproduce as R
+    from peakstone.dashboard.app import Dashboard
+    monkeypatch.setattr(history, "append", lambda e: None)
+    monkeypatch.setattr(R, "reproduce", lambda model, **k: R.ReproduceResult(model, True, bundle={"bundle_version": "1"}))
+    submitted = []
+    monkeypatch.setattr(client, "submit_bundle", lambda url, b, **k: submitted.append(b) or (201, "ok"))
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test():
+            app.start_run("m")
+            await app.workers.wait_for_complete()
+            assert submitted == [{"bundle_version": "1"}]   # completed run auto-submitted
+
+    asyncio.run(scenario())
+
+
 def test_queue_screen_manage():
     from peakstone.dashboard.app import Dashboard, QueueScreen
     from textual.widgets import DataTable
