@@ -235,6 +235,17 @@ def _sampling(flags: str, run_cfg: dict) -> dict:
     return s
 
 
+def _ctx_override(default):
+    """The served context length: PEAKSTONE_CTX (chosen at run time) overrides the configured ctx."""
+    ov = os.environ.get("PEAKSTONE_CTX")
+    if ov:
+        try:
+            return int(ov)
+        except ValueError:
+            pass
+    return default
+
+
 def model_identity(model_name: str, run_cfg: dict) -> dict:
     """Assemble the model block from serve/models.toml + file hash + engine version (best-effort)."""
     try:
@@ -259,7 +270,8 @@ def model_identity(model_name: str, run_cfg: dict) -> dict:
         "hf_repo": cfg.get("repo", "(unknown)"),
         "file_sha256": sha,
         "file_sha256_verified": verified,
-        "context": cfg.get("ctx"),
+        "context": _ctx_override(cfg.get("ctx")),
+
         "serve_flags": cfg.get("flags", ""),
         "engine": _engine_info(),
         "sampling": _sampling(cfg.get("flags", ""), run_cfg),

@@ -100,6 +100,17 @@ def _mem(vram, ram) -> str:
     return f"{v or r} GB" if (v or r) else "?"
 
 
+def _ctx_k(ctx) -> str:
+    """Context length as K-tokens, e.g. 32768 -> '32K'."""
+    if not isinstance(ctx, (int, float)) or ctx <= 0:
+        return "—"
+    return f"{ctx / 1024:g}K" if ctx >= 1024 else str(int(ctx))
+
+
+# sensible context choices offered when launching a run; None = the model's configured default.
+CTX_CHOICES = [None, 4096, 8192, 16384, 32768, 65536, 131072]
+
+
 def _short_gpu(name: str | None) -> str:
     return (name or "").replace("NVIDIA GeForce ", "").replace("NVIDIA ", "").strip()
 
@@ -193,6 +204,7 @@ class Dashboard(App):
         # set when the selection came from a level shortcut (1-5) — runs via --level so the level's
         # judge/agent/prebuilt settings apply; None for a hand-picked selection (plain id run).
         self.selected_level: str | None = None
+        self.run_ctx: int | None = None         # chosen context length for runs (None = model default)
         # run manager: runs execute on an app-level worker (not the modal) so they survive leaving the
         # run view, and a second run while one is active is queued rather than started concurrently.
         self.run_queue: list[dict] = []
@@ -224,11 +236,11 @@ class Dashboard(App):
         return next((c.spec for c in self.corpus() if c.id == challenge_id), None)
 
     def start_run(self, name: str, *, published_tps=None, challenge_ids=None, level=None,
-                  free_procs=None) -> bool:
+                  free_procs=None, ctx=None) -> bool:
         """Queue a run. Returns True if it started immediately, False if it was queued behind an active
         run. Runs execute one at a time on _run_loop (one model on the GPU at a time)."""
-        self.run_queue.append({"name": name, "published_tps": published_tps,
-                               "challenge_ids": challenge_ids, "level": level, "free_procs": free_procs})
+        self.run_queue.append({"name": name, "published_tps": published_tps, "challenge_ids": challenge_ids,
+                               "level": level, "free_procs": free_procs, "ctx": ctx})
         if self.run_active:
             self.notify(f"queued {name} — {len(self.run_queue)} in queue")
             return False
@@ -250,8 +262,8 @@ class Dashboard(App):
                 preflight.free(spec["free_procs"])
             res = reproduce.reproduce(spec["name"], challenge_ids=spec["challenge_ids"],
                                       level=spec["level"], published_tps=spec["published_tps"],
-                                      on_proc=self._run_procs.append, on_dl_progress=self._dl_progress,
-                                      log=self._run_emit)
+                                      ctx=spec.get("ctx"), on_proc=self._run_procs.append,
+                                      on_dl_progress=self._dl_progress, log=self._run_emit)
             if self._run_cancelled:            # killed mid-run → record as cancelled, move to next
                 res = reproduce.ReproduceResult(spec["name"], False, note="cancelled")
             history.append({"model": res.model, "ok": res.ok, "your_tps": res.your_tps,
@@ -501,9 +513,10 @@ class Dashboard(App):
         cov = f"{n_total}/{self.corpus_total()}" if n_total else "—"
         mem = _mem(run.get("vram_used_gb") or run.get("vram_gb"), run.get("ram_used_gb") or run.get("ram_gb"))
         hw = _hw(run)
+        ctx = f"  {_ctx_k(run.get('context'))} ctx" if run.get("context") else ""
         return (f"{run.get('artifact', '—'):14} c {_fmt(r.get('code_score'))} a {_fmt(r.get('agent_score'))} "
                 f"p {_fmt(r.get('planner_score'))}  {_fmt(r.get('tok_per_s'), '{:.0f}')} tps  "
-                f"{_fmt(r.get('sol_per_s'), '{:.2f}')} sol/s  {mem} used  "
+                f"{_fmt(r.get('sol_per_s'), '{:.2f}')} sol/s  {mem} used{ctx}  "
                 f"{(run.get('trust_tier') or '').replace('-', ' ')}  cov {cov}"
                 + (f"   [dim]{hw}[/]" if hw else ""))
 
@@ -595,9 +608,10 @@ class ReproduceScreen(ModalScreen):
         self._gen_buf, self._gen_ch, self._n_done, self._t0 = "", "", 0, None
         self._n_total = 0 if level else len(ids)
         scope = f"level {level}" if level else f"{len(ids)} peakstones"
+        ctx = f"  ·  ctx {_ctx_k(spec.get('ctx'))}" if spec.get("ctx") else ""
         queued = f"  ·  {len(self.app.run_queue)} queued" if self.app.run_queue else ""
         self.query_one("#repro-title", Static).update(
-            f"[b]Run[/b] {model}  ·  {scope}  ·  published "
+            f"[b]Run[/b] {model}  ·  {scope}{ctx}  ·  published "
             f"{_fmt(spec.get('published_tps'), '{:.0f}')} tok/s{queued}")
         self.query_one("#repro-log", RichLog).clear()
         self.query_one("#repro-gen", Static).update("[dim]model output appears here as it solves each task[/]")
@@ -963,7 +977,7 @@ def run_with_preflight(screen, name: str, *, challenge_ids=None, level=None, pub
     def launch(free_first: bool) -> None:
         procs = pf.freeable if (free_first and pf) else None
         started = app.start_run(name, published_tps=published_tps, challenge_ids=challenge_ids,
-                                level=level, free_procs=procs)
+                                level=level, free_procs=procs, ctx=app.run_ctx)
         if started:
             app.push_screen(ReproduceScreen())
 
@@ -983,16 +997,25 @@ class ModelsScreen(ModalScreen):
     #models-tree { height: 1fr; }
     """
     BINDINGS = [("escape", "dismiss", "Close"), ("a", "add", "Add"),
-                ("l", "levels", "Levels"), ("r", "run", "Run"),
+                ("l", "levels", "Levels"), ("r", "run", "Run"), ("k", "ctx", "Context"),
                 ("v", "quants", "Quants"), ("u", "queue", "Queue")]
 
-    def compose(self) -> ComposeResult:
+    def _header(self) -> str:
         ids, lvl = self.app.run_ids(), self.app.selected_level
         scope = f"level [b]{lvl}[/]" if lvl else f"[b]{len(ids)}[/] peakstones"
+        ctx = f"[b]{_ctx_k(self.app.run_ctx)}[/]" if self.app.run_ctx else "[b]default[/]"
+        return (f"[b]Models[/b] — will run {scope} @ ctx {ctx}  ·  ⏎ expand · download · run  ·  r run  "
+                "·  k ctx  ·  v quants  ·  l levels  ·  a add  ·  u queue  ·  Esc close")
+
+    def compose(self) -> ComposeResult:
         with Vertical(id="models"):
-            yield Static(f"[b]Models[/b] — will run {scope}  ·  ⏎ expand · download · run  ·  r run  "
-                         "·  v quants  ·  l levels  ·  a add  ·  u queue  ·  Esc close")
+            yield Static(self._header(), id="models-hdr")
             yield ModelTree("models", id="models-tree")
+
+    def action_ctx(self) -> None:
+        cur = CTX_CHOICES.index(self.app.run_ctx) if self.app.run_ctx in CTX_CHOICES else 0
+        self.app.run_ctx = CTX_CHOICES[(cur + 1) % len(CTX_CHOICES)]
+        self.query_one("#models-hdr", Static).update(self._header())
 
     def on_mount(self) -> None:
         tree = self.query_one("#models-tree", Tree)

@@ -23,7 +23,7 @@ def _no_hf_network(monkeypatch):
 _FAKE = {"count": 2, "leaderboard": [
     {"rank": 1, "family": "qwen3-coder", "code_score": 0.93, "agent_score": None,
      "planner_score": None, "tok_per_s": 85.0, "sol_per_s": 0.5, "n_total": 50,
-     "run": {"vram_gb": 24, "ram_gb": 64, "vram_used_gb": 24, "ram_used_gb": 26,
+     "run": {"vram_gb": 24, "ram_gb": 64, "vram_used_gb": 24, "ram_used_gb": 26, "context": 32768,
              "gpu": "NVIDIA GeForce RTX 4090", "cpu": "AMD Ryzen 9 7950X 16-Core Processor",
              "trust_tier": "community-verified"}},                       # spilled to RAM
     {"rank": 2, "family": "phi-4-mini", "code_score": 0.42, "agent_score": None,
@@ -46,8 +46,9 @@ def test_helpers():
     assert _bar(2, 4).startswith("[") and "2/4" in _bar(2, 4)
     assert _bar(0, 0).endswith("0/0")          # no div-by-zero
     assert _fmt(0.126) == "0.13" and _fmt(None) == "—" and _fmt(85.0, "{:.0f}") == "85"
-    from peakstone.dashboard.app import _mem, _hw, _short_gpu, _short_cpu
+    from peakstone.dashboard.app import _mem, _hw, _short_gpu, _short_cpu, _ctx_k
     assert _mem(24, 26) == "24/26 GB" and _mem(24, None) == "24 GB" and _mem(None, None) == "?"
+    assert _ctx_k(32768) == "32K" and _ctx_k(65536) == "64K" and _ctx_k(None) == "—"
     assert _short_gpu("NVIDIA GeForce RTX 4090") == "RTX 4090"
     assert _short_cpu("AMD Ryzen 9 7950X 16-Core Processor") == "AMD Ryzen 9 7950X"
     assert _hw({"gpu": "NVIDIA GeForce RTX 4090", "vram_gb": 24,
@@ -80,7 +81,7 @@ def test_app_renders_filtered_leaderboard(monkeypatch):
             assert any("qwen3-coder" in lbl for lbl in fam_labels)
             # the model's quant run is nested under it with its metrics + hardware
             leaf = str(tree.root.children[0].children[0].label)
-            assert "24/26 GB" in leaf and "50/1965" in leaf
+            assert "24/26 GB" in leaf and "50/1965" in leaf and "32K ctx" in leaf
             assert "RTX 4090 24G" in leaf and "Ryzen 9 7950X 64G" in leaf   # hardware it ran on
             # cycling sort re-queries with the next axis
             await pilot.press("s")
@@ -229,7 +230,7 @@ def test_reproduce_orchestration(monkeypatch):
         {"verification": "deterministic-tests", "tok_per_s": 90.0, "score": {"final": 0.5, "passed": 5, "total": 10}},
     ]}
     res = reproduce.reproduce("m", challenge_ids=["a"], published_tps=100.0,
-                              _download=lambda e, log, **k: True, _serve=lambda n: object(),
+                              _download=lambda e, log, **k: True, _serve=lambda n, **k: object(),
                               _wait=lambda p, **k: True, _bench=lambda n, ids, **k: bundle, _stop=lambda p: None)
     assert res.ok and res.your_tps == 85.0 and res.code_score == 0.75
     assert res.passed == 13 and res.total == 20 and res.tps_ratio == 0.85
@@ -239,7 +240,7 @@ def test_reproduce_orchestration(monkeypatch):
     assert reproduce.reproduce("ghost", challenge_ids=["a"]).ok is False
     monkeypatch.setattr(models, "load_registry", lambda: {"m": entry})
     unhealthy = reproduce.reproduce("m", challenge_ids=["a"], _download=lambda e, log, **k: True,
-                                    _serve=lambda n: object(), _wait=lambda p, **k: False,
+                                    _serve=lambda n, **k: object(), _wait=lambda p, **k: False,
                                     _bench=lambda n, ids, **k: bundle, _stop=lambda p: None)
     assert unhealthy.ok is False and "healthy" in unhealthy.note
 
@@ -248,7 +249,7 @@ def test_reproduce_orchestration(monkeypatch):
         def poll(self):
             return 1
     crashed = reproduce.reproduce("m", challenge_ids=["a"], _download=lambda e, log, **k: True,
-                                  _serve=lambda n: _Dead(), _wait=lambda p, proc=None: False,
+                                  _serve=lambda n, **k: _Dead(), _wait=lambda p, proc=None: False,
                                   _bench=lambda n, ids, **k: bundle, _stop=lambda p: None)
     assert crashed.ok is False and "exited before serving" in crashed.note
 
@@ -688,6 +689,61 @@ def test_run_with_preflight_routing(monkeypatch):
     tight = preflight.Preflight(2.0, 4.3, [hardware.GpuProc(111, 22000)])
     asyncio.run(scenario(tight, PreflightScreen))       # won't fit -> prompt
     asyncio.run(scenario(preflight.Preflight(20.0, 4.3, []), ReproduceScreen))  # fits -> straight to run
+
+
+def test_run_ctx_selection_threads_through(monkeypatch):
+    from peakstone.dashboard import models, history
+    from peakstone.dashboard import reproduce as R
+    from peakstone.dashboard.app import Dashboard, ModelsScreen, CTX_CHOICES, run_with_preflight
+    entry = models.ModelEntry("m", "org/r", "models/m/x.gguf", 8081, 32768, "")
+    monkeypatch.setattr(models, "load_registry", lambda: {"m": entry})
+    monkeypatch.setattr(models, "available_quants", lambda repo, **k: [])
+    monkeypatch.setattr("peakstone.dashboard.preflight.check", lambda e: None)
+    monkeypatch.setattr(history, "append", lambda e: None)
+    seen = {}
+    monkeypatch.setattr(R, "reproduce",
+                        lambda model, **k: seen.update(ctx=k.get("ctx")) or R.ReproduceResult(model, True))
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            scr = ModelsScreen()
+            await app.push_screen(scr)
+            await pilot.pause()
+            await pilot.press("k")                              # cycle ctx: default -> 4096
+            await pilot.pause()
+            assert app.run_ctx == CTX_CHOICES[1]
+            run_with_preflight(scr, "m")
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert seen.get("ctx") == CTX_CHOICES[1]            # chosen ctx threaded into the run
+
+    asyncio.run(scenario())
+
+
+def test_serve_passes_ctx_env(monkeypatch, tmp_path):
+    from peakstone.dashboard import reproduce as R
+    monkeypatch.setattr(R, "REPO", tmp_path)
+    (tmp_path / "results").mkdir()
+    captured = {}
+
+    class P:
+        def wait(self):
+            return 0
+
+    def fake_popen(cmd, **kw):
+        captured["env"] = kw.get("env", {})
+        return P()
+
+    R.serve("m", popen=fake_popen, ctx=8192)
+    assert captured["env"].get("PEAKSTONE_CTX") == "8192"
+
+
+def test_bundle_ctx_override(monkeypatch):
+    from peakstone.engine.bundle import _ctx_override
+    assert _ctx_override(32768) == 32768                        # no env -> configured default
+    monkeypatch.setenv("PEAKSTONE_CTX", "8192")
+    assert _ctx_override(32768) == 8192                         # env overrides
 
 
 def test_run_queues_when_active():

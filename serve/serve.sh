@@ -27,7 +27,7 @@ NAME="$1"; shift || true
 
 # pull config for this model out of the TOML registry
 eval "$(python3 - "$NAME" <<'PY'
-import sys, tomllib
+import os, sys, tomllib
 name = sys.argv[1]
 cfg = tomllib.load(open("serve/models.toml", "rb"))
 if name not in cfg:
@@ -36,7 +36,7 @@ m = cfg[name]
 import shlex
 print(f"FILE={shlex.quote(m['file'])}")
 print(f"PORT={m['port']}")
-print(f"CTX={m['ctx']}")
+print(f"CTX={os.environ.get('PEAKSTONE_CTX') or m['ctx']}")   # PEAKSTONE_CTX overrides the configured ctx
 print(f"FLAGS={shlex.quote(m.get('flags',''))}")
 PY
 )"
