@@ -50,6 +50,24 @@ Each run records full per-challenge transcripts and the model/environment metada
 reproduce it. See `peakstone/engine/runner.py --help` for filters (`--lang`, `--type`, `--difficulty`,
 `--ids`) and modes (judge, retries, agents-md, planner eval).
 
+### Offline test sandbox (Linux)
+
+Each test runs **offline**, in a throwaway network namespace (loopback only). This keeps a solution
+that does real network I/O — e.g. a BigCodeBench task that `wget`/HTTP/FTPs past the test's mocks —
+from hanging to the per-challenge timeout: the call fails fast instead.
+
+It uses unprivileged user namespaces, which **Ubuntu's AppArmor disables by default**. Enable them:
+
+```bash
+sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0          # this boot
+echo 'kernel.apparmor_restrict_unprivileged_userns=0' | sudo tee /etc/sysctl.d/99-peakstone.conf   # persist
+# older kernels: kernel.unprivileged_userns_clone=1
+```
+
+Without it the harness still works — it just falls back to a plain subprocess (no network isolation),
+so a runaway network call can burn the full challenge timeout. Verify it's active:
+`unshare -rn -- true` should exit 0. (No-op on macOS, which mocks-or-Docker-isolates instead.)
+
 ### Running on macOS (Apple Silicon)
 
 The harness, dashboard, and serving all run on macOS. The engine auto-detects the platform —
