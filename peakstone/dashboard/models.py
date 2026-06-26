@@ -187,9 +187,10 @@ def _dir_size(d: Path) -> int:
 
 
 def download(entry: ModelEntry, log=lambda s: None, *, progress=None,
-             popen=subprocess.Popen) -> bool:
+             popen=subprocess.Popen, on_proc=None) -> bool:
     """Fetch the GGUF via `hf download`. `progress(done_bytes, total_bytes|None)` is called while it
-    runs (poll of the on-disk size). `popen` is injectable for tests."""
+    runs (poll of the on-disk size). `on_proc(proc)` registers the process so it can be cancelled.
+    `popen` is injectable for tests."""
     if not entry.repo or not entry.file:
         log("no repo/file in registry for this model")
         return False
@@ -203,7 +204,9 @@ def download(entry: ModelEntry, log=lambda s: None, *, progress=None,
     env = {**os.environ, "HF_HUB_ENABLE_HF_TRANSFER": "1"}
     t0 = time.monotonic()
     proc = popen(["hf", "download", entry.repo, filename, "--local-dir", str(local_dir)],
-                 env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+                 env=env, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT, start_new_session=True)
+    if on_proc:
+        on_proc(proc)          # register so a queue-tab cancel can kill the download
     while proc.poll() is None:
         if progress is not None:
             progress(_dir_size(local_dir), total)

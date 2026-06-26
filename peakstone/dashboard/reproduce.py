@@ -136,7 +136,7 @@ def stop(proc) -> None:
 
 
 def reproduce(name: str, *, challenge_ids: list[str] | None = None, level: str | None = None,
-              published_tps: float | None = None, on_proc=None,
+              published_tps: float | None = None, on_proc=None, on_dl_progress=None,
               log=lambda s: None, _serve=serve, _wait=wait_healthy, _bench=bench, _stop=stop,
               _download=models.download) -> ReproduceResult:
     entry = models.load_registry().get(name)
@@ -144,7 +144,7 @@ def reproduce(name: str, *, challenge_ids: list[str] | None = None, level: str |
         return ReproduceResult(name, False, note=f"{name} not in serve/models.toml — add it first")
     if not entry.present:
         log("model file missing; downloading…")
-        if not _download(entry, log):
+        if not _download(entry, log, progress=on_dl_progress, on_proc=on_proc):
             return ReproduceResult(name, False, published_tps=published_tps, note="download failed")
     log(f"serving {name} on :{entry.port} …")
     proc = _serve(name)

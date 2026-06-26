@@ -172,7 +172,7 @@ def test_reproduce_orchestration(monkeypatch):
         {"verification": "deterministic-tests", "tok_per_s": 90.0, "score": {"final": 0.5, "passed": 5, "total": 10}},
     ]}
     res = reproduce.reproduce("m", challenge_ids=["a"], published_tps=100.0,
-                              _download=lambda e, log: True, _serve=lambda n: object(),
+                              _download=lambda e, log, **k: True, _serve=lambda n: object(),
                               _wait=lambda p, **k: True, _bench=lambda n, ids, **k: bundle, _stop=lambda p: None)
     assert res.ok and res.your_tps == 85.0 and res.code_score == 0.75
     assert res.passed == 13 and res.total == 20 and res.tps_ratio == 0.85
@@ -181,7 +181,7 @@ def test_reproduce_orchestration(monkeypatch):
     monkeypatch.setattr(models, "load_registry", lambda: {})
     assert reproduce.reproduce("ghost", challenge_ids=["a"]).ok is False
     monkeypatch.setattr(models, "load_registry", lambda: {"m": entry})
-    unhealthy = reproduce.reproduce("m", challenge_ids=["a"], _download=lambda e, log: True,
+    unhealthy = reproduce.reproduce("m", challenge_ids=["a"], _download=lambda e, log, **k: True,
                                     _serve=lambda n: object(), _wait=lambda p, **k: False,
                                     _bench=lambda n, ids, **k: bundle, _stop=lambda p: None)
     assert unhealthy.ok is False and "healthy" in unhealthy.note
@@ -190,7 +190,7 @@ def test_reproduce_orchestration(monkeypatch):
     class _Dead:
         def poll(self):
             return 1
-    crashed = reproduce.reproduce("m", challenge_ids=["a"], _download=lambda e, log: True,
+    crashed = reproduce.reproduce("m", challenge_ids=["a"], _download=lambda e, log, **k: True,
                                   _serve=lambda n: _Dead(), _wait=lambda p, proc=None: False,
                                   _bench=lambda n, ids, **k: bundle, _stop=lambda p: None)
     assert crashed.ok is False and "exited before serving" in crashed.note
@@ -635,6 +635,53 @@ def test_run_queues_when_active():
             assert [s["name"] for s in app.run_queue] == ["b"] and app.run_queue[0]["level"] == "smoke"
 
     asyncio.run(scenario())
+
+
+def test_job_status_tracks_phase_and_progress():
+    from peakstone.dashboard.app import Dashboard
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test():
+            assert app.job_status() == ""                          # idle
+            app.run_queue = [{"name": "a"}]
+            assert "1 run(s) queued" in app.job_status()
+            app.run_active, app._run_spec, app.run_queue = True, {"name": "qc"}, []
+            # parsing the stream drives the global status
+            app._track("Running 1 model(s) over 5 challenge(s).")
+            assert app._run_total == 5
+            app._track("model file missing; downloading…")
+            app._dl_done, app._dl_total = 30, 100
+            s = app.job_status()
+            assert "⬇" in s and "qc" in s and "downloading" in s   # download phase + bar
+            app._track("   qc | a   → solving [tests] …")
+            app._track("   qc | a   ok  tests 10/10")
+            assert app._run_phase == "run" and app._run_done == 1
+            assert "▶" in app.job_status() and "1/5" in app.job_status()  # run phase + coverage bar
+
+    asyncio.run(scenario())
+
+
+def test_download_registers_proc_for_cancel(monkeypatch, tmp_path):
+    from peakstone.dashboard import models
+    monkeypatch.setattr(models, "REPO", tmp_path)
+    monkeypatch.setattr(models, "remote_size", lambda r, f: None)
+    monkeypatch.setattr(models.time, "sleep", lambda s: None)
+    e = models.ModelEntry("m", "org/r", "models/m/x.gguf", 8081, 32768, "")
+    regd = []
+
+    class FakeProc:
+        returncode = 0
+
+        def __init__(self):
+            self._n = 0
+
+        def poll(self):
+            self._n += 1
+            return None if self._n == 1 else 0
+
+    models.download(e, popen=lambda *a, **k: FakeProc(), on_proc=regd.append)
+    assert len(regd) == 1            # the hf process is registered so a queue-tab cancel can kill it
 
 
 def test_cancel_active_kills_and_marks(monkeypatch):

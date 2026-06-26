@@ -118,6 +118,9 @@ class HardwarePanel(Static):
             lines.append("[yellow]No GPU detected — CPU only[/yellow]")
         lines.append(f"[b]CPU[/b]  {s.cpu_pct:5.1f}%  ({s.cores} cores)")
         lines.append(f"[b]RAM[/b]  {_bar(s.ram_used_mib, s.ram_total_mib)} MiB")
+        job = self.app.job_status()
+        if job:
+            lines.append(job)
         self.update("\n".join(lines))
 
 
@@ -159,8 +162,11 @@ class Dashboard(App):
         self._run_result = None
         self._run_spec: dict | None = None
         self._viewer = None                    # the ReproduceScreen currently viewing the active run
-        self._run_procs: list = []             # serve + bench subprocesses of the active run (for cancel)
+        self._run_procs: list = []             # serve + bench + download subprocesses (for cancel)
         self._run_cancelled = False
+        self._run_phase: str | None = None     # None | "download" | "run" — for the global status line
+        self._run_done = self._run_total = 0   # coverage of the active run
+        self._dl_done = self._dl_total = 0      # bytes of the active download
         self._corpus_total: int | None = None  # total peakstones available (coverage denominator)
 
     def corpus_total(self) -> int:
@@ -191,13 +197,16 @@ class Dashboard(App):
             self.run_active = True
             self._run_spec, self._run_log, self._run_result = spec, [], None
             self._run_procs, self._run_cancelled = [], False
+            self._run_phase, self._run_done, self._run_total = "start", 0, 0
+            self._dl_done = self._dl_total = 0
             self.call_from_thread(self._viewer_reset)
             if spec["free_procs"]:
                 self._run_emit(f"freeing GPU: stopping {len(spec['free_procs'])} llama-server process(es)…")
                 preflight.free(spec["free_procs"])
             res = reproduce.reproduce(spec["name"], challenge_ids=spec["challenge_ids"],
                                       level=spec["level"], published_tps=spec["published_tps"],
-                                      on_proc=self._run_procs.append, log=self._run_emit)
+                                      on_proc=self._run_procs.append, on_dl_progress=self._dl_progress,
+                                      log=self._run_emit)
             if self._run_cancelled:            # killed mid-run → record as cancelled, move to next
                 res = reproduce.ReproduceResult(spec["name"], False, note="cancelled")
             history.append({"model": res.model, "ok": res.ok, "your_tps": res.your_tps,
@@ -205,11 +214,45 @@ class Dashboard(App):
             self._run_result = res
             self.call_from_thread(self._viewer_show, res)
         self.run_active = False
+        self._run_phase = None
+
+    def _dl_progress(self, done, total) -> None:
+        self._dl_done, self._dl_total = done or 0, total or 0
 
     def _run_emit(self, line: str) -> None:
         self._run_log.append(line)
+        self._track(line)
         if self._viewer is not None:
             self.call_from_thread(self._viewer._on_line, line)
+
+    def _track(self, line: str) -> None:
+        """Maintain a coarse job status (phase + coverage) for the global overview, from the stream."""
+        if line.startswith(GEN_MARK):
+            return
+        if "downloading" in line.lower():
+            self._run_phase = "download"
+        elif "→ solving" in line or "benchmarking" in line:
+            self._run_phase = "run"
+        if "→ solving" not in line and " | " in line:
+            self._run_done += 1
+        else:
+            m = re.search(r"over (\d+) challenge", line) or re.search(r":\s*(\d+) challenges", line)
+            if m:
+                self._run_total = int(m.group(1))
+
+    def job_status(self) -> str:
+        """One-line status of the active/queued job for the performance overview (incl. a progress bar)."""
+        if self.run_active:
+            model = (self._run_spec or {}).get("name", "?")
+            queued = f"   ·   {len(self.run_queue)} queued" if self.run_queue else ""
+            if self._run_phase == "download" and self._dl_total:
+                return f"[b]⬇ {model}[/] downloading  {_bar(self._dl_done, self._dl_total)}{queued}"
+            if self._run_total:
+                return f"[b]▶ {model}[/] running  {_bar(self._run_done, self._run_total)} peakstones{queued}"
+            return f"[b]▶ {model}[/] {self._run_phase or 'starting'}…{queued}"
+        if self.run_queue:
+            return f"[dim]{len(self.run_queue)} run(s) queued[/]"
+        return ""
 
     def _viewer_reset(self) -> None:
         if self._viewer is not None:
@@ -371,10 +414,7 @@ class ReproduceScreen(ModalScreen):
     #repro-gen { width: 1fr; }
     #repro-result { height: auto; padding-top: 1; }
     """
-    BINDINGS = [("escape", "dismiss", "Close"), ("s", "submit", "Submit"), ("x", "cancel_run", "Cancel run")]
-
-    def action_cancel_run(self) -> None:
-        self.app.cancel_active()
+    BINDINGS = [("escape", "dismiss", "Close"), ("s", "submit", "Submit")]
 
     def __init__(self):
         super().__init__()
@@ -392,7 +432,7 @@ class ReproduceScreen(ModalScreen):
             yield RichLog(id="repro-log", wrap=True, max_lines=300)
             with VerticalScroll(id="repro-gen-wrap"):
                 yield Static("[dim]model output appears here as it solves each task[/]", id="repro-gen")
-            yield Static("running… (Esc close, run continues · x cancel run)", id="repro-result")
+            yield Static("running… (Esc close, run continues · cancel from the queue tab: u)", id="repro-result")
 
     def on_mount(self) -> None:
         self.app._viewer = self                 # the active run streams into this view
@@ -421,7 +461,7 @@ class ReproduceScreen(ModalScreen):
             f"{_fmt(spec.get('published_tps'), '{:.0f}')} tok/s{queued}")
         self.query_one("#repro-log", RichLog).clear()
         self.query_one("#repro-gen", Static).update("[dim]model output appears here as it solves each task[/]")
-        self.query_one("#repro-result", Static).update("running… (Esc close, run continues · x cancel run)")
+        self.query_one("#repro-result", Static).update("running… (Esc close, run continues · cancel from the queue tab: u)")
 
     def _on_line(self, s: str) -> None:
         """Route a streamed line: generation deltas (control-prefixed) to the output panel, everything
