@@ -114,13 +114,20 @@ def _gw_request(method: str, base_url: str, path: str, body: dict | None = None,
         raise APIError(str(e))
 
 
-def enqueue_job(spec: dict, *, base_url: str = GATEWAY_DEFAULT, timeout: float = 10) -> str:
-    """Queue a benchmark job on the gateway; returns the job id. `spec` keys: model, level|ids, ctx,
-    reasoning, budget."""
-    status, body = _gw_request("POST", base_url, "/jobs", spec, timeout=timeout)
+def enqueue_job(spec: dict, *, kind: str = "run", base_url: str = GATEWAY_DEFAULT,
+                timeout: float = 10) -> str:
+    """Queue a job on the gateway; returns the job id. kind="run" (benchmark; spec keys: model,
+    level|ids, ctx, reasoning, budget) or kind="download" (spec: just model). A run for a model that
+    isn't on disk auto-queues its download on the daemon side."""
+    status, body = _gw_request("POST", base_url, "/jobs", {**spec, "kind": kind}, timeout=timeout)
     if status != 201:
         raise APIError(f"enqueue failed ({status}): {body.get('detail', body)}")
     return body["id"]
+
+
+def download_model(model: str, *, base_url: str = GATEWAY_DEFAULT, timeout: float = 10) -> str:
+    """Queue a model download on the daemon's (separate, concurrent) download queue. Returns job id."""
+    return enqueue_job({"model": model}, kind="download", base_url=base_url, timeout=timeout)
 
 
 def list_jobs(*, base_url: str = GATEWAY_DEFAULT, timeout: float = 10) -> list[dict]:

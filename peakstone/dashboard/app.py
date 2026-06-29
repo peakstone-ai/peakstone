@@ -350,10 +350,13 @@ class Dashboard(App):
         # chosen generation token budget (max_tokens) per model name ("" = global default; None = engine
         # default). Smaller measures efficiency-at-task; larger gives reasoners room not to be truncated.
         self.budget_overrides: dict[str, int | None] = {}
-        # run manager: runs execute on an app-level worker (not the modal) so they survive leaving the
-        # run view, and a second run while one is active is queued rather than started concurrently.
-        self.run_queue: list[dict] = []
+        # run manager: the daemon (peakstone serve) owns the run queue, the download queue, and serving.
+        # This app is a thin FRONTEND — it enqueues jobs and MIRRORS whatever the daemon is currently
+        # running into the live view, so runs survive quitting the TUI. _daemon_jobs is the last-polled
+        # snapshot of the daemon's queues; run_active means "we're mirroring the running benchmark".
         self.run_active = False
+        self._daemon_jobs: list = []
+        self._published_tps_by_model: dict[str, float | None] = {}   # for an adopted run's result line
         self._run_lock = threading.Lock()      # guards queue + run-state across the worker and UI threads
         self._run_log: deque = deque(maxlen=_RUN_LOG_MAX)  # bounded ring of streamed lines (viewer replay)
         self._run_log_n = 0                    # monotonic count of lines emitted this run (viewer cursor)
@@ -387,86 +390,115 @@ class Dashboard(App):
     def challenge_spec(self, challenge_id: str) -> str | None:
         return next((c.spec for c in self.corpus() if c.id == challenge_id), None)
 
-    def start_run(self, name: str, *, published_tps=None, challenge_ids=None, level=None,
-                  free_procs=None, ctx=None, reasoning=None, budget=None, download_only=False) -> bool:
-        """Queue a run. Returns True if it started immediately, False if it was queued behind an active
-        run. Runs execute one at a time on _run_loop (one model on the GPU at a time)."""
-        spec = {"name": name, "published_tps": published_tps, "challenge_ids": challenge_ids,
-                "level": level, "free_procs": free_procs, "ctx": ctx, "reasoning": reasoning,
-                "budget": budget, "download_only": download_only}
-        with self._run_lock:                 # append + active-check atomically vs the drain loop
-            self.run_queue.append(spec)
-            active = self.run_active
-        if active:
-            self.notify(f"queued {name} — {len(self.run_queue)} in queue")
-            return False
-        self._run_loop()
-        return True
+    def _ensure_gateway(self) -> None:
+        try:
+            from peakstone.gateway.launch import ensure_running
+            ensure_running()                       # daemon owns the queues + serving; bring it up
+        except Exception:  # noqa: BLE001
+            pass
 
-    def start_download(self, name: str) -> bool:
-        """Queue a download-only job (no serve/bench) — shares the run queue so it has the same
-        progress bar, cancel, and one-at-a-time ordering as runs."""
-        return self.start_run(name, download_only=True)
+    def start_run(self, name: str, *, published_tps=None, challenge_ids=None, level=None,
+                  free_procs=None, ctx=None, reasoning=None, budget=None, download_only=False):
+        """Enqueue a benchmark on the DAEMON's run queue (the single source of truth) and return its
+        job id (None if the daemon is unreachable). The daemon serializes runs on the GPU and
+        auto-downloads a missing model first; this app just mirrors whatever it's running. free_procs
+        is unused now that the daemon owns serving (it swaps models itself)."""
+        if download_only:
+            return self.start_download(name)
+        self._ensure_gateway()
+        spec = {"model": name}
+        for k, v in (("ids", challenge_ids), ("level", level), ("ctx", ctx),
+                     ("reasoning", reasoning), ("budget", budget)):
+            if v is not None:
+                spec[k] = v
+        try:
+            jid = client.enqueue_job(spec, kind="run")
+        except client.APIError as e:
+            self.notify(f"gateway unreachable: {e}")
+            return None
+        self._published_tps_by_model[name] = published_tps
+        self.notify(f"queued {name}")
+        self._refresh_daemon_jobs()                # pick it up (adopt + mirror) promptly
+        return jid
+
+    def start_download(self, name: str):
+        """Enqueue a model download on the daemon's SEPARATE (concurrent) download queue. Returns the
+        job id, or None if the daemon is unreachable."""
+        self._ensure_gateway()
+        try:
+            jid = client.download_model(name)
+        except client.APIError as e:
+            self.notify(f"gateway unreachable: {e}")
+            return None
+        self.notify(f"queued download: {name}")
+        self._refresh_daemon_jobs()
+        return jid
+
+    def _begin_run_locked(self, spec: dict) -> None:
+        """Reset the active-run state for `spec`. MUST hold self._run_lock (called from the mirror
+        worker when it adopts the daemon's running benchmark)."""
+        self.run_active = True
+        self._run_spec, self._run_result, self._run_submitted = spec, None, None
+        self._run_log, self._run_log_n = deque(maxlen=_RUN_LOG_MAX), 0
+        self._run_procs, self._run_cancelled = [], False
+        self._run_phase, self._run_done, self._run_total, self._run_t0 = "start", 0, 0, None
+        self._run_tps = None
+        self._run_gen_phase = None        # "thinking" | "answering" — the model's live channel
+        self._dl_done = self._dl_total = 0
+
+    def _daemon_running_job(self) -> dict | None:
+        """The benchmark the daemon is currently running, from the last poll snapshot (None if idle)."""
+        return next((j for j in self._daemon_jobs
+                     if j.get("status") == "running" and j.get("kind", "run") == "run"), None)
+
+    @work(thread=True, exclusive=True, group="daemon-poll")
+    def _refresh_daemon_jobs(self) -> None:
+        """Poll the daemon's queues into self._daemon_jobs (read by the overview, status bar, and queue
+        screen), then — if we're idle and the daemon is running a benchmark — start the mirror loop so
+        its live output shows here. This is the ONE place run state enters the TUI."""
+        try:
+            self._daemon_jobs = client.list_jobs(timeout=3)
+        except client.APIError:
+            self._daemon_jobs = []
+        with self._run_lock:
+            idle = not self.run_active
+        if idle and self._daemon_running_job() is not None:
+            self._mirror_loop()
 
     @work(thread=True, exclusive=True, group="run")
-    def _run_loop(self) -> None:
+    def _mirror_loop(self) -> None:
+        """Mirror the daemon's running benchmark into the live view, then move on to the next one. All
+        run logic lives in the daemon; this only streams its log + shows the finished result."""
         while True:
-            with self._run_lock:             # pop + reset run-state atomically (no race with start_run/cancel)
-                if not self.run_queue:
+            job = self._daemon_running_job()
+            if job is None:
+                with self._run_lock:
                     self.run_active, self._run_phase = False, None
-                    return
-                spec = self.run_queue.pop(0)
-                self.run_active = True
-                self._run_spec, self._run_result, self._run_submitted = spec, None, None
-                self._run_log, self._run_log_n = deque(maxlen=_RUN_LOG_MAX), 0
-                self._run_procs, self._run_cancelled = [], False
-                self._run_phase, self._run_done, self._run_total, self._run_t0 = "start", 0, 0, None
-                self._run_tps = None
-                self._run_gen_phase = None        # "thinking" | "answering" — the model's live channel
-                self._dl_done = self._dl_total = 0
+                return
+            jspec = job.get("spec") or {}
+            name = jspec.get("model", "?")
+            spec = {"name": name, "published_tps": self._published_tps_by_model.get(name),
+                    "level": jspec.get("level"), "download_only": False}
+            with self._run_lock:
+                self._begin_run_locked(spec)
             self.call_from_thread(self._viewer_reset)
-            if spec.get("download_only"):       # a queued download job — fetch weights, no serve/bench
-                res = reproduce.fetch(spec["name"], on_proc=self._run_procs.append,
-                                      on_dl_progress=self._dl_progress, log=self._run_emit,
-                                      cancel=lambda: self._run_cancelled)
-                if self._run_cancelled:
-                    res = reproduce.ReproduceResult(spec["name"], False, download=True, note="cancelled")
-                self._run_result = res
-                self.call_from_thread(self._viewer_show, res)
-                self.call_from_thread(self.notify, f"{spec['name']}: {res.note}")
-                continue
-            # Benchmark runs execute in the gateway daemon (peakstone serve) — the queue + serving live
-            # there, so the run survives the TUI quitting. We mirror the daemon's log into the same
-            # stream the viewer already parses; the daemon owns serving (no local serve.sh to free).
-            res = self._run_via_daemon(spec)
+            res = self._mirror_job(job["id"], name, spec["published_tps"])
             history.append({"model": res.model, "ok": res.ok, "your_tps": res.your_tps,
                             "published_tps": res.published_tps, "code_score": res.code_score, "note": res.note})
             self._run_result = res
             self.call_from_thread(self._viewer_show, res)
             if res.ok and self._run_submitted and not self._run_cancelled:  # the daemon auto-submits
-                self.call_from_thread(self.notify, f"{spec['name']}: submitted ✓")
+                self.call_from_thread(self.notify, f"{name}: submitted ✓")
                 self.call_from_thread(self.load_board)        # pull the new result into the leaderboard
+            try:                                # refresh so the loop sees the now-finished status
+                self._daemon_jobs = client.list_jobs(timeout=3)
+            except client.APIError:
+                pass
 
-    def _run_via_daemon(self, spec: dict):
-        """Enqueue a benchmark on the gateway daemon and mirror its log into the run viewer. The run
-        lives in the daemon, so quitting the TUI or dropping the stream never stops it."""
+    def _mirror_job(self, jid: str, name: str, published_tps):
+        """Stream a daemon job's log into the run viewer and build its result. Used both for runs this
+        TUI enqueued and for ones it adopted (CLI-launched). Dropping the stream never stops the run."""
         gw = client.GATEWAY_DEFAULT
-        try:
-            from peakstone.gateway.launch import ensure_running
-            ensure_running()                       # make sure the daemon is up before we enqueue
-        except Exception:  # noqa: BLE001
-            pass
-        job_spec = {"model": spec["name"]}
-        for src, dst in (("challenge_ids", "ids"), ("level", "level"), ("ctx", "ctx"),
-                         ("reasoning", "reasoning"), ("budget", "budget")):
-            if spec.get(src) is not None:
-                job_spec[dst] = spec[src]
-        published_tps = spec.get("published_tps")
-        try:
-            jid = client.enqueue_job(job_spec, base_url=gw)
-        except client.APIError as e:
-            return reproduce.ReproduceResult(spec["name"], False, published_tps=published_tps,
-                                             note=f"gateway unreachable: {e}")
         with self._run_lock:
             self._run_job_id = jid
         try:
@@ -484,10 +516,10 @@ class Dashboard(App):
         with self._run_lock:
             self._run_job_id = None
         if self._run_cancelled:
-            return reproduce.ReproduceResult(spec["name"], False, published_tps=published_tps,
+            return reproduce.ReproduceResult(name, False, published_tps=published_tps,
                                              note="cancelled")
         if not job:
-            return reproduce.ReproduceResult(spec["name"], False, published_tps=published_tps,
+            return reproduce.ReproduceResult(name, False, published_tps=published_tps,
                                              note="job not found")
         summary = job.get("summary") or {}
         self._run_submitted = summary.get("submitted")
@@ -501,7 +533,7 @@ class Dashboard(App):
         except (OSError, ValueError):
             pass
         return reproduce.ReproduceResult(
-            spec["name"], job.get("status") == "done", your_tps=summary.get("your_tps"),
+            name, job.get("status") == "done", your_tps=summary.get("your_tps"),
             published_tps=published_tps, code_score=summary.get("code_score"),
             passed=summary.get("passed", 0), total=summary.get("total", 0),
             note=job.get("status") or "?", bundle=bundle)
@@ -553,11 +585,12 @@ class Dashboard(App):
     def run_progress(self) -> dict:
         """Atomic snapshot of the active run's progress (for the overview + run view)."""
         with self._run_lock:
-            return {"active": self.run_active, "model": (self._run_spec or {}).get("name", "?"),
+            snap = {"active": self.run_active, "model": (self._run_spec or {}).get("name", "?"),
                     "phase": self._run_phase, "done": self._run_done, "total": self._run_total,
                     "t0": self._run_t0, "tps": self._run_tps, "gen_phase": self._run_gen_phase,
-                    "dl_done": self._dl_done, "dl_total": self._dl_total,
-                    "queued": len(self.run_queue)}
+                    "dl_done": self._dl_done, "dl_total": self._dl_total}
+        snap["queued"] = self.queued_count()       # from the daemon snapshot, outside the run lock
+        return snap
 
     def job_status(self) -> str:
         """One-line status of the active/queued job for the performance overview (incl. a progress bar)."""
@@ -585,17 +618,14 @@ class Dashboard(App):
             self._viewer.show_result(res)
 
     def cancel_active(self) -> bool:
-        """Stop the active run: cancel its daemon job (benchmark) and/or kill local download
-        subprocesses, so the run loop unblocks and advances. False if nothing is running."""
+        """Cancel the benchmark we're mirroring by telling the daemon to kill it. False if nothing is
+        being mirrored. (The daemon's run worker then advances to the next ready run.)"""
         with self._run_lock:
             if not self.run_active:
                 self.notify("no active run")
                 return False
             self._run_cancelled = True
-            procs = list(self._run_procs)
             jid = self._run_job_id
-        for p in procs:                            # local download procs
-            reproduce.stop(p)
         if jid:
             try:
                 client.cancel_job(jid)             # tell the daemon to kill the benchmark
@@ -605,32 +635,30 @@ class Dashboard(App):
         return True
 
     def shutdown_runs(self) -> None:
-        """Called on quit. Stops MIRRORING the active run and kills local download subprocesses — but
-        deliberately does NOT cancel the daemon's benchmark job: that's the whole point of decoupling,
-        the run keeps going and can be reattached next launch."""
+        """Called on quit. Stops MIRRORING — but deliberately does NOT cancel the daemon's job: that's
+        the whole point of the decoupling, the run keeps going and is re-adopted next launch."""
         with self._run_lock:
             self._run_cancelled = True             # breaks the log-mirroring loop; daemon job lives on
-            procs = list(self._run_procs)
-        for p in procs:
-            reproduce.stop(p)
 
-    # queue management (the QueueScreen drives these) — locked vs the drain loop on the run worker
-    def cancel_queued(self, i: int):
-        with self._run_lock:
-            return self.run_queue.pop(i) if 0 <= i < len(self.run_queue) else None
+    # queue management (the QueueScreen drives these) — they act on the daemon's queues over HTTP.
+    def cancel_daemon_job(self, jid: str) -> bool:
+        try:
+            return client.cancel_job(jid)
+        except client.APIError:
+            return False
 
-    def clear_queued(self) -> None:
-        with self._run_lock:
-            self.run_queue.clear()
+    def clear_queued(self) -> int:
+        """Cancel every queued (not-yet-running) job on the daemon — runs and downloads alike."""
+        n = 0
+        for j in self._daemon_jobs:
+            if j.get("status") == "queued" and self.cancel_daemon_job(j["id"]):
+                n += 1
+        return n
 
-    def move_queued(self, i: int, delta: int) -> int:
-        """Reorder a queued run; returns its new index (unchanged if the move was out of bounds)."""
-        with self._run_lock:
-            j = i + delta
-            if 0 <= i < len(self.run_queue) and 0 <= j < len(self.run_queue):
-                self.run_queue[i], self.run_queue[j] = self.run_queue[j], self.run_queue[i]
-                return j
-            return i
+    def queued_count(self) -> int:
+        """Number of queued benchmark runs on the daemon (for the overview / status bar)."""
+        return sum(1 for j in self._daemon_jobs
+                   if j.get("status") == "queued" and j.get("kind", "run") == "run")
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -645,6 +673,10 @@ class Dashboard(App):
         tree.auto_expand = False
         self.load_board()
         tree.focus()
+        # Poll the daemon's queues: adopt+mirror any benchmark it's already running (CLI-launched, or
+        # left from a prior session) and keep the snapshot fresh for the overview / status bar / queue.
+        self._refresh_daemon_jobs()
+        self.set_interval(3.0, self._refresh_daemon_jobs)
 
     def action_refresh(self) -> None:
         self.load_board()
@@ -664,11 +696,10 @@ class Dashboard(App):
         self.push_screen(QueueScreen())
 
     def action_quit(self) -> None:
-        """Warn before quitting while runs are active/queued — quitting kills the run subprocesses."""
-        if self.run_active or self.run_queue:
-            self.push_screen(ConfirmQuitScreen())
-        else:
-            self.exit()
+        """Quitting is safe — the daemon owns the queues + serving, so any run keeps going and is
+        re-adopted next launch. Just stop mirroring and exit."""
+        self.shutdown_runs()
+        self.exit()
 
     def action_history(self) -> None:
         self.push_screen(HistoryScreen())
@@ -964,7 +995,8 @@ class ReproduceScreen(ModalScreen):
         scope = "download" if spec.get("download_only") else (f"level {level}" if level else f"{len(ids)} peakstones")
         ctx = f"  ·  ctx {_ctx_k(spec.get('ctx'))}" if spec.get("ctx") else ""
         budget = f"  ·  budget {_ctx_k(spec.get('budget'))}" if spec.get("budget") else ""
-        queued = f"  ·  {len(self.app.run_queue)} queued" if self.app.run_queue else ""
+        _nq = self.app.queued_count()
+        queued = f"  ·  {_nq} queued" if _nq else ""
         self.query_one("#repro-title", Static).update(
             f"[b]Run[/b] {model}  ·  {scope}{ctx}{budget}  ·  published "
             f"{_fmt(spec.get('published_tps'), '{:.0f}')} tok/s{queued}")
@@ -1222,72 +1254,61 @@ class ConfirmScreen(ModalScreen):
         self._on_yes()
 
 
-class ConfirmQuitScreen(ModalScreen):
-    """Confirm quitting while runs are active/queued (quitting kills the run subprocesses)."""
-    CSS = """
-    ConfirmQuitScreen { align: center middle; }
-    #confirmquit { width: 64; height: auto; border: thick $warning; background: $surface; padding: 1; }
-    """
-    BINDINGS = [("escape", "dismiss", "Cancel"), ("y", "confirm", "Quit"), ("q", "confirm", "Quit")]
-
-    def compose(self) -> ComposeResult:
-        parts = []
-        if self.app.run_active:
-            parts.append("1 active run")
-        if self.app.run_queue:
-            parts.append(f"{len(self.app.run_queue)} queued")
-        with Vertical(id="confirmquit"):
-            yield Static(f"[b yellow]Jobs still running[/] ({' · '.join(parts)})\n"
-                         "Quitting will stop them.  [b]y[/] quit  ·  [b]Esc[/] cancel")
-
-    def action_confirm(self) -> None:
-        self.app.shutdown_runs()
-        self.app.exit()
-
-
 class QueueScreen(ModalScreen):
-    """Run queue manager: the active run plus what's waiting. Cancel/reorder queued runs, or open the
-    live view of the active one. Refreshes as runs auto-dequeue."""
+    """The daemon's queues, live: the running benchmark, runs waiting behind it, and the separate
+    download queue. Cancel any job, or open the live view of the running one."""
     CSS = """
     QueueScreen { align: center middle; }
-    #queue { width: 86; height: 24; border: thick $accent; background: $surface; padding: 1; }
+    #queue { width: 90; height: 26; border: thick $accent; background: $surface; padding: 1; }
     #q-tbl { height: 1fr; }
     #q-note { height: auto; padding-top: 1; }
     """
-    BINDINGS = [("escape", "dismiss", "Close"), ("enter", "view", "View active"),
-                ("x", "cancel", "Cancel"), ("c", "clear", "Clear queued"),
-                ("shift+up", "move_up", "Up"), ("shift+down", "move_down", "Down")]
+    BINDINGS = [("escape", "dismiss", "Close"), ("enter", "view", "View running"),
+                ("x", "cancel", "Cancel"), ("c", "clear", "Clear queued")]
+
+    _MARK = {"running": "▶", "queued": "·", "done": "✓", "failed": "✗",
+             "cancelled": "∅", "interrupted": "⚠"}
 
     def compose(self) -> ComposeResult:
         with Vertical(id="queue"):
-            yield Static("[b]Run queue[/b]  ·  ⏎ view active  ·  x cancel  ·  c clear  ·  "
-                         "shift+↑/↓ reorder  ·  Esc close")
+            yield Static("[b]Daemon queues[/b]  ·  ⏎ view running  ·  x cancel  ·  c clear queued  ·  Esc close")
             yield DataTable(id="q-tbl", cursor_type="row", zebra_stripes=True)
             yield Static("", id="q-note")
 
     def on_mount(self) -> None:
-        self.query_one("#q-tbl", DataTable).add_columns("#", "Status", "Model", "Scope")
+        self.query_one("#q-tbl", DataTable).add_columns("Queue", "Status", "Model", "Scope")
         self._sig = None
-        self._map: list = []     # row -> ("active", None) | ("queue", queue_index)
+        self._map: list = []     # row -> ("active", None) | ("daemon", job_id)
         self.refill()
-        self.set_interval(1.0, self._tick)   # reflect auto-dequeue / completion while open
+        self.app._refresh_daemon_jobs()                 # freshen the app's snapshot now
+        self.set_interval(1.5, self._tick)              # rebuild when the snapshot changes
+        self.set_interval(2.0, self.app._refresh_daemon_jobs)   # keep the daemon snapshot fresh
 
     @staticmethod
-    def _scope(spec: dict) -> str:
-        if spec.get("download_only"):
-            return "⬇ download"
-        scope = f"level {spec['level']}" if spec.get("level") else \
-                f"{len(spec.get('challenge_ids') or REPRODUCE_IDS)} peakstones"
-        e = models.load_registry().get(spec["name"])
-        return (scope if (e and e.present) else f"⬇ download + {scope}")   # job downloads first
+    def _job_scope(job: dict) -> str:
+        spec = job.get("spec") or {}
+        if spec.get("level"):
+            return f"level {spec['level']}"
+        if spec.get("ids"):
+            return f"{len(spec['ids'])} peakstones"
+        s = job.get("summary") or {}
+        if s.get("total"):
+            return f"{s.get('passed', '')}/{s.get('total', '')}"
+        return s.get("note", "") if s else ""
 
     def _signature(self):
         app = self.app
-        return (app.run_active, app._run_spec and app._run_spec["name"], tuple(s["name"] for s in app.run_queue))
+        dmn = tuple((j.get("id"), j.get("status"), j.get("kind", "run")) for j in app._daemon_jobs)
+        return (app.run_active, app._run_spec and app._run_spec["name"], app._run_job_id, dmn)
 
     def _tick(self) -> None:
         if self._signature() != self._sig:   # only rebuild when something changed (keeps the cursor)
             self.refill()
+
+    def _add(self, t, label: str, job: dict) -> None:
+        t.add_row(label, self._MARK.get(job.get("status"), "?"),
+                  (job.get("spec") or {}).get("model", "?"), self._job_scope(job))
+        self._map.append(("daemon", job["id"]))
 
     def refill(self) -> None:
         t = self.query_one("#q-tbl", DataTable)
@@ -1295,19 +1316,37 @@ class QueueScreen(ModalScreen):
         t.clear()
         self._map = []
         app = self.app
-        if app.run_active and app._run_spec:
-            t.add_row("▶", "running", app._run_spec["name"], self._scope(app._run_spec))
+        jobs = list(app._daemon_jobs)
+        runs = [j for j in jobs if j.get("kind", "run") == "run"]
+        dls = [j for j in jobs if j.get("kind") == "download"]
+        # The benchmark we're actively mirroring — shown from local state so it stays visible even if
+        # the snapshot momentarily omits it.
+        if app.run_active and app._run_spec and app._run_job_id is None:
+            t.add_row("run", "▶", app._run_spec["name"], "running")
             self._map.append(("active", None))
-        for i, spec in enumerate(app.run_queue):
-            t.add_row(str(i + 1), "queued", spec["name"], self._scope(spec))
-            self._map.append(("queue", i))
+        # Run queue: the running benchmark, then those waiting behind it (GPU, one at a time).
+        for j in sorted((r for r in runs if r.get("status") in ("running", "queued")),
+                        key=lambda j: (j.get("status") != "running", j.get("created") or 0)):
+            self._add(t, "run", j)
+        # Download queue: separate + concurrent.
+        for j in sorted((d for d in dls if d.get("status") in ("running", "queued")),
+                        key=lambda j: (j.get("status") != "running", j.get("created") or 0)):
+            self._add(t, "⬇ dl", j)
+        # A few most-recent finished jobs for context (either queue).
+        done = [j for j in jobs if j.get("status") in ("done", "failed", "cancelled", "interrupted")]
+        for j in sorted(done, key=lambda j: j.get("finished") or 0, reverse=True)[:6]:
+            self._add(t, "⬇ dl" if j.get("kind") == "download" else "run", j)
         if not self._map:
-            t.add_row("", "idle", "(no runs queued)", "")
+            t.add_row("", "idle", "(nothing queued)", "")
         else:
             t.move_cursor(row=min(cur or 0, len(self._map) - 1))
         self._sig = self._signature()
+        n_rq = sum(1 for j in runs if j.get("status") == "queued")
+        n_dl = sum(1 for j in dls if j.get("status") in ("queued", "running"))
+        n_r = sum(1 for j in runs if j.get("status") == "running")
         self.query_one("#q-note", Static).update(
-            f"[b]{len(app.run_queue)}[/] queued" + ("  ·  1 running" if app.run_active else ""))
+            f"[b]{n_rq}[/] runs queued" + (f"  ·  {n_r} running" if n_r else "")
+            + (f"  ·  [b]{n_dl}[/] downloads" if n_dl else ""))
 
     def _selected(self):
         t = self.query_one("#q-tbl", DataTable)
@@ -1316,21 +1355,20 @@ class QueueScreen(ModalScreen):
         return self._map[t.cursor_row]
 
     def action_cancel(self) -> None:
-        kind, idx = self._selected()
-        if kind == "queue":
-            spec = self.app.cancel_queued(idx)
-            if spec:
-                self.notify(f"cancelled {spec['name']}")
-            self.refill()
-        elif kind == "active":
-            self.app.cancel_active()          # kill its subprocesses; the run loop advances to the next
-            self.refill()
+        kind, ref = self._selected()
+        if kind == "active" or (kind == "daemon" and ref == self.app._run_job_id):
+            self.app.cancel_active()              # the one we're mirroring → stop mirror + kill daemon job
+        elif kind == "daemon":
+            if self.app.cancel_daemon_job(ref):
+                self.notify("cancelled")
+        self.app._refresh_daemon_jobs()
+        self.refill()
 
     def action_clear(self) -> None:
-        if self.app.run_queue:
-            self.app.clear_queued()
-            self.notify("cleared the queue")
-            self.refill()
+        n = self.app.clear_queued()
+        self.notify(f"cancelled {n} queued job(s)" if n else "nothing queued")
+        self.app._refresh_daemon_jobs()
+        self.refill()
 
     def on_data_table_row_selected(self, _event) -> None:
         self.action_view()          # ⏎ on a row: the DataTable consumes enter, so route it here
@@ -1339,21 +1377,7 @@ class QueueScreen(ModalScreen):
         if self.app.run_active or self.app._run_result is not None:
             self.app.push_screen(ReproduceScreen())
         else:
-            self.notify("no active run")
-
-    def action_move_up(self) -> None:
-        self._move(-1)
-
-    def action_move_down(self) -> None:
-        self._move(1)
-
-    def _move(self, delta: int) -> None:
-        kind, idx = self._selected()
-        if kind == "queue":
-            self.app.move_queued(idx, delta)
-            self.refill()
-            t = self.query_one("#q-tbl", DataTable)
-            t.move_cursor(row=min(max((1 if self.app.run_active else 0) + idx + delta, 0), len(self._map) - 1))
+            self.notify("no run is being mirrored")
 
 
 class AddModelScreen(ModalScreen):
@@ -2174,10 +2198,8 @@ class QuantScreen(ModalScreen):
             except Exception as ex:  # noqa: BLE001
                 self.notify(f"register failed: {ex}")
                 return
-        started = self.app.start_download(entry.name)   # queue it like any other job (progress bar + cancel)
+        started = self.app.start_download(entry.name)   # download runs on the daemon's download queue
         if started:
-            self.app.push_screen(ReproduceScreen())     # open the live view so the progress bar is visible
-        else:
             self.notify(f"queued download: {entry.name} — open the queue (u) to watch it")
         self.app.call_from_thread(self.load)
 

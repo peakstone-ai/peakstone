@@ -51,6 +51,8 @@ def jobs_main(argv: list[str] | None = None) -> int:
     p_add.add_argument("--ctx", type=int)
     p_add.add_argument("--reasoning", help="off | on | <int> thinking-token cap")
     p_add.add_argument("--budget", type=int, help="max generation tokens")
+    p_dl = sub.add_parser("download", help="queue a model download (separate, concurrent queue)")
+    p_dl.add_argument("model")
     sub.add_parser("list", help="list jobs")
     p_cancel = sub.add_parser("cancel", help="cancel a queued/running job")
     p_cancel.add_argument("id")
@@ -73,11 +75,15 @@ def jobs_main(argv: list[str] | None = None) -> int:
                 spec["budget"] = args.budget
             jid = client.enqueue_job(spec, base_url=args.gateway)
             print(f"queued {jid}")
+        elif args.cmd == "download":
+            jid = client.download_model(args.model, base_url=args.gateway)
+            print(f"queued download {jid}")
         elif args.cmd == "list":
             for j in client.list_jobs(base_url=args.gateway):
                 s = j.get("summary") or {}
                 extra = f"  {s.get('passed','')}/{s.get('total','')}" if s.get("total") else ""
-                print(f"{j['id']}  {j['status']:<11} {(j.get('spec') or {}).get('model','?')}{extra}")
+                print(f"{j['id']}  {j.get('kind','run'):<8} {j['status']:<11} "
+                      f"{(j.get('spec') or {}).get('model','?')}{extra}")
         elif args.cmd == "cancel":
             print("cancelled" if client.cancel_job(args.id, base_url=args.gateway) else "not cancellable")
         elif args.cmd == "logs":

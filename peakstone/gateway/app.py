@@ -45,7 +45,7 @@ def _default_submit(bundle: dict) -> tuple[int, str]:
 def build_app(*, manager: ModelManager | None = None, idle_timeout: float = 0.0,
               client: httpx.AsyncClient | None = None, token: str | None = None,
               self_url: str | None = None, store: JobStore | None = None, submit=_default_submit,
-              start_worker: bool = True) -> FastAPI:
+              present=None, start_worker: bool = True) -> FastAPI:
     """Construct the gateway app. Pass `manager`/`client`/`store`/`token` to inject them (tests stub
     them so no real llama-server or runner is launched); otherwise defaults are created on startup. An
     injected client is left for the caller to close. `token` empty string disables auth."""
@@ -59,7 +59,7 @@ def build_app(*, manager: ModelManager | None = None, idle_timeout: float = 0.0,
             timeout=httpx.Timeout(connect=10.0, read=None, write=None, pool=None))
         url = self_url or f"http://127.0.0.1:{load_gateway_config()['port']}"
         app.state.jobs = JobManager(store or JobStore(), app.state.manager, gateway_url=url,
-                                    submit=submit)
+                                    submit=submit, present=present)
         app.state.manager.start()
         if start_worker:
             app.state.jobs.start()
@@ -166,14 +166,20 @@ def build_app(*, manager: ModelManager | None = None, idle_timeout: float = 0.0,
 
     @app.post("/jobs", status_code=201, dependencies=auth_dep)
     async def enqueue_job(spec: dict):
+        """Queue a benchmark run (default) or a download. `kind` in the body selects the queue:
+        "run" (GPU-serialized) or "download" (concurrent). A run for a model that isn't on disk yet
+        auto-queues its download — so the client can just ask to run it."""
         mgr: ModelManager = app.state.manager
+        kind = spec.pop("kind", "run")
+        if kind not in ("run", "download"):
+            raise HTTPException(status_code=400, detail=f"unknown job kind {kind!r}")
         model = spec.get("model")
         if not model:
             raise HTTPException(status_code=400, detail="job spec is missing the 'model' field")
         if model not in mgr.registry():
             raise HTTPException(status_code=404, detail=f"unknown model {model!r} — see GET /v1/models")
-        jid = app.state.jobs.enqueue(spec)
-        return {"id": jid, "status": "queued"}
+        jid = app.state.jobs.enqueue(spec, kind=kind)
+        return {"id": jid, "kind": kind, "status": "queued"}
 
     @app.get("/jobs", dependencies=auth_dep)
     async def list_jobs():

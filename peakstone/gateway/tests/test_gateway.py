@@ -220,9 +220,10 @@ def test_pin_surfaces_in_http_503():
 
 # --- jobs: REST surface (worker off) ----------------------------------------------------------
 
-def test_jobs_rest_lifecycle():
+def test_jobs_rest_lifecycle(tmp_path):
     mgr = make_manager()
-    with client_for(mgr, mock_client([])) as c:
+    with client_for(mgr, mock_client([]), store=JobStore(tmp_path / "jobs.db"),
+                    present=lambda *_: True) as c:
         r = c.post("/jobs", json={"model": "model-a", "ids": ["x"]})
         assert r.status_code == 201
         jid = r.json()["id"]
@@ -246,14 +247,15 @@ def _fake_stream_ok(cmd, *, out, timeout, env_extra=None, log=lambda s: None, on
                          "score": {"final": 1.0, "passed": 3, "total": 3}, "tok_per_s": 50.0}]}
 
 
-def test_job_runs_to_completion(monkeypatch):
+def test_job_runs_to_completion(monkeypatch, tmp_path):
     import peakstone.engine.serving as serving
     monkeypatch.setattr(serving, "stream_runner", _fake_stream_ok)
 
     async def scenario():
         mgr = make_manager()
-        store = JobStore()                                     # defaults to PEAKSTONE_REPO/results
-        jm = JobManager(store, mgr, gateway_url="http://127.0.0.1:11434", submit=None)
+        store = JobStore(tmp_path / "jobs.db")                 # isolated queue (don't touch the real db)
+        jm = JobManager(store, mgr, gateway_url="http://127.0.0.1:11434", submit=None,
+                        present=lambda *_: True)
         jm.start()
         jid = jm.enqueue({"model": "model-a", "ids": ["x"]})
         for _ in range(200):                                   # let the worker run the job
@@ -270,7 +272,7 @@ def test_job_runs_to_completion(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_job_cancelled_during_load_never_runs(monkeypatch):
+def test_job_cancelled_during_load_never_runs(monkeypatch, tmp_path):
     import peakstone.engine.serving as serving
     ran = []
     monkeypatch.setattr(serving, "stream_runner",
@@ -278,8 +280,9 @@ def test_job_cancelled_during_load_never_runs(monkeypatch):
 
     async def scenario():
         mgr = make_manager()
-        store = JobStore()
-        jm = JobManager(store, mgr, gateway_url="http://127.0.0.1:11434", submit=None)
+        store = JobStore(tmp_path / "jobs.db")
+        jm = JobManager(store, mgr, gateway_url="http://127.0.0.1:11434", submit=None,
+                        present=lambda *_: True)
         jid = jm.enqueue({"model": "model-a"})
         jm._cancel_requested.add(jid)                 # cancel lands as the job starts loading
         jm.start()
@@ -289,6 +292,76 @@ def test_job_cancelled_during_load_never_runs(monkeypatch):
             await asyncio.sleep(0.02)
         assert store.get(jid)["status"] == "cancelled"
         assert ran == [] and mgr.pinned is None       # runner never launched; GPU released
+        await jm.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_run_auto_downloads_then_runs(monkeypatch, tmp_path):
+    """Enqueuing a run for a model that isn't on disk auto-queues its download (separate queue); once
+    the weights land, the run executes."""
+    import peakstone.engine.serving as serving
+    monkeypatch.setattr(serving, "stream_runner", _fake_stream_ok)
+    present = {"model-a": False}
+
+    def download(model, log, cancel):
+        log(f"fetching {model}")
+        present[model] = True                                   # weights now on disk
+        return True
+
+    async def scenario():
+        mgr = make_manager()
+        store = JobStore(tmp_path / "jobs.db")
+        jm = JobManager(store, mgr, gateway_url="http://x", submit=None,
+                        present=lambda m: present.get(m, False), download=download)
+        jm.start()
+        jid = jm.enqueue({"model": "model-a", "ids": ["x"]})    # missing → auto-download, then run
+        for _ in range(300):
+            if store.get(jid)["status"] in ("done", "failed", "cancelled"):
+                break
+            await asyncio.sleep(0.02)
+        assert store.get(jid)["status"] == "done"
+        dls = [j for j in store.list() if j["kind"] == "download"]
+        assert dls and dls[0]["status"] == "done" and dls[0]["spec"]["model"] == "model-a"
+        await jm.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_gpu_not_idle_while_downloading(monkeypatch, tmp_path):
+    """A ready run must never wait behind a model that's still downloading: the run scheduler picks the
+    oldest run whose weights are present, so the GPU stays busy."""
+    import peakstone.engine.serving as serving
+    import threading
+    monkeypatch.setattr(serving, "stream_runner", _fake_stream_ok)
+    present = {"model-a": False, "model-b": True}
+    release = threading.Event()
+
+    def download(model, log, cancel):
+        release.wait(2.0)                                      # hold model-a's download open
+        present[model] = True
+        return True
+
+    async def scenario():
+        mgr = make_manager()
+        store = JobStore(tmp_path / "jobs.db")
+        jm = JobManager(store, mgr, gateway_url="http://x", submit=None,
+                        present=lambda m: present.get(m, False), download=download)
+        jm.start()
+        a = jm.enqueue({"model": "model-a"})                   # missing → downloads (held open)
+        b = jm.enqueue({"model": "model-b"})                   # ready → should run NOW, not wait for a
+        for _ in range(200):
+            if store.get(b)["status"] == "done":
+                break
+            await asyncio.sleep(0.02)
+        assert store.get(b)["status"] == "done"                # b ran while a was still downloading
+        assert store.get(a)["status"] in ("queued", "running")  # a hasn't finished (download held)
+        release.set()
+        for _ in range(200):
+            if store.get(a)["status"] in ("done", "failed"):
+                break
+            await asyncio.sleep(0.02)
+        assert store.get(a)["status"] == "done"
         await jm.aclose()
 
     asyncio.run(scenario())

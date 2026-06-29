@@ -17,31 +17,54 @@ _REAL_AVAILABLE_QUANTS = _models.available_quants
 
 def _stub_daemon(monkeypatch, *, status="done", summary=None, lines=(), enqueued=None,
                  bundle=None, repo=None):
-    """Stub the gateway daemon client so benchmark runs don't need a real `peakstone serve`. Records
-    enqueued model names, replays `lines` as the job log, and returns a terminal job with `summary`.
-    Optionally writes a bundle.json under `repo` (set PEAKSTONE_REPO to a tmp dir first) so the TUI's
-    manual-submit path has a bundle to read."""
+    """Simulate the gateway daemon so the TUI (a pure frontend) can be tested without a real
+    `peakstone serve`. The TUI enqueues a run, then ADOPTS+MIRRORS whatever the daemon reports as
+    running — so the stub is stateful: enqueue makes a job show up "running" in list_jobs, get_job
+    (called once the mirror's log stream ends) flips it terminal with `summary`. Downloads complete
+    immediately. `enqueued` collects run specs; `bundle`/`repo` write a bundle.json for the submit path."""
     import json as _json
     from peakstone.dashboard import client as _client
     from peakstone.gateway import launch as _launch
     summary = summary or {}
-    jid = "testjob"
+    state: dict = {"jobs": [], "n": 0}
 
-    def enqueue(spec, **k):
-        if enqueued is not None:
+    def enqueue(spec, *, kind="run", **k):
+        state["n"] += 1
+        jid = f"job{state['n']}"
+        if kind == "run" and enqueued is not None:
             enqueued.append(spec)
-        if bundle is not None and repo is not None:
+        if kind == "run" and bundle is not None and repo is not None:
             out = repo / "results" / f"job-{jid}"
             out.mkdir(parents=True, exist_ok=True)
             (out / "bundle.json").write_text(_json.dumps(bundle))
+        # runs start "running" so the TUI adopts + mirrors them; downloads finish immediately
+        state["jobs"].append({"id": jid, "kind": kind, "spec": spec, "created": state["n"],
+                              "status": "running" if kind == "run" else "done",
+                              "summary": summary if kind == "run" else {"note": "downloaded"}})
         return jid
+
+    def get_job(jid, **k):
+        for j in state["jobs"]:
+            if j["id"] == jid:
+                if j["kind"] == "run":             # the mirror finished → job reaches its terminal state
+                    j["status"], j["summary"] = status, summary
+                return dict(j)
+        return None
+
+    def cancel_job(jid, **k):
+        for j in state["jobs"]:
+            if j["id"] == jid:
+                j["status"] = "cancelled"
+        return True
 
     monkeypatch.setattr(_launch, "ensure_running", lambda *a, **k: True)
     monkeypatch.setattr(_client, "enqueue_job", enqueue)
+    monkeypatch.setattr(_client, "download_model",
+                        lambda m, **k: enqueue({"model": m}, kind="download"))
     monkeypatch.setattr(_client, "stream_job_log", lambda j, **k: iter(lines))
-    monkeypatch.setattr(_client, "get_job",
-                        lambda j, **k: {"id": j, "status": status, "summary": summary})
-    monkeypatch.setattr(_client, "cancel_job", lambda j, **k: True)
+    monkeypatch.setattr(_client, "get_job", get_job)
+    monkeypatch.setattr(_client, "cancel_job", cancel_job)
+    monkeypatch.setattr(_client, "list_jobs", lambda **k: [dict(j) for j in state["jobs"]])
 
 
 @pytest.fixture(autouse=True)
@@ -49,6 +72,10 @@ def _no_hf_network(monkeypatch):
     """The models screen auto-expands families, which kicks off HF quant discovery in worker threads;
     keep that off the network in tests (a real lookup would block worker shutdown at app exit)."""
     monkeypatch.setattr(_models, "available_quants", lambda repo, **k: [])
+    # The dashboard polls the gateway to adopt daemon-side runs; default to "no daemon jobs" so a real
+    # local `peakstone serve` can't leak into tests (_stub_daemon overrides when a run is exercised).
+    from peakstone.dashboard import client as _client
+    monkeypatch.setattr(_client, "list_jobs", lambda **k: [])
 
 _FAKE = {"count": 2, "leaderboard": [
     {"rank": 1, "family": "qwen3-coder", "code_score": 0.93, "agent_score": None,
@@ -289,7 +316,7 @@ def test_gen_phase_drives_overview_status():
     from collections import deque
     app._run_lock = threading.Lock()
     app.run_active = True
-    app.run_queue = []
+    app._daemon_jobs = []
     app._run_spec = {"name": "m"}
     app._run_phase, app._run_done, app._run_total = "run", 3, 200
     app._run_t0, app._run_tps, app._run_gen_phase = None, 48.0, None
@@ -457,6 +484,37 @@ def test_reproduce_screen_shows_result_and_records_history(monkeypatch, tmp_path
             await app.workers.wait_for_complete()
             await pilot.pause()
             assert submitted.get("b") == {"bundle_version": "1"}
+
+    asyncio.run(scenario())
+
+
+def test_adopts_cli_launched_daemon_job(monkeypatch):
+    """A benchmark queued via the `peakstone jobs` CLI runs in the daemon; the TUI should adopt it on
+    mount and mirror its live output, even though it didn't start it."""
+    from peakstone.dashboard.app import Dashboard
+    from peakstone.dashboard import client, history
+    _stub_daemon(monkeypatch, summary={"your_tps": 42.0, "code_score": 0.8, "passed": 8, "total": 10},
+                 lines=["benchmarking qwen3-coder over 10 challenges", "  ok unique | 1.0 | 50 tok/s"])
+    # The daemon is running a job this TUI didn't start. list_jobs keeps reporting it until get_job
+    # (called once the mirror finishes) flips it to done — so the loop adopts it exactly once.
+    job = {"id": "testjob", "status": "running", "spec": {"model": "qwen3-coder", "level": "standard"}}
+    monkeypatch.setattr(client, "list_jobs", lambda **k: [dict(job)])
+
+    def get_job(j, **k):
+        job["status"] = "done"
+        return {"id": j, "status": "done",
+                "summary": {"your_tps": 42.0, "code_score": 0.8, "passed": 8, "total": 10}}
+    monkeypatch.setattr(client, "get_job", get_job)
+    recorded = []
+    monkeypatch.setattr(history, "append", recorded.append)
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test():
+            await app.workers.wait_for_complete()      # on_mount poll adopts + mirrors the daemon job
+            assert recorded and recorded[0]["model"] == "qwen3-coder"
+            assert app._run_result is not None and app._run_result.model == "qwen3-coder"
+            assert app._run_done > 0                    # coverage was reconstructed from the streamed log
 
     asyncio.run(scenario())
 
@@ -943,8 +1001,8 @@ def test_run_with_preflight_routing(monkeypatch):
     entry = models.ModelEntry("m", "org/r", "models/m/x.gguf", 8081, 32768, "")
     monkeypatch.setattr(models, "load_registry", lambda: {"m": entry})
     monkeypatch.setattr(models, "available_quants", lambda repo, **k: [])   # no HF network in tests
-    monkeypatch.setattr(R, "reproduce", lambda *a, **k: R.ReproduceResult("m", True, note="done"))
     monkeypatch.setattr(history, "append", lambda e: None)
+    _stub_daemon(monkeypatch)                       # runs go to the (stubbed) daemon
 
     async def scenario(pf, expect):
         monkeypatch.setattr(preflight, "check", lambda e: pf)
@@ -1024,32 +1082,34 @@ def test_bundle_ctx_override(monkeypatch):
     assert _ctx_override(32768) == 8192                         # env overrides
 
 
-def test_run_queues_when_active():
+def test_run_enqueues_on_daemon_even_when_active(monkeypatch):
     from peakstone.dashboard.app import Dashboard
+    enqueued = []
+    _stub_daemon(monkeypatch, enqueued=enqueued)
 
     async def scenario():
         app = Dashboard("http://x")
         async with app.run_test():
-            app.run_active = True                                  # a run is already in progress
-            started = app.start_run("b", challenge_ids=["x"], level="smoke")
-            assert started is False                               # second run is queued, not started
-            assert [s["name"] for s in app.run_queue] == ["b"] and app.run_queue[0]["level"] == "smoke"
+            app.run_active = True                                  # already mirroring a run
+            jid = app.start_run("b", challenge_ids=["x"], level="smoke")
+            assert jid                                             # still enqueued (the daemon serializes)
+            assert enqueued[-1]["model"] == "b" and enqueued[-1]["level"] == "smoke"
 
     asyncio.run(scenario())
 
 
-def test_download_queues_as_job():
-    from peakstone.dashboard.app import Dashboard, QueueScreen
+def test_download_queues_on_daemon(monkeypatch):
+    from peakstone.dashboard.app import Dashboard
+    from peakstone.dashboard import client
+    _stub_daemon(monkeypatch)
 
     async def scenario():
         app = Dashboard("http://x")
         async with app.run_test():
-            app.run_active = True                                  # a job is already in progress
-            started = app.start_download("phi-q2")
-            assert started is False                               # download goes on the queue, not inline
-            spec = app.run_queue[0]
-            assert spec["name"] == "phi-q2" and spec["download_only"] is True
-            assert QueueScreen._scope(spec) == "⬇ download"       # shown as a download job in the queue
+            jid = app.start_download("phi-q2")
+            assert jid                                             # queued on the separate download queue
+            dl = [j for j in client.list_jobs() if j.get("kind") == "download"]
+            assert dl and dl[0]["spec"]["model"] == "phi-q2"
 
     asyncio.run(scenario())
 
@@ -1061,9 +1121,9 @@ def test_job_status_tracks_phase_and_progress():
         app = Dashboard("http://x")
         async with app.run_test():
             assert app.job_status() == ""                          # idle
-            app.run_queue = [{"name": "a"}]
+            app._daemon_jobs = [{"id": "j", "kind": "run", "status": "queued", "spec": {"model": "a"}}]
             assert "1 run(s) queued" in app.job_status()
-            app.run_active, app._run_spec, app.run_queue = True, {"name": "qc"}, []
+            app.run_active, app._run_spec, app._daemon_jobs = True, {"name": "qc"}, []
             # parsing the stream drives the global status
             app._track("Running 1 model(s) over 5 challenge(s).")
             assert app._run_total == 5
@@ -1099,47 +1159,40 @@ def test_download_cancels_cooperatively(monkeypatch, tmp_path):
     assert ok is False and not e.present                 # aborted, file not materialized
 
 
-def test_cancel_active_kills_and_marks(monkeypatch):
+def test_cancel_active_cancels_daemon_job(monkeypatch):
     from peakstone.dashboard.app import Dashboard
-    from peakstone.dashboard import reproduce as R
-    killed = []
-    monkeypatch.setattr(R, "stop", killed.append)
+    from peakstone.dashboard import client
+    cancelled = []
+    monkeypatch.setattr(client, "cancel_job", lambda jid, **k: cancelled.append(jid) or True)
 
     async def scenario():
         app = Dashboard("http://x")
         async with app.run_test():
-            assert app.cancel_active() is False               # nothing running
+            assert app.cancel_active() is False               # nothing being mirrored
             app.run_active = True
-            app._run_procs = ["serve", "bench"]
+            app._run_job_id = "job7"
             assert app.cancel_active() is True
-            assert app._run_cancelled and killed == ["serve", "bench"]   # both subprocesses killed
+            assert app._run_cancelled and cancelled == ["job7"]   # told the daemon to kill the run
 
     asyncio.run(scenario())
 
 
-def test_quit_warns_only_when_jobs(monkeypatch):
-    from peakstone.dashboard.app import Dashboard, ConfirmQuitScreen
-    from peakstone.dashboard import reproduce as R
-    killed = []
-    monkeypatch.setattr(R, "stop", killed.append)
+def test_quit_is_safe_runs_survive(monkeypatch):
+    """Quitting the TUI never kills a run — the daemon owns it. action_quit just stops mirroring and
+    exits (no confirm), and the run keeps going to be re-adopted next launch."""
+    from peakstone.dashboard.app import Dashboard
 
     async def scenario():
         app = Dashboard("http://x")
         async with app.run_test() as pilot:
             exited = []
             monkeypatch.setattr(app, "exit", lambda *a, **k: exited.append(True))
-            app.action_quit()                                 # no jobs -> quits immediately
-            await pilot.pause()
-            assert exited == [True] and not isinstance(app.screen, ConfirmQuitScreen)
-
             app.run_active = True
-            app._run_procs = ["p"]
-            app.action_quit()                                 # jobs -> confirm first
+            app._run_job_id = "j"
+            app.action_quit()
             await pilot.pause()
-            assert isinstance(app.screen, ConfirmQuitScreen)
-            await pilot.press("y")                            # confirm -> kill subprocesses + exit
-            await pilot.pause()
-            assert killed == ["p"] and exited == [True, True]
+            assert exited == [True]
+            assert app._run_cancelled                         # stops the local mirror only
 
     asyncio.run(scenario())
 
@@ -1187,40 +1240,48 @@ def test_run_auto_submits(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_queue_screen_manage():
+def test_queue_screen_shows_daemon_queues(monkeypatch):
+    """The QueueScreen reflects the daemon's queues: runs and (separately) downloads. x cancels the
+    selected job; c clears all queued jobs. Everything is driven over the daemon client."""
     from peakstone.dashboard.app import Dashboard, QueueScreen
+    from peakstone.dashboard import client
     from textual.widgets import DataTable
 
-    def spec(name, **k):
-        return {"name": name, "level": None, "challenge_ids": None, "published_tps": None,
-                "free_procs": None, **k}
+    jobs = [
+        {"id": "b", "kind": "run", "status": "queued", "spec": {"model": "B", "ids": ["x", "y"]}, "created": 2},
+        {"id": "c", "kind": "run", "status": "queued", "spec": {"model": "C", "level": "deep"}, "created": 3},
+        {"id": "d", "kind": "download", "status": "queued", "spec": {"model": "D"}, "created": 4},
+    ]
+
+    def cancel(jid, **k):
+        for j in jobs:
+            if j["id"] == jid:
+                j["status"] = "cancelled"
+        return True
+
+    monkeypatch.setattr(client, "list_jobs", lambda **k: [dict(j) for j in jobs])
+    monkeypatch.setattr(client, "cancel_job", cancel)
 
     async def scenario():
         app = Dashboard("http://x")
         async with app.run_test() as pilot:
-            app.run_active = True
-            app._run_spec = spec("A", level="smoke")
-            app.run_queue = [spec("B", challenge_ids=["x", "y"]), spec("C", level="deep")]
+            await app.workers.wait_for_complete()        # on_mount refresh populates _daemon_jobs
             await app.push_screen(QueueScreen())
             await pilot.pause()
             t = app.screen.query_one("#q-tbl", DataTable)
-            assert t.row_count == 3                                   # active + 2 queued
-            assert str(t.get_row_at(0)[1]) == "running" and str(t.get_row_at(0)[2]) == "A"
-            assert [str(t.get_row_at(i)[2]) for i in (1, 2)] == ["B", "C"]
+            names = [str(t.get_row_at(i)[2]) for i in range(t.row_count)]
+            assert names[:3] == ["B", "C", "D"]          # two queued runs, then the download queue
 
-            t.move_cursor(row=1)                                      # B (first queued)
-            await pilot.press("shift+down")                          # reorder B after C
+            t.move_cursor(row=0)                          # B
+            await pilot.press("x")                        # cancel it on the daemon
+            await app.workers.wait_for_complete()
             await pilot.pause()
-            assert [s["name"] for s in app.run_queue] == ["C", "B"]
+            assert next(j["status"] for j in jobs if j["id"] == "b") == "cancelled"
 
-            t.move_cursor(row=1)                                      # C now first queued
-            await pilot.press("x")                                   # cancel it
+            await pilot.press("c")                        # clear all remaining queued (C + D)
+            await app.workers.wait_for_complete()
             await pilot.pause()
-            assert [s["name"] for s in app.run_queue] == ["B"]
-
-            await pilot.press("c")                                   # clear remaining
-            await pilot.pause()
-            assert app.run_queue == []
+            assert all(j["status"] == "cancelled" for j in jobs)
 
     asyncio.run(scenario())
 
@@ -1255,8 +1316,8 @@ def test_level_screen_estimates_and_runs(monkeypatch):
         "level": level, "model": model, "n_challenges": 42, "by_family": {"humaneval": 42},
         "gen_min": 10.0, "exec_min": 1.0, "download_gb": 0.0, "download_min": 0.0,
         "total_min": 11.0, "tps": 90, "mbps": 50, "unknowns": [], "settings": {}})
-    monkeypatch.setattr(R, "reproduce", lambda model, **k: R.ReproduceResult(model, True, your_tps=80.0))
     monkeypatch.setattr("peakstone.dashboard.preflight.check", lambda e: None)   # skip GPU pre-flight
+    _stub_daemon(monkeypatch)                       # the run is enqueued on the (stubbed) daemon
 
     async def scenario():
         app = Dashboard("http://x")
@@ -1267,6 +1328,7 @@ def test_level_screen_estimates_and_runs(monkeypatch):
             await pilot.pause()
             assert app.screen.query_one("#lvl-tbl", DataTable).row_count >= 5   # smoke..max
             await pilot.press("r")                                              # run selected level
+            await app.workers.wait_for_complete()
             await pilot.pause()
             assert isinstance(app.screen, ReproduceScreen) and app._run_spec["level"] is not None
 
