@@ -147,7 +147,26 @@ peakstone jobs cancel <id>
 
 `peakstone` (the TUI) auto-spawns the gateway detached on startup; disable with `--no-gateway` or
 `PEAKSTONE_NO_GATEWAY=1`. Config lives under `[gateway]` in `peakstone/engine/config.toml`
-(host/port/idle-timeout); set a bearer token to expose it on a LAN.
+(host/port/`idle_timeout_s` — unload the model and free VRAM after a quiet spell; `0` = never).
+
+**Use it from another machine (auth).** Loopback requests (`127.0.0.1`) need no token, so the TUI, the
+CLI, and anything on the box just work. To reach it over a LAN — e.g. an editor on your laptop driving
+the GPU box — bind it publicly and present the token; non-loopback requests without a valid one get
+`401`:
+
+```bash
+peakstone serve --host 0.0.0.0          # prints the token; also saved to ~/.peakstone/gateway_token (0600)
+# from the laptop — OpenAI base URL http://<gpu-box>:12434/v1, API key = that token:
+curl http://<gpu-box>:12434/v1/chat/completions \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{"model": "<model-name>", "messages": [{"role":"user","content":"hi"}]}'
+```
+
+The token is generated on first run; override it with `PEAKSTONE_GATEWAY_TOKEN`.
+
+**Sharing one GPU.** Only one model is resident at a time. While a benchmark job runs it *pins* the GPU
+to that model: chat requests for the same model are served, but a request for a *different* model gets
+`503 busy` rather than evicting the run mid-flight. With no job running, any model loads/swaps on demand.
 
 ## Running the server (peakstone.ai)
 
