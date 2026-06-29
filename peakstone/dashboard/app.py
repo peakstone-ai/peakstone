@@ -1003,7 +1003,8 @@ class ReproduceScreen(ModalScreen):
         tbl = self.query_one("#repro-completed", DataTable)
         tbl.clear()                              # keep columns, drop rows
         tbl.add_row(Text.from_markup("[cyan]●[/]"), Text("(running)"), Text(""),
-                    key=self.LIVE_KEY)           # row 0 = the live/current test
+                    key=self.LIVE_KEY)           # the live/current row — kept pinned to the BOTTOM as
+                                                 # tests finish (see _add_completed)
         self.query_one("#repro-gen", Static).update("[dim]model output appears here as it solves each task[/]")
         self.query_one("#repro-result", Static).update(
             "running… (Esc close · Tab switch pane · ↑↓ pick a test · cancel from queue: u)")
@@ -1049,10 +1050,27 @@ class ReproduceScreen(ModalScreen):
         if ch in self._completed:               # one row per challenge (retries print a single line)
             return
         self._completed.add(ch)
-        # status carries intentional color markup; info is raw runner text that may contain literal
-        # brackets (e.g. the retry note "[green on try 1/2]"), so render it as a Text — never parsed.
-        self.query_one("#repro-completed", DataTable).add_row(
-            Text.from_markup(status), Text(ch), Text(info), key=ch)
+        tbl = self.query_one("#repro-completed", DataTable)
+        follow = tbl.scroll_y >= tbl.max_scroll_y - 2   # stay pinned to the bottom only if already there
+        # Keep the live/current row at the BOTTOM: drop it, append the finished test (so completed tests
+        # accumulate top-to-bottom in order), then re-add the live row last. status carries intentional
+        # color markup; info is raw runner text that may contain literal brackets (e.g. "[on try 1/2]"),
+        # so render it as a Text — never parsed.
+        try:
+            tbl.remove_row(self.LIVE_KEY)
+        except Exception:  # noqa: BLE001 — live row absent (cleared); the add below re-establishes it
+            pass
+        tbl.add_row(Text.from_markup(status), Text(ch), Text(info), key=ch)
+        tbl.add_row(Text.from_markup("[cyan]●[/]"), Text("(running)"), Text(""), key=self.LIVE_KEY)
+        # Removing the cursor's row shifts the cursor and would fire a spurious highlight (hijacking the
+        # review pane). Restore it to match what the user is looking at: the live row when following.
+        target = self.LIVE_KEY if self._viewing is None else self._viewing
+        try:
+            tbl.move_cursor(row=tbl.get_row_index(target))
+        except Exception:  # noqa: BLE001
+            pass
+        if follow:
+            tbl.scroll_end(animate=False)
 
     def _update_stat(self) -> None:
         p = self.app.run_progress()             # app owns the counters; the view just renders them

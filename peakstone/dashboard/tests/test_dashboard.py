@@ -794,17 +794,17 @@ def test_reproduce_screen_routes_generation_stream():
             tbl = scr.query_one("#repro-completed", DataTable)
             assert "py-05-calc" in scr._completed and tbl.row_count == 2   # live row + the result
 
-            # arrow-selecting the completed row brings up THAT test's captured solution for review
+            # completed tests sit at the top; the live/current row is pinned to the BOTTOM.
+            # selecting the completed row brings up THAT test's captured solution for review
             tbl.focus()
-            await pilot.pause()
-            await pilot.press("down")            # live row (0) -> the completed test (1)
+            tbl.move_cursor(row=0)               # the completed test (top)
             await pilot.pause()
             assert scr._viewing == "py-05-calc"
             review = str(scr.query_one("#repro-gen", Static).render())
             assert "proposed solution" in review and "def f():\n  return 1 more" in review
 
-            # arrowing back to the live row resumes following live generation
-            await pilot.press("up")
+            # moving down to the live row (bottom) resumes following live generation
+            tbl.move_cursor(row=1)
             await pilot.pause()
             assert scr._viewing is None
 
