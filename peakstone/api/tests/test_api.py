@@ -92,6 +92,33 @@ def test_submission_trust_chain(client):
     assert client.post("/submissions", json=again).status_code == 409
 
 
+def test_truncation_rate():
+    from types import SimpleNamespace as NS
+    from peakstone.api.main import _truncation, _agg_metrics
+    rs = [
+        NS(final=0.0, metrics={"trunc_truncated": 1.0}),   # cut off at the budget
+        NS(final=1.0, metrics={"trunc_truncated": 0.0}),   # finished on its own
+        NS(final=0.0, metrics={"trunc_truncated": 1.0}),
+        NS(final=0.5, metrics={}),                          # not a generated challenge -> not counted
+    ]
+    t = _truncation(rs)
+    assert t["truncation_rate"] == 0.667 and t["n_generated"] == 3   # 2 of 3 generated were truncated
+    assert _truncation([NS(final=1.0, metrics={})]) == {"truncation_rate": None, "n_generated": 0}
+    # the probe key must NOT leak into the leanness/efficiency averages
+    assert "trunc_truncated" not in _agg_metrics(rs)
+
+
+def test_reasoning_budget_parsing():
+    """The thinking-budget facet reads the served --reasoning-budget: 0=off, -1=full, N=capped, None
+    if the flag wasn't set. Lets the leaderboard split a model's runs by thinking budget."""
+    from types import SimpleNamespace as NS
+    from peakstone.api.main import _submission_reasoning_budget as b
+    assert b(NS(serve_flags="-fa --reasoning-budget 4096 -c 16384")) == 4096
+    assert b(NS(serve_flags="--reasoning-budget 0")) == 0
+    assert b(NS(serve_flags="--reasoning-budget -1")) == -1
+    assert b(NS(serve_flags="-fa -c 16384")) is None and b(NS(serve_flags=None)) is None
+
+
 def test_ctx_efficiency():
     from types import SimpleNamespace as NS
     from peakstone.api.main import _ctx_efficiency

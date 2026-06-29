@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import Link from "next/link";
 import { getFacets, getLeaderboard } from "@/lib/api";
 import { ApiDown, ScoreBar, Trust } from "@/components/ui";
@@ -14,6 +15,19 @@ const VRAM_PRESETS: [string, string][] = [
   ["≤48 GB", "48"],
 ];
 
+// served thinking budget: 0=off, -1=full, N=capped at N tokens
+function budgetLabel(n: number): string {
+  if (n === 0) return "off";
+  if (n < 0) return "full";
+  return `${Math.round(n / 1024)}k cap`;
+}
+
+// the thinking run-condition badge text: prefer the served budget, fall back to the on/off evidence
+function thinkLabel(reasoning: string | null, budget: number | null): string | null {
+  if (budget != null) return budgetLabel(budget);
+  return reasoning;
+}
+
 // compact efficiency axes shown in the leaderboard (matches engine/metrics.py)
 const METRIC_COLS: { key: string; fmt: (v: number) => string }[] = [
   { key: "loc", fmt: (v) => `${Math.round(v)} LOC` },
@@ -28,10 +42,18 @@ export default async function Home({
 }) {
   const sp = await searchParams;
   const vram = sp.max_vram_gb ?? "";
-  const sort = sp.sort ?? "code_score";
+  const sort = sp.sort ?? "held_out_score";
   const isAgent = sort === "agent_score";
   const isPlanner = sort === "planner_score";
-  const boardTitle = isAgent ? "Agentic leaderboard" : isPlanner ? "Planner leaderboard" : "Coder leaderboard";
+  const isAllCorpus = sort === "code_score";
+  const isHeldOut = !isAgent && !isPlanner && !isAllCorpus;  // the default lens
+  const boardTitle = isAgent
+    ? "Agentic leaderboard"
+    : isPlanner
+    ? "Planner leaderboard"
+    : isAllCorpus
+    ? "Coder leaderboard (all challenges)"
+    : "Held-out coding leaderboard";
   const [data, facets] = await Promise.all([getLeaderboard(sp), getFacets()]);
 
   return (
@@ -49,11 +71,19 @@ export default async function Home({
             The best <em>agentic</em> run per family — multi-machine / goal-state-env tasks where the
             model drives an environment to a goal state. Scored separately from coding ability.
           </>
+        ) : isAllCorpus ? (
+          <>
+            The best run per family ranked over <em>all</em> challenges — including older public
+            benchmarks a model may have trained on. The default{" "}
+            <Link href="/" className="text-emerald-400 hover:underline">held-out view</Link> excludes
+            those. Runs are never collapsed — quants, contexts, and hardware are distinct.
+          </>
         ) : (
           <>
-            The best <em>qualifying</em> run per model family, ranked by code score. Safety/honesty
-            and agentic ability are scored separately (not blended into coding). Runs are never
-            collapsed — quants, contexts, and hardware are distinct.
+            Each model ranked by its <em>held-out</em> score — only challenges published <em>after</em>{" "}
+            the model&apos;s release, which it could not have trained on. Models without enough
+            held-out evidence yet are listed as <em>provisional</em> below. Safety and agentic ability
+            are scored separately.
           </>
         )}
       </p>
@@ -63,7 +93,7 @@ export default async function Home({
         {VRAM_PRESETS.map(([label, val]) => {
           const active = vram === val;
           const params = new URLSearchParams();
-          for (const k of ["quant", "trust", "suite", "version", "sort", "order"]) {
+          for (const k of ["quant", "trust", "reasoning", "reasoning_budget", "suite", "version", "sort", "order"]) {
             if (sp[k]) params.set(k, sp[k] as string);
           }
           if (val) params.set("max_vram_gb", val);
@@ -92,12 +122,26 @@ export default async function Home({
           {facets.trust_tiers.length > 1 && (
             <SelectFilter param="trust" label="Trust" options={facets.trust_tiers} allLabel="Any" />
           )}
+          {facets.reasoning.length > 0 && (
+            <SelectFilter param="reasoning" label="Reasoning" options={facets.reasoning} allLabel="Any" />
+          )}
+          {facets.reasoning_budgets.length > 1 && (
+            <SelectFilter
+              param="reasoning_budget"
+              label="Thinking budget"
+              allLabel="Any"
+              options={facets.reasoning_budgets.map((n) => ({
+                value: String(n),
+                label: budgetLabel(n),
+              }))}
+            />
+          )}
           {facets.sort_axes.length > 0 && (
             <SelectFilter
               param="sort"
               label="Rank by"
-              allLabel="code score"
-              options={facets.sort_axes.map((a) => a.key).filter((k) => k !== "code_score")}
+              allLabel="held-out (default)"
+              options={facets.sort_axes.map((a) => a.key).filter((k) => k !== "held_out_score")}
             />
           )}
         </div>
@@ -120,29 +164,67 @@ export default async function Home({
               <tr className="text-left text-stone-500">
                 <th className="py-2 pr-2 font-medium">#</th>
                 <th className="py-2 pr-4 font-medium">Model</th>
-                <th className="py-2 pr-4 font-medium">Code score</th>
+                <th className="py-2 pr-4 font-medium">Held-out</th>
+                <th className="py-2 pr-4 font-medium">All-corpus</th>
+                <th className="py-2 pr-4 font-medium">Math</th>
                 <th className="py-2 pr-4 font-medium">Agentic</th>
                 <th className="py-2 pr-4 font-medium">Planner</th>
                 <th className="py-2 pr-4 font-medium">Safety</th>
+                <th className="py-2 pr-4 font-medium">Calibration</th>
+                <th className="py-2 pr-4 font-medium">Self-repair</th>
+                <th className="py-2 pr-4 font-medium" title="Fraction of generations cut off at the token budget — lower is better. A high rate means scores are budget-limited, not capability-limited.">Truncation</th>
                 <th className="py-2 pr-4 font-medium">Solved</th>
                 <th className="py-2 pr-4 font-medium">Efficiency</th>
                 <th className="py-2 pr-4 font-medium">Best run</th>
               </tr>
             </thead>
             <tbody>
-              {data.leaderboard.map((r) => (
-                <tr key={r.family} className="border-t border-stone-800">
-                  <td className="py-2 pr-2 tabular-nums text-stone-500">{r.rank}</td>
-                  <td className="py-2 pr-4">
-                    <Link
-                      href={`/models/${encodeURIComponent(r.family)}`}
-                      className="font-medium text-stone-100 hover:text-emerald-400"
-                    >
-                      {r.family}
-                    </Link>
-                  </td>
-                  <td className="py-2 pr-4">
-                    <ScoreBar v={r.code_score} />
+              {data.leaderboard.map((r, i) => {
+                const showDivider =
+                  isHeldOut &&
+                  r.held_out_status === "provisional" &&
+                  (i === 0 || data.leaderboard[i - 1].held_out_status !== "provisional");
+                return (
+                  <Fragment key={r.family}>
+                    {showDivider && (
+                      <tr>
+                        <td
+                          colSpan={14}
+                          className="border-t border-stone-700 pt-3 pb-1 text-xs text-stone-500"
+                        >
+                          Provisional — not enough held-out challenges yet (ranked by all-corpus score)
+                        </td>
+                      </tr>
+                    )}
+                    <tr className="border-t border-stone-800">
+                      <td className="py-2 pr-2 tabular-nums text-stone-500">{r.rank}</td>
+                      <td className="py-2 pr-4">
+                        <Link
+                          href={`/models/${encodeURIComponent(r.family)}`}
+                          className="font-medium text-stone-100 hover:text-emerald-400"
+                        >
+                          {r.family}
+                        </Link>
+                      </td>
+                      <td className="py-2 pr-4">
+                        {r.held_out_score == null ? (
+                          <span className="text-stone-600" title="no release date or no post-release challenges yet">
+                            —
+                          </span>
+                        ) : (
+                          <div className="flex flex-col gap-0.5">
+                            <ScoreBar v={r.held_out_score} />
+                            <span className="text-xs text-stone-500">
+                              {r.held_out.n_clean} clean · {Math.round(r.held_out.coverage * 100)}% dated
+                            </span>
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-2 pr-4">
+                        <ScoreBar v={r.code_score} />
+                      </td>
+                  <td className="py-2 pr-4 tabular-nums text-stone-300">
+                    {r.math_score == null ? "—" : `${r.math_score.toFixed(2)} (${r.n_math})`}
                   </td>
                   <td className="py-2 pr-4 tabular-nums text-stone-300">
                     {r.agent_score == null ? "—" : `${r.agent_score.toFixed(2)} (${r.n_agent})`}
@@ -152,6 +234,37 @@ export default async function Home({
                   </td>
                   <td className="py-2 pr-4 tabular-nums text-stone-300">
                     {r.safety_score == null ? "—" : r.safety_score.toFixed(2)}
+                  </td>
+                  <td className="py-2 pr-4 tabular-nums text-stone-300">
+                    {r.self_verify_accuracy == null ? (
+                      "—"
+                    ) : (
+                      <span title={`confidence ${r.confidence_score ?? "—"} · ${r.n_calibration} probed`}>
+                        {r.self_verify_accuracy.toFixed(2)}
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-2 pr-4 tabular-nums text-stone-300">
+                    {r.recovery_rate == null ? (
+                      "—"
+                    ) : (
+                      <span title={`${r.n_repair} first-try failures retried`}>
+                        {r.recovery_rate.toFixed(2)}
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-2 pr-4 tabular-nums">
+                    {r.truncation_rate == null ? (
+                      <span className="text-stone-300">—</span>
+                    ) : (
+                      <span
+                        title={`${r.n_generated} generated challenges${r.truncation_rate >= 0.1 ? " — budget may be too tight to fairly score this model" : ""}`}
+                        className={r.truncation_rate >= 0.1 ? "text-amber-400" : "text-stone-300"}
+                      >
+                        {r.truncation_rate > 0 ? "✂ " : ""}
+                        {r.truncation_rate.toFixed(2)}
+                      </span>
+                    )}
                   </td>
                   <td className="py-2 pr-4 tabular-nums text-stone-300">
                     {r.solved}/{r.n_code}
@@ -171,12 +284,19 @@ export default async function Home({
                   <td className="py-2 pr-4 text-stone-400">
                     <span className="text-stone-300">{r.run.artifact}</span> ·{" "}
                     {r.run.vram_gb ?? "?"} GB · <Trust t={r.run.trust_tier} />
+                    {thinkLabel(r.run.reasoning, r.run.reasoning_budget) ? (
+                      <span className="rounded bg-violet-900/50 px-1.5 py-0.5 text-xs text-violet-200">
+                        {" "}think {thinkLabel(r.run.reasoning, r.run.reasoning_budget)}
+                      </span>
+                    ) : null}
                     {r.run.submitter ? (
                       <span className="text-stone-500"> · @{r.run.submitter}</span>
                     ) : null}
-                  </td>
-                </tr>
-              ))}
+                      </td>
+                    </tr>
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
           <p className="mt-3 text-xs text-stone-600">

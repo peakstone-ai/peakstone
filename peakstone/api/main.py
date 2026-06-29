@@ -5,6 +5,8 @@ Run (Postgres):      PEAKSTONE_DATABASE_URL=postgresql+psycopg://... uvicorn api
 """
 from __future__ import annotations
 
+import os
+import re
 from collections import defaultdict
 from contextlib import asynccontextmanager
 
@@ -15,6 +17,7 @@ from sqlalchemy.orm import Session
 from . import identity, ingest, models, proposals
 from .db import get_session, init_db
 from ..engine import contamination
+from ..engine.bundle import reasoning_mode
 
 # Capability categories that are safety/honesty, not coding ability — scored separately so a strong
 # coder isn't penalised (or flattered) in the headline code score (mirrors the report's split).
@@ -65,7 +68,21 @@ SORT_ORDER = {"code_score": "desc", "held_out_score": "desc", "math_score": "des
               "score_per_1k_tokens": "desc",          # context-efficiency: capability per token
               "tokens_to_solve": "asc", "gen_tokens": "asc",
               "long_ctx_score": "desc",               # long-context comprehension axis
+              "self_verify_accuracy": "desc",          # calibration: does it know when it's right?
+              "confidence_score": "desc",              # calibration: pre-hoc confidence vs outcome
+              "recovery_rate": "desc",                 # self-repair: fixes its own first-try failures
+              "truncation_rate": "asc",                # budget-fit: lower = less often cut off mid-thought
               **METRIC_AXES}
+
+# The default leaderboard lens is the contamination-filtered (held-out) score, scoped to the official
+# suite so it's apples-to-apples. A model needs at least this much held-out evidence to be *ranked*
+# rather than *provisional* (shown below, by all-corpus code score) — a model is never dropped from
+# the default board for lacking a held-out score, only demoted. Thresholds are tunable as the corpus
+# accrues dated challenges (the board self-heals: provisional models cross the bar over time).
+HELD_OUT_MIN_CLEAN = 5
+HELD_OUT_MIN_COVERAGE = 0.5
+# "name@version" of the suite the default board scopes to. Unset (dev) -> the board spans all suites.
+OFFICIAL_SUITE = os.environ.get("PEAKSTONE_OFFICIAL_SUITE")
 
 
 # token-efficiency keys live in result.metrics but are summarized specially (honest, ctx-limited-aware)
@@ -78,9 +95,64 @@ def _agg_metrics(rs) -> dict:
     buckets: dict[str, list] = defaultdict(list)
     for r in rs:
         for k, v in (r.metrics or {}).items():
-            if k not in _TOKEN_KEYS and isinstance(v, (int, float)):
+            # cal_*/repair_*/trunc_* are calibration, self-repair & truncation probes, summarized
+            # specially below (not leanness/efficiency axes)
+            if (k not in _TOKEN_KEYS and not k.startswith(("cal_", "repair_", "trunc_"))
+                    and isinstance(v, (int, float))):
                 buckets[k].append(v)
     return {k: round(sum(v) / len(v), 2) for k, v in buckets.items() if v}
+
+
+def _calibration(rs) -> dict:
+    """Metacognition over results carrying calibration probes (the `cal_*` metric keys). Two numbers,
+    both higher=better, computed only over the probed challenges:
+      * self_verify_accuracy — how often the model's POST-hoc 'is my solution correct?' matched the
+        actual test outcome (knowing when you're right is the bedrock of agentic reliability);
+      * confidence_score — 1 − Brier over the PRE-hoc 'will I solve this?' probability vs the outcome
+        (a perfectly calibrated forecaster scores 1.0; constant-0.5 guessing scores 0.75)."""
+    sv_n = sv_hit = br_n = 0
+    br_sum = 0.0
+    for r in rs:
+        m = r.metrics or {}
+        passed = 1.0 if r.final >= 0.999 else 0.0
+        if "cal_self_correct" in m:
+            sv_n += 1
+            if (1.0 if m["cal_self_correct"] >= 0.5 else 0.0) == passed:
+                sv_hit += 1
+        if "cal_pre_confidence" in m:
+            br_n += 1
+            br_sum += (float(m["cal_pre_confidence"]) - passed) ** 2
+    return {
+        "self_verify_accuracy": round(sv_hit / sv_n, 3) if sv_n else None,
+        "confidence_score": round(1 - br_sum / br_n, 3) if br_n else None,
+        "n_calibration": max(sv_n, br_n),
+    }
+
+
+def _self_repair(rs) -> dict:
+    """Self-repair (isolated from the headline, which is first-try): of the coding challenges a model
+    failed on its FIRST attempt, what fraction did it fix when shown the test error (--retries)?
+    recovery_rate in [0,1] (higher = better debugger); n_repair = the first-try failures it was probed
+    on. The headline code/held-out scores stay single-shot — this is the separate debugging axis."""
+    vals = [r.metrics["repair_recovered"] for r in rs
+            if r.metrics and "repair_recovered" in r.metrics]
+    return {
+        "recovery_rate": round(sum(vals) / len(vals), 3) if vals else None,
+        "n_repair": len(vals),
+    }
+
+
+def _truncation(rs) -> dict:
+    """How often generation hit the token budget (max_tokens) instead of finishing on its own — i.e.
+    the model was likely cut off mid-thought. Token-bound, so it's hardware-independent and fully
+    reproducible; but a high rate is a WARNING that the budget is too tight to fairly measure this
+    model's capability (its score is budget-limited, not ability-limited). Lower is better."""
+    vals = [r.metrics["trunc_truncated"] for r in rs
+            if r.metrics and "trunc_truncated" in r.metrics]
+    return {
+        "truncation_rate": round(sum(vals) / len(vals), 3) if vals else None,
+        "n_generated": len(vals),
+    }
 
 
 def _ctx_efficiency(code_rs) -> dict:
@@ -161,6 +233,10 @@ def _summarize(sub: models.Submission, fam: models.ModelFamily | None = None) ->
         "math_held_out": _held_out(math_rs, fam)["held_out"],
         "long_ctx_score": _avg([r.final for r in longctx_rs]),   # comprehension over a long context
         "n_long_ctx": len(longctx_rs),
+        **_calibration(rs),                       # metacognition: self_verify_accuracy + confidence_score
+        **_self_repair(rs),                        # debugging: recovery_rate (headline stays first-try)
+        **_truncation(rs),                         # budget-fit warning: truncation_rate (lower=better)
+
         "safety_score": _avg(safety),
         "agent_score": _avg(agent),
         "agent_held_out": _held_out(agent_rs, fam)["held_out"],   # SWE-bench-Live etc.: contamination-adjusted
@@ -199,6 +275,20 @@ def _submitter_handle(db, sub: models.Submission) -> str | None:
     return None
 
 
+def _submission_reasoning(sub: models.Submission) -> str | None:
+    """Reasoning run-condition for a submission — derived from its serve flags + observed CoT tokens
+    (a thinking-on vs thinking-off run is a distinct, faceted run, like a quant)."""
+    return reasoning_mode(sub.serve_flags, ((r.metrics or {}).get("reasoning_tokens") for r in sub.results))
+
+
+def _submission_reasoning_budget(sub: models.Submission) -> int | None:
+    """The thinking budget the run was SERVED at, from `--reasoning-budget N` in the serve flags:
+    0 = off, -1 = full (unlimited), N = capped at N thinking tokens. None if the flag wasn't set.
+    Finer than the on/off facet — lets the leaderboard plot accuracy vs thinking budget for a model."""
+    m = re.search(r"--reasoning-budget\s+(-?\d+)", sub.serve_flags or "")
+    return int(m.group(1)) if m else None
+
+
 def _run_info(db, sub: models.Submission, art: models.ModelArtifact) -> dict:
     env = sub.env or {}
     return {"artifact": art.artifact, "hf_repo": art.hf_repo,
@@ -206,6 +296,8 @@ def _run_info(db, sub: models.Submission, art: models.ModelArtifact) -> dict:
             "vram_gb": sub.vram_gb, "ram_gb": env.get("ram_gb"),                 # machine totals
             "vram_used_gb": env.get("vram_used_gb"), "ram_used_gb": env.get("ram_used_gb"),  # model footprint
             "context": sub.context, "engine": sub.engine, "trust_tier": sub.trust_tier,
+            "reasoning": _submission_reasoning(sub),     # run condition: chain-of-thought on/off (or None)
+            "reasoning_budget": _submission_reasoning_budget(sub),   # thinking budget served (0/-1/N)
             "submitted_at": str(sub.submitted_at), "submitter": _submitter_handle(db, sub),
             "bundle_hash": sub.bundle_hash}
 
@@ -219,18 +311,29 @@ def _sort_value(row: dict, key: str):
 @app.get("/leaderboard")
 def leaderboard(db: Session = Depends(get_session), suite: str | None = None,
                 version: str | None = None, max_vram_gb: float | None = None,
-                quant: str | None = None, trust: str | None = None,
-                sort: str = "code_score", order: str | None = None, collapse: str = "family"):
+                quant: str | None = None, trust: str | None = None, reasoning: str | None = None,
+                reasoning_budget: str | None = None,
+                sort: str = "held_out_score", order: str | None = None, collapse: str = "family"):
     """Faceted: under the active filters, each family collapses to its best-qualifying run (§6a),
-    then rows are ranked by `sort` (code_score, or an efficiency axis like peak_rss_mb/loc).
-    collapse='quant' instead keeps the best run per (family, quant) so different quants of a model
-    appear as separate rows."""
+    then rows are ranked by `sort`.
+
+    The DEFAULT lens is `held_out_score` (the contamination-filtered code score), scoped to the
+    official suite — so the headline ranks models on challenges they provably couldn't have trained
+    on. On that default board a model is never dropped for lacking a held-out score: models with
+    enough held-out evidence are `ranked`; the rest are `provisional` (listed below, by all-corpus
+    `code_score`). Specialised axis boards (`agent_score`/`planner_score`/efficiency) instead drop
+    runs that have no value on that axis. `collapse='quant'` keeps the best run per (family, quant).
+    Pass `suite=all` to span every suite instead of the official one."""
     if sort not in SORT_ORDER:
-        sort = "code_score"
+        sort = "held_out_score"
     if order not in ("asc", "desc"):
         order = SORT_ORDER[sort]
+    # default the board to the official (suite, version) so the headline is apples-to-apples
+    if suite is None and version is None and OFFICIAL_SUITE:
+        name, _, ver = OFFICIAL_SUITE.partition("@")
+        suite, version = name, (ver or None)
     q = select(models.Submission)
-    if suite:
+    if suite and suite != "all":
         q = q.where(models.Submission.suite_name == suite)
     if version:
         q = q.where(models.Submission.suite_version == version)
@@ -239,23 +342,31 @@ def leaderboard(db: Session = Depends(get_session), suite: str | None = None,
     if trust:
         q = q.where(models.Submission.trust_tier == trust)
 
-    # each family collapses to its best run *for the chosen axis* — so sort=agent_score ranks each
-    # family's best agentic run, sort=code_score its best coding run. Runs with no value on the axis
-    # don't qualify for that board at all (a safety-only or agent-only run isn't a "coder").
+    default_heldout = sort == "held_out_score"
+    # each family collapses to its best run for the chosen axis. On a specialised axis board a run
+    # with no value there doesn't qualify (a safety-only run isn't a "coder"); on the default
+    # held-out board we keep every family, falling back to code_score so provisional models still show.
     best: dict[str, dict] = {}
     for s in db.scalars(q).all():
         art = db.get(models.ModelArtifact, s.artifact_id)
         if quant and art.artifact != quant:
             continue
+        if reasoning and (_submission_reasoning(s) or "none") != reasoning:
+            continue                          # reasoning facet: thinking on/off is a distinct run
+        if reasoning_budget is not None and str(_submission_reasoning_budget(s)) != reasoning_budget:
+            continue                          # thinking-budget facet: a served --reasoning-budget value
         fam = db.get(models.ModelFamily, art.family_id)
         summ = _summarize(s, fam)
         row = {"family": fam.name, "release_date": fam.release_date,
                "observed_capabilities": sorted((fam.capabilities or {}).keys()), **summ,
                "run": _run_info(db, s, art)}
         val = _sort_value(row, sort)
-        if val is None:
+        cmp_val = val if val is not None else (row.get("code_score") if default_heldout else None)
+        if cmp_val is None:                   # no value on this axis (and not the held-out default)
             continue
-        key = f"{fam.name}\x00{art.artifact}" if collapse == "quant" else fam.name
+        key = (f"{fam.name}\x00{art.artifact}\x00{_submission_reasoning(s) or 'none'}"
+               f"\x00{_submission_reasoning_budget(s)}"
+               if collapse == "quant" else fam.name)   # uncollapsed view splits thinking on/off AND budget
         cov = row.get("n_total") or 0
         cur = best.get(key)
         if cur is None:                       # keep the most-thorough qualifying run per group:
@@ -263,16 +374,37 @@ def leaderboard(db: Session = Depends(get_session), suite: str | None = None,
         elif cov != cur["_cov"]:
             better = cov > cur["_cov"]
         else:
-            better = val > cur["_v"] if order == "desc" else val < cur["_v"]
+            better = cmp_val > cur["_v"] if order == "desc" else cmp_val < cur["_v"]
         if better:
-            best[key] = {**row, "_v": val, "_cov": cov}
-    rows = sorted(best.values(), key=lambda r: r["_v"], reverse=(order == "desc"))
+            best[key] = {**row, "_v": cmp_val, "_cov": cov}
+
+    rows = list(best.values())
+    if default_heldout:
+        # two tiers: models with enough held-out evidence are ranked by held_out_score; the rest are
+        # provisional, ranked below by all-corpus code_score (never dropped — the board self-heals).
+        for r in rows:
+            ho = r.get("held_out") or {}
+            r["held_out_status"] = ("ranked" if r.get("held_out_score") is not None
+                                    and ho.get("n_clean", 0) >= HELD_OUT_MIN_CLEAN
+                                    and ho.get("coverage", 0) >= HELD_OUT_MIN_COVERAGE
+                                    else "provisional")
+        ranked = sorted((r for r in rows if r["held_out_status"] == "ranked"),
+                        key=lambda r: r["held_out_score"], reverse=True)
+        prov = sorted((r for r in rows if r["held_out_status"] == "provisional"),
+                      key=lambda r: (r.get("code_score") or 0), reverse=True)
+        rows = ranked + prov
+    else:
+        rows = sorted(rows, key=lambda r: r["_v"], reverse=(order == "desc"))
     for i, r in enumerate(rows, 1):
         r["rank"] = i
         r.pop("_v", None)
         r.pop("_cov", None)
     return {"filters": {"suite": suite, "version": version, "max_vram_gb": max_vram_gb,
-                        "quant": quant, "trust": trust, "sort": sort, "order": order, "collapse": collapse},
+                        "quant": quant, "trust": trust, "reasoning": reasoning,
+                        "reasoning_budget": reasoning_budget, "sort": sort,
+                        "order": order, "collapse": collapse},
+            "thresholds": ({"held_out_min_clean": HELD_OUT_MIN_CLEAN,
+                            "held_out_min_coverage": HELD_OUT_MIN_COVERAGE} if default_heldout else {}),
             "count": len(rows), "leaderboard": rows}
 
 
@@ -333,10 +465,16 @@ def facets(db: Session = Depends(get_session)):
     suites = db.execute(select(models.Submission.suite_name, models.Submission.suite_version)
                         .distinct().order_by(models.Submission.suite_name)).all()
     trusts = db.scalars(select(distinct(models.Submission.trust_tier))).all()
+    # reasoning + budget are derived per-submission (serve flags + observed CoT), computed here
+    subs = db.scalars(select(models.Submission)).all()
+    reasonings = sorted({_submission_reasoning(s) for s in subs} - {None})
+    budgets = sorted({_submission_reasoning_budget(s) for s in subs} - {None})
     _placeholder = {"(unknown)", "(unregistered)"}
     return {"quants": [q for q in quants if q and q not in _placeholder],
             "suites": [{"name": n, "version": v} for n, v in suites],
             "trust_tiers": sorted(trusts, key=lambda t: ingest.TRUST_ORDER.get(t, 0)),
+            "reasoning": reasonings,                      # thinking on/off run-condition facet
+            "reasoning_budgets": budgets,                 # served --reasoning-budget values (0/-1/N)
             "sort_axes": [{"key": k, "order": o} for k, o in SORT_ORDER.items()]}
 
 

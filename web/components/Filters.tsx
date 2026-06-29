@@ -12,7 +12,7 @@ export function SelectFilter({
 }: {
   param: string;
   label: string;
-  options: string[];
+  options: (string | { value: string; label: string })[];
   allLabel?: string;
 }) {
   const router = useRouter();
@@ -37,11 +37,15 @@ export function SelectFilter({
         className="rounded-md border border-stone-700 bg-stone-900 px-2 py-1 text-sm text-stone-200"
       >
         <option value="">{allLabel}</option>
-        {options.map((o) => (
-          <option key={o} value={o}>
-            {o.replace(/[-_]/g, " ")}
-          </option>
-        ))}
+        {options.map((o) => {
+          const val = typeof o === "string" ? o : o.value;
+          const text = typeof o === "string" ? o.replace(/[-_]/g, " ") : o.label;
+          return (
+            <option key={val} value={val}>
+              {text}
+            </option>
+          );
+        })}
       </select>
     </label>
   );

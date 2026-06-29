@@ -8,6 +8,8 @@ export type Run = {
   context: number | null;
   engine: { name?: string; version?: string };
   trust_tier: string;
+  reasoning: string | null;        // chain-of-thought run condition: "on" | "off" | null (n/a)
+  reasoning_budget: number | null; // thinking budget served: 0=off, -1=full, N=capped at N tokens
   submitted_at: string;
   submitter: string | null;
   bundle_hash: string;
@@ -30,6 +32,16 @@ export type LeaderRow = {
   code_score: number | null;
   held_out_score: number | null;
   held_out: HeldOut;
+  held_out_status?: "ranked" | "provisional";  // on the default held-out board
+  math_score: number | null;                    // competition math (AIME) — a distinct axis from code
+  n_math: number;
+  self_verify_accuracy: number | null;          // calibration: does it know when it's right?
+  confidence_score: number | null;              // calibration: pre-hoc confidence vs outcome (1 - Brier)
+  n_calibration: number;
+  recovery_rate: number | null;                 // self-repair: fixes its own first-try failures (--retries)
+  n_repair: number;
+  truncation_rate: number | null;               // fraction of generations cut off at the token budget (lower=better)
+  n_generated: number;
   safety_score: number | null;
   agent_score: number | null;
   planner_score: number | null;
@@ -70,7 +82,8 @@ async function getJSON<T>(path: string): Promise<T | null> {
 
 export function getLeaderboard(sp: Record<string, string | undefined>) {
   const qs = new URLSearchParams();
-  for (const k of ["suite", "version", "max_vram_gb", "quant", "trust", "sort", "order"]) {
+  for (const k of ["suite", "version", "max_vram_gb", "quant", "trust", "reasoning",
+                   "reasoning_budget", "sort", "order"]) {
     if (sp[k]) qs.set(k, sp[k] as string);
   }
   return getJSON<Leaderboard>(`/leaderboard?${qs.toString()}`);
@@ -84,6 +97,8 @@ export type Facets = {
   quants: string[];
   suites: { name: string; version: string }[];
   trust_tiers: string[];
+  reasoning: string[];
+  reasoning_budgets: number[];
   sort_axes: { key: string; order: string }[];
 };
 
