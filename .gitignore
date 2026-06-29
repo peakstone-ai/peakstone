@@ -20,5 +20,11 @@ infra/.env
 /challenges/aime/
 /challenges/swebench/
 
+# Private challenges (vision Idea 2: Private Test Crafter / commit-and-reveal). A private
+# challenge must NEVER be committed — publishing it defeats its held-out purpose; only a hash
+# commitment (and, later, an explicit reveal) is meant to leave the box. Provisional guard placed
+# BEFORE that feature is built; reconfirm the path matches when implementing it (see vision.md, Idea 2).
+/challenges/private/
+
 # Claude Code per-machine local settings (permission allowlist etc.) — keep out of the repo
 .claude/settings.local.json
