@@ -289,6 +289,14 @@ export default async function Home({
                         {" "}think {thinkLabel(r.run.reasoning, r.run.reasoning_budget)}
                       </span>
                     ) : null}
+                    {r.run.run_status === "not_capable" ? (
+                      <span
+                        className="rounded bg-red-900/50 px-1.5 py-0.5 text-xs text-red-200"
+                        title={`not capable — repetition loops, abandoned: ${(r.run.abandoned_categories ?? []).join(", ") || "every category"}`}
+                      >
+                        {" "}not capable
+                      </span>
+                    ) : null}
                     {r.run.submitter ? (
                       <span className="text-stone-500"> · @{r.run.submitter}</span>
                     ) : null}

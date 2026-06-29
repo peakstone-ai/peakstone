@@ -10,6 +10,8 @@ export type Run = {
   trust_tier: string;
   reasoning: string | null;        // chain-of-thought run condition: "on" | "off" | null (n/a)
   reasoning_budget: number | null; // thinking budget served: 0=off, -1=full, N=capped at N tokens
+  run_status?: string | null;            // "not_capable" = non-viable config (looped out everywhere)
+  abandoned_categories?: string[] | null; // categories skipped after a repetition-loop streak
   submitted_at: string;
   submitter: string | null;
   bundle_hash: string;
@@ -83,7 +85,7 @@ async function getJSON<T>(path: string): Promise<T | null> {
 export function getLeaderboard(sp: Record<string, string | undefined>) {
   const qs = new URLSearchParams();
   for (const k of ["suite", "version", "max_vram_gb", "quant", "trust", "reasoning",
-                   "reasoning_budget", "sort", "order"]) {
+                   "reasoning_budget", "verdict", "sort", "order"]) {
     if (sp[k]) qs.set(k, sp[k] as string);
   }
   return getJSON<Leaderboard>(`/leaderboard?${qs.toString()}`);
