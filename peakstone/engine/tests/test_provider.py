@@ -53,6 +53,69 @@ def test_chat_streams_deltas(monkeypatch):
     assert "".join(got) == "thinkdef f(): return 1\n"   # every delta reached the consumer live
 
 
+def test_chat_stream_captures_finish_reason_and_truncation(monkeypatch):
+    import json
+
+    def chunk(content=None, finish_reason=None, usage=None):
+        choice = {"delta": ({"content": content} if content is not None else {})}
+        if finish_reason is not None:
+            choice["finish_reason"] = finish_reason
+        body = {"choices": [choice]}
+        if usage:
+            body["usage"] = usage
+        return f"data: {json.dumps(body)}\n"
+
+    # a generation that ran into the token budget: the last content chunk carries finish_reason=length
+    lines = [chunk(content="def f(): # reasoning..."),
+             chunk(content=" still thinking", finish_reason="length"),
+             chunk(usage={"prompt_tokens": 5, "completion_tokens": 16384}),
+             "data: [DONE]\n"]
+    monkeypatch.setattr(provider.urllib.request, "urlopen", lambda req, timeout=600: _FakeSSE(lines))
+    c = provider.LLMClient("http://x")
+    c.stream = True
+    res = c.chat("m", [{"role": "user", "content": "hi"}])
+    assert res.finish_reason == "length" and res.truncated is True
+
+    # a generation that stopped on its own is NOT truncated
+    ok = [chunk(content="done", finish_reason="stop"), "data: [DONE]\n"]
+    monkeypatch.setattr(provider.urllib.request, "urlopen", lambda req, timeout=600: _FakeSSE(ok))
+    res2 = c.chat("m", [{"role": "user", "content": "hi"}])
+    assert res2.finish_reason == "stop" and res2.truncated is False
+
+
+def test_chat_stream_reports_thinking_then_answering_phase(monkeypatch):
+    import json
+
+    def chunk(content=None, reasoning=None, finish_reason=None):
+        delta = {}
+        if content is not None:
+            delta["content"] = content
+        if reasoning is not None:
+            delta["reasoning_content"] = reasoning
+        choice = {"delta": delta}
+        if finish_reason:
+            choice["finish_reason"] = finish_reason
+        return f"data: {json.dumps({'choices': [choice]})}\n"
+
+    # thinks first (reasoning channel), then answers (content channel), then stops naturally
+    lines = [chunk(reasoning="let me think"), chunk(reasoning=" more"),
+             chunk(content="answer: 42", finish_reason="stop"), "data: [DONE]\n"]
+    monkeypatch.setattr(provider.urllib.request, "urlopen", lambda req, timeout=600: _FakeSSE(lines))
+    phases = []
+    c = provider.LLMClient("http://x")
+    c.stream = True
+    c.on_phase = phases.append
+    res = c.chat("m", [{"role": "user", "content": "hi"}])
+    assert phases == ["thinking", "answering"]      # fires once per channel transition
+    assert res.saw_content is True and res.truncated_phase is None
+
+    # truncated while still thinking — never reached the answer (saw_content stays False)
+    cut = [chunk(reasoning="thinking and thinking", finish_reason="length"), "data: [DONE]\n"]
+    monkeypatch.setattr(provider.urllib.request, "urlopen", lambda req, timeout=600: _FakeSSE(cut))
+    res2 = c.chat("m", [{"role": "user", "content": "hi"}])
+    assert res2.truncated is True and res2.truncated_phase == "thinking"
+
+
 def test_is_looping():
     from peakstone.engine.provider import is_looping
     assert is_looping("the " * 80)                 # a word repeated

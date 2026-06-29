@@ -223,6 +223,33 @@ def _quant_from_filename(name: str) -> str:
     return m.group(1) if m else "unknown"
 
 
+def reasoning_mode(serve_flags, reasoning_token_values) -> str | None:
+    """The reasoning RUN CONDITION, auto-derived (no submitter declaration). A chain-of-thought model
+    run with thinking on vs off is two distinct runs — faceted, never collapsed — like a quant.
+      'on'   — the model actually emitted chain-of-thought (reasoning_tokens > 0) — EVIDENCE wins,
+               even if a budget flag tried to disable it (some models think anyway)
+      'off'  — reasoning explicitly disabled (--reasoning-budget 0) and none was produced
+      None   — not a reasoning model / not applicable (neither signal present).
+    Evidence is checked first so a runtime override (PEAKSTONE_REASONING_BUDGET, reflected in
+    serve_flags below) and the model's real behaviour can't disagree with the label."""
+    if any((rt or 0) > 0 for rt in reasoning_token_values):
+        return "on"
+    if serve_flags and "--reasoning-budget 0" in serve_flags:
+        return "off"
+    return None
+
+
+def _effective_flags(flags: str) -> str:
+    """Serve flags as ACTUALLY served — applies the PEAKSTONE_REASONING_BUDGET override (mirrors
+    serve.sh) so a runtime thinking on/off choice is faithfully recorded in the bundle, not just the
+    model's configured flags."""
+    rb = os.environ.get("PEAKSTONE_REASONING_BUDGET")
+    if rb not in (None, ""):
+        flags = re.sub(r"--reasoning-budget\s+\S+", "", flags).strip()
+        flags = (flags + f" --reasoning-budget {rb}").strip()
+    return flags
+
+
 def _sampling(flags: str, run_cfg: dict) -> dict:
     """Effective sampling: temperature from config [run] (the bench overrides it on the request);
     top_p/top_k/repeat_penalty from the served model flags (the request does not override those)."""
@@ -274,9 +301,9 @@ def model_identity(model_name: str, run_cfg: dict) -> dict:
         "file_sha256_verified": verified,
         "context": _ctx_override(cfg.get("ctx")),
 
-        "serve_flags": cfg.get("flags", ""),
+        "serve_flags": _effective_flags(cfg.get("flags", "")),
         "engine": _engine_info(),
-        "sampling": _sampling(cfg.get("flags", ""), run_cfg),
+        "sampling": _sampling(_effective_flags(cfg.get("flags", "")), run_cfg),
     }
     # Contamination boundary. release_date is the conservative, unforgeable cutoff (the official
     # held-out metric keys off it); training_cutoff is the optional, self-reported tighter bound.
@@ -384,6 +411,8 @@ def produce_bundle(meta: dict, results: list[dict], *, harness_version: str = "0
     chash = challenge_hashes(paths.challenges_dir())
     cpub = challenge_publication(paths.challenges_dir())
     model = model_identity(model_name, run_cfg)
+    model["reasoning"] = reasoning_mode(model.get("serve_flags"),
+                                        (r.get("reasoning_tokens") for r in results))
     served_ctx = model.get("context")              # the window each result is judged for ctx-truncation against
 
     bundle_results = [_result(r, chash, meta.get("judge"), cpub, served_ctx) for r in results]

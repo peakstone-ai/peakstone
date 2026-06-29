@@ -23,6 +23,24 @@ class ChatResult:
     tok_per_s: float = 0.0
     error: str | None = None
     aborted: bool = False        # generation cut short (e.g. a degenerate repetition loop)
+    finish_reason: str | None = None   # server's stop reason: "stop" (natural), "length" (hit max_tokens)…
+    saw_content: bool = False          # did the answer channel (content) ever emit, or was it all thinking?
+
+    @property
+    def truncated(self) -> bool:
+        """The generation hit the token budget (max_tokens) rather than finishing on its own — so the
+        model may have been mid-thought. Hardware-independent (token-bound), but a high rate means the
+        budget is too tight to fairly measure capability. See finish_reason; aborted loops don't count."""
+        return self.finish_reason == "length" and not self.aborted
+
+    @property
+    def truncated_phase(self) -> str | None:
+        """Where a truncation happened: 'thinking' (the budget ran out before the model ever reached the
+        answer — needs a thinking budget / more room) vs 'answering' (the answer itself overran). Only
+        meaningful when the model uses the separate reasoning channel; None if not truncated."""
+        if not self.truncated:
+            return None
+        return "answering" if self.saw_content else "thinking"
 
 
 def _reasoning_tokens(usage: dict) -> int | None:
@@ -65,6 +83,9 @@ class LLMClient:
         # when set (callable taking a text delta), chat() streams and reports generation live;
         # the runner wires this up under --stream-output so the dashboard can show tokens as they land.
         self.on_delta = None
+        # when set (callable taking "thinking"|"answering"), fires when generation switches between the
+        # chain-of-thought channel and the answer channel — lets the dashboard show a live phase.
+        self.on_phase = None
         # stream the response even with no on_delta — enables repetition-loop detection/abort for every
         # run (the runner sets this), not just dashboard runs that forward deltas.
         self.stream = False
@@ -105,7 +126,8 @@ class LLMClient:
         dt = time.time() - t0
 
         try:
-            msg = body["choices"][0]["message"]
+            choice0 = body["choices"][0]
+            msg = choice0["message"]
             text = msg.get("content") or ""
             reasoning = msg.get("reasoning_content") or ""
         except (KeyError, IndexError):
@@ -121,6 +143,8 @@ class LLMClient:
             reasoning_tokens=_reasoning_tokens(usage),
             latency_s=round(dt, 2),
             tok_per_s=round(tps, 1),
+            finish_reason=choice0.get("finish_reason"),
+            saw_content=bool(text.strip()),
         )
 
     def _chat_stream(self, model, messages, temperature, max_tokens, timeout, on_delta) -> ChatResult:
@@ -135,11 +159,20 @@ class LLMClient:
         req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers, method="POST")
         text_parts, reason_parts, usage, pending = [], [], {}, []
         tail, since_check, aborted = "", 0, False   # for early repetition-loop detection
+        finish_reason = None
+        phase = None                                 # "thinking" | "answering" — the current channel
 
         def flush():
             if pending and on_delta:
                 on_delta("".join(pending))
             pending.clear()
+
+        def set_phase(p):
+            nonlocal phase
+            if p != phase:
+                phase = p
+                if self.on_phase:
+                    self.on_phase(p)
 
         t0 = time.time()
         try:
@@ -157,12 +190,18 @@ class LLMClient:
                         continue
                     if chunk.get("usage"):
                         usage = chunk["usage"]
-                    delta = ((chunk.get("choices") or [{}])[0]).get("delta") or {}
+                    choice0 = (chunk.get("choices") or [{}])[0]
+                    if choice0.get("finish_reason"):     # last content chunk carries the stop reason
+                        finish_reason = choice0["finish_reason"]
+                    delta = choice0.get("delta") or {}
                     piece = (delta.get("content") or "") + (delta.get("reasoning_content") or "")
                     if delta.get("content"):
                         text_parts.append(delta["content"])
+                        set_phase("answering")            # answer channel active → done thinking
                     if delta.get("reasoning_content"):
                         reason_parts.append(delta["reasoning_content"])
+                        if not delta.get("content"):
+                            set_phase("thinking")
                     if piece:
                         pending.append(piece)
                         if sum(len(p) for p in pending) >= 48 or "\n" in piece:
@@ -188,7 +227,8 @@ class LLMClient:
         return ChatResult(text=text, reasoning=reasoning,
                           prompt_tokens=int(usage.get("prompt_tokens", 0)), completion_tokens=ct,
                           reasoning_tokens=_reasoning_tokens(usage),
-                          latency_s=round(dt, 2), tok_per_s=round(tps, 1), aborted=aborted)
+                          latency_s=round(dt, 2), tok_per_s=round(tps, 1), aborted=aborted,
+                          finish_reason=finish_reason, saw_content=bool(text.strip()))
 
     def chat_tools(
         self,
