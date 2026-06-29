@@ -76,6 +76,22 @@ class ModelEntry:
         return round(p.stat().st_size / 1e9, 1) if (p and p.exists()) else None
 
 
+def delete_model(entry: "ModelEntry") -> bool:
+    """Delete a downloaded model's GGUF (frees disk) and its now-empty models/<name>/ dir. The
+    registry entry stays — the model just becomes 'not present' / re-downloadable. False if absent."""
+    p = entry.path
+    if not (p and p.exists()):
+        return False
+    p.unlink()
+    parent = p.parent
+    try:
+        if parent != REPO and parent.is_dir() and not any(parent.iterdir()):
+            parent.rmdir()
+    except OSError:
+        pass
+    return True
+
+
 def load_registry() -> dict[str, ModelEntry]:
     if not MODELS_TOML.exists():
         return {}

@@ -16,6 +16,7 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import sys
 import tomllib
 from pathlib import Path
@@ -38,10 +39,64 @@ ROOT = paths.repo_root()   # results land here; data files resolve via engine.pa
 # delta is one stdout line. Plain control chars → invisible/harmless if a CLI user ever sees them.
 GEN_MARK = "\x01"
 GEN_NL = "\x02"
+GEN_PHASE = "\x03"   # a line GEN_PHASE+"thinking"|"answering": the model's current generation channel
+
+# Generation token budget. Generous by default so a reasoning model isn't truncated mid-thought —
+# truncation makes a "fail" mean "ran out of room", not "couldn't solve it" (and unfairly penalizes
+# verbose/inline reasoners vs terse ones). It's also a deliberate run condition: a smaller budget
+# measures efficiency-at-task, a larger one measures raw capability. Resolved per run, recorded in the
+# bundle so it's comparable; overridable via --max-tokens (the TUI budget picker sets it).
+DEFAULT_MAX_TOKENS = 16384
+# Reasoning-heavy tasks (math/answer-match) emit a tiny answer after a LOT of thinking, so the answer
+# can be starved out by a code-sized budget. They get more room by default.
+REASONING_MAX_TOKENS = 32768
+
+
+def _budget(args, run_cfg, *, reasoning_heavy: bool = False) -> int:
+    """The completion token budget for this run: explicit --max-tokens > model config > a generous
+    default (larger for reasoning-heavy tasks). An explicit pick wins uniformly (e.g. an efficiency
+    run at 8k caps everything); 'default' means these sensible per-task defaults."""
+    if args.max_tokens:
+        return args.max_tokens
+    return run_cfg.get("max_tokens") or (REASONING_MAX_TOKENS if reasoning_heavy else DEFAULT_MAX_TOKENS)
 
 
 def _emit_gen(chunk: str) -> None:
     print(GEN_MARK + chunk.replace("\n", GEN_NL), flush=True)
+
+
+def _emit_phase(phase: str) -> None:
+    print(GEN_PHASE + phase, flush=True)   # dashboard shows "thinking"/"answering" live
+
+
+class _PipeSafe:
+    """Wrap a stream so a dead reader can't kill the run: if the consumer of our stdout (e.g. the TUI
+    run viewer) crashes or is killed, the next write would raise BrokenPipeError and take the whole
+    run down with it. Here, once the pipe breaks, writes become no-ops and the run continues to
+    completion (results.json still gets written). Applied only at the CLI entry point."""
+
+    def __init__(self, wrapped):
+        self._w = wrapped
+        self._broken = False
+
+    def write(self, s):
+        if self._broken:
+            return len(s)
+        try:
+            return self._w.write(s)
+        except (BrokenPipeError, OSError):
+            self._broken = True
+            return len(s)
+
+    def flush(self):
+        if not self._broken:
+            try:
+                self._w.flush()
+            except (BrokenPipeError, OSError):
+                self._broken = True
+
+    def __getattr__(self, name):
+        return getattr(self._w, name)
 
 
 SYSTEM_PROMPT = (
@@ -176,6 +231,10 @@ def main(argv=None):
     ap.add_argument("--reference", action="store_true",
                     help="use reference/ solutions instead of calling a model (suite sanity check)")
     ap.add_argument("--no-judge", action="store_true", help="disable LLM judge scoring")
+    ap.add_argument("--calibration", action="store_true",
+                    help="metacognition probes: ask the model its confidence BEFORE solving and "
+                         "whether its own solution is correct AFTER (the calibration axis). Cheap; "
+                         "run on a small probe subset, e.g. --level calibration.")
     ap.add_argument("--judge-only", metavar="PATH",
                     help="re-judge solutions already stored in a prior run's results.json (a "
                          "file, a results dir, or a combined/ dir). Only the judge model needs "
@@ -185,6 +244,13 @@ def main(argv=None):
                          "i.e. qwen3-coder)")
     ap.add_argument("--max-tokens", type=int, default=None,
                     help="override completion token budget (helps reasoning models finish)")
+    ap.add_argument("--gateway", default=None, metavar="URL",
+                    help="route ALL generation through a model-swapping gateway (`peakstone serve`) at "
+                         "this base URL instead of per-model llama-server ports; the model name in each "
+                         "request selects/loads the model. The gateway owns serving — no serve.sh.")
+    ap.add_argument("--gateway-key", default=None, metavar="TOKEN",
+                    help="bearer token for --gateway (LAN auth); usually unset for a local gateway "
+                         "(loopback is exempt).")
     ap.add_argument("--retries", type=int, default=0, metavar="N",
                     help="for tests/both challenges, on test failure feed the error back and let "
                          "the model fix it, up to N extra attempts (default 0 = single-shot). "
@@ -311,6 +377,18 @@ def main(argv=None):
         print(f"!! {e}", file=sys.stderr)
         return 2
     all_ch = load_challenges(Path(args.challenges_dir))
+    # A bare model run (no --level, no targeting filters, not reference/planner) defaults to the
+    # official 'standard' level — so it yields a COMPARABLE, submittable bundle (suite=level-standard)
+    # rather than an ad-hoc one. Any explicit --level or --ids/--lang/--difficulty/--type/--family/
+    # --published-* opts out, as do reference/planner runs.
+    _targeted = any([args.ids, args.ids_file, args.lang, args.difficulty, args.type, args.family,
+                     args.published_after, args.published_before])
+    if not args.level and not _targeted and not (args.reference or args.gen_plans
+                                                 or args.exec_plans or args.planner):
+        args.level = "standard"
+        print("No --level or filters given → defaulting to the official 'standard' level "
+              "(comparable + submittable). Use --level smoke|quick for a quicker run, "
+              "--no-judge to skip grading, or --ids/--lang/… for an ad-hoc selection.")
     level_meta: dict = {}
     if args.level:
         version, lvls = load_levels()
@@ -318,13 +396,15 @@ def main(argv=None):
         if not level:
             print(f"!! unknown level {args.level!r}; run --list-levels", file=sys.stderr)
             return 2
-        sel = set(resolve_level(level, all_ch))
-        chs = [c for c in all_ch if c.id in sel]
+        ordered = resolve_level(level, all_ch)   # manifest axis order (cheap/fast axes first)
+        by_id = {c.id: c for c in all_ch}
+        chs = [by_id[i] for i in ordered if i in by_id]   # run in manifest order, not filesystem order
         # apply level settings — explicit CLI flags still win (they only ever turn things ON here).
         if not level.judge:
             use_judge = False
         args.agent = args.agent or level.agent
         args.prebuilt = args.prebuilt or level.prebuilt
+        args.calibration = args.calibration or level.calibration
         if level.retries and not args.retries:
             args.retries = level.retries
         level_meta = {"suite_id": f"level-{args.level}", "suite_version": version}
@@ -365,21 +445,33 @@ def main(argv=None):
     print(f"Running {len(models)} model(s) over {len(chs)} challenge(s). "
           f"judge={judge_model if use_judge else False}")
 
+    # When --gateway is set, all models are reached through one swapping gateway (the model name in
+    # each request selects/loads it) instead of a per-model llama-server port. One shared client.
+    gateway_client = LLMClient(args.gateway, api_key=args.gateway_key or "") if args.gateway else None
+
     for model in models:
         client = None
         model_vram = None
         if not args.reference:
-            if model not in ports:
-                print(f"!! model '{model}' not in config [models]; skipping", file=sys.stderr)
-                continue
-            client = LLMClient(f"http://{host}:{ports[model]}")
-            if not client.health():
-                print(f"!! {model} endpoint not reachable; is serve.sh {model} running?",
-                      file=sys.stderr)
-                continue
+            if gateway_client is not None:
+                client = gateway_client
+                if not client.health():
+                    print(f"!! gateway {args.gateway} not reachable; is `peakstone serve` running?",
+                          file=sys.stderr)
+                    continue
+            else:
+                if model not in ports:
+                    print(f"!! model '{model}' not in config [models]; skipping", file=sys.stderr)
+                    continue
+                client = LLMClient(f"http://{host}:{ports[model]}")
+                if not client.health():
+                    print(f"!! {model} endpoint not reachable; is serve.sh {model} running?",
+                          file=sys.stderr)
+                    continue
             client.stream = True              # detect/abort repetition loops on every run (not just dashboard)
             if args.stream_output:
                 client.on_delta = _emit_gen   # live token stream for the dashboard
+                client.on_phase = _emit_phase  # live thinking/answering status
             model_vram = _gpu_mem_used()  # footprint of the one loaded model
             mem_used = {"vram_mib": model_vram, "ram_mib": _server_ram_used()}
 
@@ -489,7 +581,7 @@ def main(argv=None):
                     res = client.chat(model, [{"role": "system", "content": SYS},
                                               {"role": "user", "content": ch.spec}],
                                       temperature=run_cfg.get("temperature", 0.2),
-                                      max_tokens=args.max_tokens or run_cfg.get("max_tokens", 6144),
+                                      max_tokens=_budget(args, run_cfg),
                                       timeout=run_cfg.get("request_timeout", 600))
                     if res.error:
                         print(f"{label}  ERROR {res.error[:70]}"); continue
@@ -544,7 +636,7 @@ def main(argv=None):
                     {"role": "user", "content": ch.spec}],
                     temperature=run_cfg.get("temperature", 0.2),
                     # math reasoning needs room; reasoning models can spend the whole budget thinking.
-                    max_tokens=args.max_tokens or max(run_cfg.get("max_tokens", 6144), 16384),
+                    max_tokens=_budget(args, run_cfg, reasoning_heavy=True),
                     timeout=run_cfg.get("request_timeout", 600))
                 if res.error:
                     print(f"{label}  ERROR {res.error[:70]}"); continue
@@ -558,10 +650,14 @@ def main(argv=None):
                     "scoring": ch.scoring, "final_score": float(ok), "test_score": float(ok),
                     "judge_score": 0.0, "passed": int(ok), "total": 1, "expect": ch.expect,
                     "answer_got": got, "tok_per_s": res.tok_per_s, "latency_s": res.latency_s,
+                    "prompt_tokens": res.prompt_tokens, "completion_tokens": res.completion_tokens,
+                    "reasoning_tokens": res.reasoning_tokens,   # was unrecorded — the math token blind spot
                     "vram_mib": model_vram, "response": (res.text or res.reasoning)[:4000],
-                    "stdout": "", "stderr": "", "note": "answer-match",
+                    "stdout": "", "stderr": "", "note": "answer-match", "truncated": res.truncated,
+                    "metrics": {"trunc_truncated": 1.0 if res.truncated else 0.0},
                     **({"error": "repetition-loop"} if res.aborted else {})})
-                print(f"{label}  {'ok ' if ok else '!! '} answer expect={ch.expect} got={got}")
+                print(f"{label}  {'ok ' if ok else '!! '} answer expect={ch.expect} got={got}"
+                      + (f"  ✂truncated ({res.truncated_phase})" if res.truncated else ""))
                 continue
 
             if ch.scoring == "repo-patch":
@@ -605,7 +701,7 @@ def main(argv=None):
                     res = client.chat(model, [{"role": "system", "content": sysmsg},
                                               {"role": "user", "content": ch.spec}],
                                       temperature=run_cfg.get("temperature", 0.2),
-                                      max_tokens=args.max_tokens or run_cfg.get("max_tokens", 6144),
+                                      max_tokens=_budget(args, run_cfg),
                                       timeout=run_cfg.get("request_timeout", 600))
                     if res.error:
                         print(f"{label}  ERROR {res.error[:70]}")
@@ -633,6 +729,9 @@ def main(argv=None):
                 continue
 
             attempts, passed_on = 0, None
+            looped, rtoks = False, None   # set per-attempt in the generate path; defaulted for --reference
+            pre_conf = self_correct = None   # calibration probes (only with --calibration)
+            recovered = False                # self-repair: first try failed but a retry fixed it
             if args.reference:
                 files = ch.reference_files()
                 response, tps, lat, ptoks, ctoks = "(reference)", None, None, 0, 0
@@ -642,18 +741,26 @@ def main(argv=None):
                 run = run_tests(ch, files, run_cfg)
             else:
                 # Generate -> test, and (with --retries) feed the failing test output back so the
-                # model can self-repair. attempt 1 is exactly the old single-shot path (retries=0).
+                # model can self-repair. The HEADLINE scores the FIRST attempt (single-shot skill);
+                # whether a retry recovered it is reported as its own self-repair axis, so single-shot
+                # ability and debugging ability never blur together in the headline.
                 msgs = [{"role": "system", "content": tests_system},
                         {"role": "user", "content": ch.spec}]
                 max_attempts = 1 + max(0, args.retries)
                 run = None
+                first_run = first_response = first_files = None
+                first_truncated = False           # did the FIRST attempt hit the token budget?
+                first_trunc_phase = None          # …and was it cut mid-thinking or mid-answer?
                 response, tps, lat, ptoks, ctoks = None, None, None, 0, 0
                 files, looped = {}, False
+                # calibration (pre-hoc): how confident is the model BEFORE it attempts the task?
+                if args.calibration and _calibratable(ch):
+                    pre_conf = _ask_confidence(client, model, ch, run_cfg)
                 for attempt in range(1, max_attempts + 1):
                     res = client.chat(
                         model, msgs,
                         temperature=run_cfg.get("temperature", 0.2),
-                        max_tokens=args.max_tokens or run_cfg.get("max_tokens", 6144),
+                        max_tokens=_budget(args, run_cfg),
                         timeout=run_cfg.get("request_timeout", 600),
                     )
                     if res.error:
@@ -668,6 +775,14 @@ def main(argv=None):
                     ptoks, ctoks, rtoks = res.prompt_tokens, res.completion_tokens, res.reasoning_tokens
                     files = extract_files(res.text, ch.solution_file, ch.language)
                     run = run_tests(ch, files, run_cfg)
+                    if first_run is None:
+                        first_run, first_response, first_files = run, response, files
+                        first_truncated = res.truncated   # headline scores attempt 1, so judge IT
+                        first_trunc_phase = res.truncated_phase   # mid-thinking vs mid-answer
+                        # calibration (post-hoc): ask about the FIRST solution NOW — before the model
+                        # sees the test outcome via the retry feedback (else it would have insider info).
+                        if args.calibration and _calibratable(ch) and files:
+                            self_correct = _ask_self_verify(client, model, ch, files, run_cfg)
                     if run.ok:
                         passed_on = attempt
                         break
@@ -680,6 +795,9 @@ def main(argv=None):
                                      "tests pass. Return the complete corrected file(s)."})
                 if run is None:   # hard error before any test could run
                     continue
+                # Headline = the FIRST attempt; keep whether a later attempt recovered as its own signal.
+                recovered = (not first_run.ok) and run.ok   # failed first try, fixed via self-repair
+                run, response, files = first_run, first_response, first_files
 
             judge_res = None
             if use_judge and ch.scoring in ("judge", "both"):
@@ -693,16 +811,27 @@ def main(argv=None):
                 extra["error"] = "repetition-loop"   # surfaced as a distinct error type in results
             if args.retries:
                 extra.update(attempts=attempts, passed_on_attempt=passed_on)
+                if not run.ok:   # first-try failure → a self-repair candidate (1=fixed by a retry, 0=not)
+                    extra["metrics"] = {**(extra.get("metrics") or {}),
+                                        "repair_recovered": 1.0 if recovered else 0.0}
             if agents_md is not None:
                 gp, gt, gdetail = global_rules.evaluate(response or "", files, ch)
                 extra.update(global_adherence=round(gp / gt, 3) if gt else None,
                              global_rule_detail=[{"rule": n, "ok": ok} for n, ok in gdetail])
             if getattr(run, "metrics", None):
-                extra["metrics"] = run.metrics
+                extra["metrics"] = {**(extra.get("metrics") or {}), **run.metrics}
+            if args.calibration:   # carry calibration as numeric metric keys (no schema churn)
+                cal = {}
+                if pre_conf is not None:
+                    cal["cal_pre_confidence"] = round(pre_conf, 4)
+                if self_correct is not None:
+                    cal["cal_self_correct"] = 1.0 if self_correct else 0.0
+                if cal:
+                    extra["metrics"] = {**(extra.get("metrics") or {}), **cal}
             extra = extra or None
             results.append(_row(model, ch, run, sc, judge_res,
-                                response=response, tps=tps, lat=lat,
-                                ptoks=ptoks, ctoks=ctoks, rtoks=rtoks, vram=model_vram, extra=extra))
+                                response=response, tps=tps, lat=lat, ptoks=ptoks, ctoks=ctoks,
+                                rtoks=rtoks, vram=model_vram, extra=extra, truncated=first_truncated))
             flag = "ok " if run.ok else ("!! " if looped else "   ")
             retry_note = ""
             if args.retries and attempts > 1:
@@ -712,7 +841,8 @@ def main(argv=None):
                   f"tests={sc['passed']}/{sc['total']}"
                   + (f" judge={sc['judge_score']:.2f}" if judge_res else "")
                   + (f" {tps:.0f}tok/s" if tps else "")
-                  + retry_note + ("  (repetition loop)" if looped else ""))
+                  + retry_note + ("  (repetition loop)" if looped else "")
+                  + (f"  ✂truncated ({first_trunc_phase})" if first_truncated else ""))
 
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     outdir = Path(args.out) if args.out else ROOT / "results" / stamp
@@ -722,6 +852,7 @@ def main(argv=None):
         "sandbox": effective_sandbox(run_cfg.get("sandbox")), "reference": args.reference,
         "gpu": _gpu_info(), "retries": args.retries,
         "agents_md": bool(agents_md), "mem_used": mem_used,
+        "max_tokens": args.max_tokens or DEFAULT_MAX_TOKENS,   # the run's generation budget (run identity)
         **level_meta,
     }
     write_report(results, outdir, meta)
@@ -1031,7 +1162,7 @@ def run_gen_plans(args, chs, host, ports, run_cfg):
                           [{"role": "system", "content": PLAN_SYSTEM},
                            {"role": "user", "content": ch.spec}],
                           temperature=run_cfg.get("temperature", 0.2),
-                          max_tokens=args.max_tokens or 8192,
+                          max_tokens=_budget(args, run_cfg),
                           timeout=run_cfg.get("request_timeout", 600))
         if res.error:
             print(f"{planner:>18} | {ch.id:<28}  PLAN ERROR {res.error[:60]}")
@@ -1080,7 +1211,7 @@ def run_exec_plans(args, chs, host, ports, run_cfg, use_judge, judge_model, judg
                           [{"role": "system", "content": SYSTEM_PROMPT},
                            {"role": "user", "content": user}],
                           temperature=run_cfg.get("temperature", 0.2),
-                          max_tokens=args.max_tokens or run_cfg.get("max_tokens", 6144),
+                          max_tokens=_budget(args, run_cfg),
                           timeout=run_cfg.get("request_timeout", 600))
         if res.error:
             print(f"{label}  ERROR {res.error[:60]}")
@@ -1131,8 +1262,65 @@ def _served_ctx(model: str) -> int | None:
     return int(ctx) if isinstance(ctx, int) else None
 
 
+_PROB_RE = re.compile(r"\d*\.\d+|\d+")
+
+
+def _parse_prob(text):
+    """First number in `text` clamped to [0,1] (accepts a 0-100 percent too), or None."""
+    m = _PROB_RE.search(text or "")
+    if not m:
+        return None
+    try:
+        v = float(m.group(0))
+    except ValueError:
+        return None
+    if v > 1.0:
+        v /= 100.0
+    return max(0.0, min(1.0, v))
+
+
+def _parse_yesno(text):
+    """True/False from a yes/no-ish reply, or None if neither is clearly present."""
+    t = (text or "").strip().lower()
+    for tok in t[:32].replace(".", " ").replace(",", " ").split():
+        if tok.startswith(("yes", "correct", "true")):
+            return True
+        if tok.startswith(("no", "incorrect", "false")):
+            return False
+    return None
+
+
+def _calibratable(ch) -> bool:
+    """Where calibration probes are cheap AND meaningful: a coding challenge with a small spec.
+    Skip long-context (re-sending an ~80k-token haystack twice is expensive) and anything whose spec
+    is huge; non-coding scoring (safety/answer-match/agentic) runs in its own branch and isn't probed."""
+    return (ch.scoring in ("tests", "both") and ch.category != "long-context"
+            and len(ch.spec) <= 24000)
+
+
+def _ask_confidence(client, model, ch, run_cfg):
+    """Calibration (pre-hoc): the model's own probability that it will pass — a number in [0,1]."""
+    prompt = ("You are about to attempt the programming task below. BEFORE solving it, estimate the "
+              "probability (a single number from 0.0 to 1.0) that your solution will pass all hidden "
+              "tests. Reply with ONLY the number.\n\n" + ch.spec)
+    res = client.chat(model, [{"role": "user", "content": prompt}], temperature=0.0,
+                      max_tokens=24, timeout=run_cfg.get("request_timeout", 600))
+    return None if res.error else _parse_prob(res.text)
+
+
+def _ask_self_verify(client, model, ch, files, run_cfg):
+    """Calibration (post-hoc): does the model believe its OWN solution is correct? True/False/None."""
+    sol = "\n\n".join(f"# file: {p}\n{c}" for p, c in files.items())
+    prompt = ("Here is a programming task and your candidate solution. Will the solution pass all "
+              "hidden tests? Answer with ONLY 'YES' or 'NO'.\n\n## Task\n" + ch.spec +
+              "\n\n## Your solution\n" + sol)
+    res = client.chat(model, [{"role": "user", "content": prompt}], temperature=0.0,
+                      max_tokens=8, timeout=run_cfg.get("request_timeout", 600))
+    return None if res.error else _parse_yesno(res.text)
+
+
 def _row(model, ch, run, sc, judge_res, response="", tps=None, lat=None, ptoks=0, ctoks=0,
-         rtoks=None, vram=None, extra=None):
+         rtoks=None, vram=None, extra=None, truncated=None):
     base = {
         "model": model, "challenge": ch.id, "language": ch.language,
         "difficulty": ch.difficulty, "category": ch.category, "type": ch.ctype,
@@ -1140,6 +1328,10 @@ def _row(model, ch, run, sc, judge_res, response="", tps=None, lat=None, ptoks=0
         "response": response, "tok_per_s": tps, "latency_s": lat,
         "prompt_tokens": ptoks, "completion_tokens": ctoks, "reasoning_tokens": rtoks,
         "vram_mib": vram,
+        # generation hit the token budget (max_tokens) instead of finishing on its own — the model may
+        # have been cut off mid-thought. Token-bound, so hardware-independent; a high rate means the
+        # budget is too tight to fairly measure capability (None = not a generated challenge / unknown).
+        "truncated": truncated,
     }
     if sc is None:  # hard error before scoring
         base.update(final_score=0.0, test_score=0.0, judge_score=0.0,
@@ -1156,8 +1348,13 @@ def _row(model, ch, run, sc, judge_res, response="", tps=None, lat=None, ptoks=0
         base["judge_detail"] = judge_res
     if extra:
         base.update(extra)
+    if truncated is not None:   # also a numeric metric so it persists (Result.metrics) + aggregates
+        base["metrics"] = {**(base.get("metrics") or {}), "trunc_truncated": 1.0 if truncated else 0.0}
     return base
 
 
 if __name__ == "__main__":
+    # A crashed/killed viewer (the TUI) breaking our stdout pipe must NOT lose the run — keep going.
+    sys.stdout = _PipeSafe(sys.stdout)
+    sys.stderr = _PipeSafe(sys.stderr)
     raise SystemExit(main())

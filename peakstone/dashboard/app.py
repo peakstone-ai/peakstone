@@ -5,20 +5,28 @@ Run:  peakstone            (or)  python -m dashboard  [--api URL]
 """
 from __future__ import annotations
 
+import json
+import os
 import re
 import threading
 import time
+from collections import deque
 
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Footer, Header, Input, RichLog, Static, Tree
+from textual.widgets import Button, DataTable, Footer, Header, Input, Static, Tree
+from rich.console import Group
+from rich.markup import escape
+from rich.table import Table
+from rich.text import Text
 
 from peakstone.engine import capabilities as eng_caps
 from peakstone.engine import estimate as eng_estimate
 from peakstone.engine import levels as eng_levels
+from peakstone.engine import paths as eng_paths
 
 from . import challenges as ch_browse
 from . import client, hardware, history, models, preflight, reproduce
@@ -31,6 +39,32 @@ def _bar(used: int, total: int, width: int = 22) -> str:
     frac = (used / total) if total else 0.0
     filled = int(frac * width)
     return f"[{'█' * filled}{'░' * (width - filled)}] {used:,}/{total:,}"
+
+
+def _meter(label: str, used: int, total: int) -> str:
+    """'LABEL [bar] used/total MiB' padded to a fixed width so the GPU/CPU id printed after it lines
+    up across rows regardless of how many digits the byte counts have."""
+    return f"{label} {_bar(used, total, 16)} MiB".ljust(44)
+
+
+def _model_detail(lm: dict) -> str:
+    """Right-corner one-liner for a served model: '▶ <name>  <ctx> · <quant> · think <x>'."""
+    parts = lm["file"].replace("\\", "/").split("/")
+    nm = parts[-2] if len(parts) >= 2 else parts[-1]   # models/<name>/file.gguf -> <name>
+    q = models.quant_label(parts[-1])
+    rb = lm.get("reasoning")               # the served --reasoning-budget value (string from the cmdline)
+    if rb is None:
+        think = None
+    elif rb == "0":
+        think = "off"
+    elif rb == "-1":
+        think = "full"
+    elif rb.lstrip("-").isdigit():
+        think = f"{_ctx_k(int(rb))} cap"   # a numeric thinking-token budget
+    else:
+        think = rb
+    return (f"[b]▶ {escape(nm)}[/b]  {_ctx_k(lm.get('ctx'))} · {escape(q)}"
+            + (f" · think {think}" if think else ""))
 
 
 def _fmt(v, fmt: str = "{:.2f}") -> str:
@@ -120,6 +154,17 @@ def _ctx_k(ctx) -> str:
     return f"{ctx / 1024:g}K" if ctx >= 1024 else str(int(ctx))
 
 
+def _think_label(v) -> str | None:
+    """Human label for a reasoning override: 'on'->full, 'off'->off, int N->'4K cap', None->None."""
+    if v == "on":
+        return "full"
+    if v == "off":
+        return "off"
+    if isinstance(v, int):
+        return f"{_ctx_k(v)} cap"
+    return None
+
+
 # sensible context choices offered when launching a run; None = the model's configured default.
 CTX_CHOICES = [None, 4096, 8192, 16384, 32768, 65536, 131072]
 
@@ -151,6 +196,8 @@ def _hw(run: dict) -> str:
 # Live-generation stream protocol — must match peakstone.engine.runner (GEN_MARK / GEN_NL).
 GEN_MARK = "\x01"
 GEN_NL = "\x02"
+GEN_PHASE = "\x03"         # a line GEN_PHASE+"thinking"|"answering": the model's current channel
+_RUN_LOG_MAX = 8000        # bounded ring of streamed run lines (caps memory under a token flood)
 
 # Render the runner's per-challenge progress markers as checkmarks in the live run log.
 _PROGRESS_MARKS = [("  → solving", "  [dim]⟳[/]"), ("  ok ", "  [green]✓[/] "),
@@ -159,32 +206,107 @@ _PROGRESS_MARKS = [("  → solving", "  [dim]⟳[/]"), ("  ok ", "  [green]✓[/
 
 
 def _pretty_progress(s: str) -> str:
+    # Fully neutralize the runner/model text before we inject our own markup below: rich.markup.escape
+    # only escapes *tag-shaped* brackets, which mismatched the parser and crashed mid-run on shapes
+    # like `[^[]`. Escaping every `[` is parser-proof (Rich only treats `\` as special before a `[`,
+    # so backslashes/regex/paths render unchanged, and none of the marks' search keys contain `[`).
+    s = s.replace("[", r"\[")
     for a, b in _PROGRESS_MARKS:
         s = s.replace(a, b)
     return s
+
+
+def _parse_result(s: str) -> tuple[str, str, str] | None:
+    """Parse a runner per-challenge result line into (challenge_id, status_glyph, info) for the
+    completed-tests table, or None if the line isn't a per-challenge result. The runner labels every
+    such line `<model> | <challenge>  <outcome…>` (the same ' | ' heuristic the app uses to count
+    coverage). '→ solving' lines are progress, not results, and are excluded."""
+    if " | " not in s or "→ solving" in s:
+        return None
+    right = s.split("|", 1)[1].strip()          # "<challenge>  <outcome…>"
+    parts = right.split(None, 1)
+    if not parts:
+        return None
+    ch = parts[0]
+    rest = parts[1].strip() if len(parts) > 1 else ""
+    if rest.startswith("ERROR") or rest.startswith("PLAN ERROR"):
+        status = "[red]✗[/]"
+    elif rest.startswith("SKIP"):
+        status = "[dim]·[/]"
+    else:
+        m = re.search(r"final=([\d.]+)", rest)
+        if m:
+            f = float(m.group(1))
+            status = "[green]✓[/]" if f >= 0.999 else ("[yellow]◐[/]" if f > 0 else "[red]✗[/]")
+        elif rest.startswith("ok"):
+            status = "[green]✓[/]"
+        elif rest.startswith("!!"):
+            status = "[red]✗[/]"
+        else:
+            status = "·"
+    for pre in ("ok ", "!! "):                  # the glyph already conveys pass/fail; drop the marker
+        if rest.startswith(pre):
+            rest = rest[len(pre):].strip()
+            break
+    if "✂truncated" in rest:                     # cut off at the token budget (likely mid-thought)
+        status = "[magenta]✂[/]"                 # distinct from a genuine ✗ — it's a budget signal
+    return ch, status, rest
 
 
 class HardwarePanel(Static):
     """Live GPU/CPU/RAM meters, refreshed every second."""
 
     def on_mount(self) -> None:
-        self.set_interval(1.0, self.refresh_stats)
-        self.refresh_stats()
+        self.set_interval(1.0, self._safe_refresh)
+        self._safe_refresh()
+
+    def _safe_refresh(self) -> None:
+        # Another per-tick UI timer: a hiccup reading hardware (e.g. a flaky pgrep/nvidia-smi) must
+        # not raise out of the callback and crash the app. Swallow and try again next second.
+        try:
+            self.refresh_stats()
+        except Exception:  # noqa: BLE001
+            pass
 
     def refresh_stats(self) -> None:
         s = hardware.snapshot()
-        lines = []
-        for g in s.gpus:
-            lines.append(f"[b]GPU{g.index}[/b] {g.name}  ([b]{g.vram_gb:g} GB[/b])")
-            lines.append(f"  VRAM {_bar(g.mem_used_mib, g.mem_total_mib)} MiB   util {g.util_pct}%")
-        if not s.gpus:
-            lines.append("[yellow]No GPU detected — CPU only[/yellow]")
-        lines.append(f"[b]CPU[/b]  {s.cpu_pct:5.1f}%  ({s.cores} cores)")
-        lines.append(f"[b]RAM[/b]  {_bar(s.ram_used_mib, s.ram_total_mib)} MiB")
+        # every served model, right-pinned; the first sits on the primary GPU's line, the rest stack
+        # under it on lines that are empty on the left (multiple models loaded on the same card).
+        details = [_model_detail(lm) for lm in hardware.loaded_models() if lm.get("file")]
+
+        def _gpu_row(left: str, right: str):
+            """One GPU line: meter on the left, loaded-model detail pinned to the right corner."""
+            row = Table.grid(expand=True, padding=(0, 1))
+            row.add_column(justify="left", ratio=1, no_wrap=True)
+            row.add_column(justify="right", no_wrap=True)
+            row.add_row(left, right)
+            return row
+
+        rows = []
+        if s.gpus:
+            for i, g in enumerate(s.gpus):
+                rows.append(_gpu_row(
+                    f"{_meter('VRAM', g.mem_used_mib, g.mem_total_mib)}  "
+                    f"[b]GPU{g.index}[/b] {g.name}  util {g.util_pct}%",
+                    details[0] if (i == 0 and details) else ""))
+                if i == 0:                       # extra models on this card: blank left, pinned right
+                    for d in details[1:]:
+                        rows.append(_gpu_row("", d))
+        else:
+            rows.append(_gpu_row("[yellow]No GPU detected — CPU only[/yellow]",
+                                 details[0] if details else ""))
+            for d in details[1:]:
+                rows.append(_gpu_row("", d))
+        names = s.cpu_names or ["CPU"]            # " RAM" lines up under "VRAM"; CPU0 under GPU0
+        rows.append(Text.from_markup(
+            f"{_meter(' RAM', s.ram_used_mib, s.ram_total_mib)}  "
+            f"[b]CPU0[/b] {escape(names[0])}  {s.cpu_pct:.1f}% ({s.cores} cores)"))
+        for i, nm in enumerate(names[1:], start=1):   # dual-socket boxes: CPU1, CPU2… aligned under CPU0
+            rows.append(Text.from_markup(f"{' ' * 44}  [b]CPU{i}[/b] {escape(nm)}"))
         job = self.app.job_status()
         if job:
-            lines.append(job)
-        self.update("\n".join(lines))
+            rows.append(Text.from_markup(job))
+        self.update(Group(*rows))
 
 
 class Dashboard(App):
@@ -204,8 +326,9 @@ class Dashboard(App):
         ("u", "queue", "Queue"),
         ("h", "history", "History"),
     ]
-    SORTS = ["code_score", "held_out_score", "agent_score", "planner_score", "tok_per_s",
-             "total_time_s", "score_per_1k_tokens", "long_ctx_score"]
+    SORTS = ["held_out_score", "code_score", "math_score", "self_verify_accuracy", "recovery_rate",
+             "agent_score", "planner_score", "tok_per_s", "total_time_s", "score_per_1k_tokens",
+             "long_ctx_score", "truncation_rate"]
 
     def __init__(self, base_url: str):
         super().__init__()
@@ -221,21 +344,31 @@ class Dashboard(App):
         # chosen context window, per model name; "" is the global default applied to models without
         # their own override (None at any key = the model's native ctx).
         self.ctx_overrides: dict[str, int | None] = {}
+        # chosen reasoning budget per model name ("" = global default); value None=default | "on" | "off"
+        # | a positive int (cap thinking at N tokens, then force the answer)
+        self.reasoning_overrides: dict[str, str | int | None] = {}
+        # chosen generation token budget (max_tokens) per model name ("" = global default; None = engine
+        # default). Smaller measures efficiency-at-task; larger gives reasoners room not to be truncated.
+        self.budget_overrides: dict[str, int | None] = {}
         # run manager: runs execute on an app-level worker (not the modal) so they survive leaving the
         # run view, and a second run while one is active is queued rather than started concurrently.
         self.run_queue: list[dict] = []
         self.run_active = False
         self._run_lock = threading.Lock()      # guards queue + run-state across the worker and UI threads
-        self._run_log: list[str] = []          # raw streamed lines of the current run (for viewer replay)
+        self._run_log: deque = deque(maxlen=_RUN_LOG_MAX)  # bounded ring of streamed lines (viewer replay)
+        self._run_log_n = 0                    # monotonic count of lines emitted this run (viewer cursor)
         self._run_result = None
         self._run_spec: dict | None = None
         self._run_submitted: bool | None = None  # None=not yet, True/False=auto-submit outcome
         self._viewer = None                    # the ReproduceScreen currently viewing the active run
-        self._run_procs: list = []             # serve + bench + download subprocesses (for cancel)
+        self._run_procs: list = []             # local download subprocesses (for cancel)
+        self._run_job_id: str | None = None    # the active daemon job id (benchmark runs)
         self._run_cancelled = False
         self._run_phase: str | None = None     # None | "download" | "run" — for the global status line
         self._run_done = self._run_total = 0   # coverage of the active run
         self._run_t0: float | None = None       # monotonic at first solve (elapsed / sol-s)
+        self._run_tps: float | None = None       # most recent challenge's tok/s (live throughput)
+        self._run_gen_phase: str | None = None   # "thinking" | "answering" — the model's live channel
         self._dl_done = self._dl_total = 0      # bytes of the active download
         self._corpus = None                     # cached local peakstone corpus (coverage + spec lookup)
 
@@ -255,11 +388,12 @@ class Dashboard(App):
         return next((c.spec for c in self.corpus() if c.id == challenge_id), None)
 
     def start_run(self, name: str, *, published_tps=None, challenge_ids=None, level=None,
-                  free_procs=None, ctx=None, download_only=False) -> bool:
+                  free_procs=None, ctx=None, reasoning=None, budget=None, download_only=False) -> bool:
         """Queue a run. Returns True if it started immediately, False if it was queued behind an active
         run. Runs execute one at a time on _run_loop (one model on the GPU at a time)."""
         spec = {"name": name, "published_tps": published_tps, "challenge_ids": challenge_ids,
-                "level": level, "free_procs": free_procs, "ctx": ctx, "download_only": download_only}
+                "level": level, "free_procs": free_procs, "ctx": ctx, "reasoning": reasoning,
+                "budget": budget, "download_only": download_only}
         with self._run_lock:                 # append + active-check atomically vs the drain loop
             self.run_queue.append(spec)
             active = self.run_active
@@ -283,9 +417,12 @@ class Dashboard(App):
                     return
                 spec = self.run_queue.pop(0)
                 self.run_active = True
-                self._run_spec, self._run_log, self._run_result, self._run_submitted = spec, [], None, None
+                self._run_spec, self._run_result, self._run_submitted = spec, None, None
+                self._run_log, self._run_log_n = deque(maxlen=_RUN_LOG_MAX), 0
                 self._run_procs, self._run_cancelled = [], False
                 self._run_phase, self._run_done, self._run_total, self._run_t0 = "start", 0, 0, None
+                self._run_tps = None
+                self._run_gen_phase = None        # "thinking" | "answering" — the model's live channel
                 self._dl_done = self._dl_total = 0
             self.call_from_thread(self._viewer_reset)
             if spec.get("download_only"):       # a queued download job — fetch weights, no serve/bench
@@ -298,32 +435,76 @@ class Dashboard(App):
                 self.call_from_thread(self._viewer_show, res)
                 self.call_from_thread(self.notify, f"{spec['name']}: {res.note}")
                 continue
-            if spec["free_procs"]:
-                self._run_emit(f"freeing GPU: stopping {len(spec['free_procs'])} llama-server process(es)…")
-                preflight.free(spec["free_procs"])
-            res = reproduce.reproduce(spec["name"], challenge_ids=spec["challenge_ids"],
-                                      level=spec["level"], published_tps=spec["published_tps"],
-                                      ctx=spec.get("ctx"), on_proc=self._run_procs.append,
-                                      on_dl_progress=self._dl_progress, log=self._run_emit,
-                                      cancel=lambda: self._run_cancelled)
-            if self._run_cancelled:            # killed mid-run → record as cancelled, move to next
-                res = reproduce.ReproduceResult(spec["name"], False, note="cancelled")
+            # Benchmark runs execute in the gateway daemon (peakstone serve) — the queue + serving live
+            # there, so the run survives the TUI quitting. We mirror the daemon's log into the same
+            # stream the viewer already parses; the daemon owns serving (no local serve.sh to free).
+            res = self._run_via_daemon(spec)
             history.append({"model": res.model, "ok": res.ok, "your_tps": res.your_tps,
                             "published_tps": res.published_tps, "code_score": res.code_score, "note": res.note})
             self._run_result = res
             self.call_from_thread(self._viewer_show, res)
-            if res.ok and res.bundle and not self._run_cancelled:   # auto-submit completed runs (for now)
-                try:
-                    status, _ = client.submit_bundle(self.base_url, res.bundle)
-                    self._run_submitted = status in (201, 409)
-                    msg = {201: "submitted ✓", 409: "already submitted"}.get(status, f"submit: {status}")
-                except Exception as e:  # noqa: BLE001
-                    self._run_submitted = False
-                    msg = f"submit failed: {e}"
-                self.call_from_thread(self._viewer_show, res)   # refresh the result line's submit state
-                self.call_from_thread(self.notify, f"{spec['name']}: {msg}")
-                if self._run_submitted:          # pull the new result into the leaderboard
-                    self.call_from_thread(self.load_board)
+            if res.ok and self._run_submitted and not self._run_cancelled:  # the daemon auto-submits
+                self.call_from_thread(self.notify, f"{spec['name']}: submitted ✓")
+                self.call_from_thread(self.load_board)        # pull the new result into the leaderboard
+
+    def _run_via_daemon(self, spec: dict):
+        """Enqueue a benchmark on the gateway daemon and mirror its log into the run viewer. The run
+        lives in the daemon, so quitting the TUI or dropping the stream never stops it."""
+        gw = client.GATEWAY_DEFAULT
+        try:
+            from peakstone.gateway.launch import ensure_running
+            ensure_running()                       # make sure the daemon is up before we enqueue
+        except Exception:  # noqa: BLE001
+            pass
+        job_spec = {"model": spec["name"]}
+        for src, dst in (("challenge_ids", "ids"), ("level", "level"), ("ctx", "ctx"),
+                         ("reasoning", "reasoning"), ("budget", "budget")):
+            if spec.get(src) is not None:
+                job_spec[dst] = spec[src]
+        published_tps = spec.get("published_tps")
+        try:
+            jid = client.enqueue_job(job_spec, base_url=gw)
+        except client.APIError as e:
+            return reproduce.ReproduceResult(spec["name"], False, published_tps=published_tps,
+                                             note=f"gateway unreachable: {e}")
+        with self._run_lock:
+            self._run_job_id = jid
+        try:
+            for line in client.stream_job_log(jid, base_url=gw):
+                if self._run_cancelled:
+                    break
+                self._run_emit(line)
+        except client.APIError as e:
+            self._run_emit(f"!! lost log stream (run continues in the daemon): {e}")
+        job = None
+        try:
+            job = client.get_job(jid, base_url=gw)
+        except client.APIError:
+            pass
+        with self._run_lock:
+            self._run_job_id = None
+        if self._run_cancelled:
+            return reproduce.ReproduceResult(spec["name"], False, published_tps=published_tps,
+                                             note="cancelled")
+        if not job:
+            return reproduce.ReproduceResult(spec["name"], False, published_tps=published_tps,
+                                             note="job not found")
+        summary = job.get("summary") or {}
+        self._run_submitted = summary.get("submitted")
+        # The daemon already auto-submits, but it runs on this same host, so read its bundle off disk
+        # to enable manual re-submit ('s' in the viewer) and keep the result line's submit state.
+        bundle = None
+        bpath = eng_paths.repo_root() / "results" / f"job-{jid}" / "bundle.json"
+        try:
+            if bpath.exists():
+                bundle = json.loads(bpath.read_text())
+        except (OSError, ValueError):
+            pass
+        return reproduce.ReproduceResult(
+            spec["name"], job.get("status") == "done", your_tps=summary.get("your_tps"),
+            published_tps=published_tps, code_score=summary.get("code_score"),
+            passed=summary.get("passed", 0), total=summary.get("total", 0),
+            note=job.get("status") or "?", bundle=bundle)
 
     def _dl_progress(self, done, total) -> None:
         with self._run_lock:
@@ -332,15 +513,22 @@ class Dashboard(App):
             self.call_from_thread(self._viewer._update_stat)
 
     def _run_emit(self, line: str) -> None:
+        # Runs on the bench reader thread — it must NEVER block, or the runner's stdout pipe fills and
+        # the whole run deadlocks (a blocking call_from_thread per line was the prior bug). So just
+        # buffer (deque.append is atomic); the viewer drains this ring on its own UI-thread timer
+        # (ReproduceScreen._drain_log), coalescing under a flood. No call_from_thread here.
         self._run_log.append(line)
+        self._run_log_n += 1
         self._track(line)
-        if self._viewer is not None:
-            self.call_from_thread(self._viewer._on_line, line)
 
     def _track(self, line: str) -> None:
         """Single source of truth for the active run's phase + coverage (read by the global overview AND
         the run view), parsed from the stream under the lock."""
         if line.startswith(GEN_MARK):
+            return
+        if line.startswith(GEN_PHASE):
+            with self._run_lock:
+                self._run_gen_phase = line[len(GEN_PHASE):]   # "thinking" | "answering"
             return
         with self._run_lock:
             if "downloading" in line.lower():
@@ -349,8 +537,14 @@ class Dashboard(App):
                 self._run_phase = "run"
             if "→ solving" in line and self._run_t0 is None:
                 self._run_t0 = time.monotonic()
+            if "→ solving" in line:
+                self._run_gen_phase = None    # new challenge → phase unknown until it streams
             if "→ solving" not in line and " | " in line:
                 self._run_done += 1
+                self._run_gen_phase = None    # challenge finished → no longer generating
+                m = re.search(r"([\d.]+)\s*tok/s", line)   # live throughput from the per-challenge line
+                if m:
+                    self._run_tps = float(m.group(1))
             else:
                 m = re.search(r"over (\d+) challenge", line) or re.search(r":\s*(\d+) challenges", line)
                 if m:
@@ -361,7 +555,8 @@ class Dashboard(App):
         with self._run_lock:
             return {"active": self.run_active, "model": (self._run_spec or {}).get("name", "?"),
                     "phase": self._run_phase, "done": self._run_done, "total": self._run_total,
-                    "t0": self._run_t0, "dl_done": self._dl_done, "dl_total": self._dl_total,
+                    "t0": self._run_t0, "tps": self._run_tps, "gen_phase": self._run_gen_phase,
+                    "dl_done": self._dl_done, "dl_total": self._dl_total,
                     "queued": len(self.run_queue)}
 
     def job_status(self) -> str:
@@ -371,9 +566,12 @@ class Dashboard(App):
             queued = f"   ·   {p['queued']} queued" if p["queued"] else ""
             if p["phase"] == "download" and p["dl_total"]:
                 return f"[b]⬇ {p['model']}[/] downloading  {_bar(p['dl_done'], p['dl_total'])}{queued}"
+            rate = f" at {p['tps']:.0f} tok/s" if p.get("tps") else ""
+            gp = {"thinking": "  ·  [magenta]🧠 thinking[/]",
+                  "answering": "  ·  [green]✍ answering[/]"}.get(p.get("gen_phase"), "")
             if p["total"]:
-                return f"[b]▶ {p['model']}[/] running  {_bar(p['done'], p['total'])} peakstones{queued}"
-            return f"[b]▶ {p['model']}[/] {p['phase'] or 'starting'}…{queued}"
+                return f"[b]▶ running{rate}[/]{gp}  {_bar(p['done'], p['total'])} peakstones{queued}"
+            return f"[b]▶ {p['phase'] or 'starting'}{rate}…[/]{gp}{queued}"
         if p["queued"]:
             return f"[dim]{p['queued']} run(s) queued[/]"
         return ""
@@ -387,23 +585,31 @@ class Dashboard(App):
             self._viewer.show_result(res)
 
     def cancel_active(self) -> bool:
-        """Stop the active run: kill its serve + benchmark subprocesses so the run loop unblocks and
-        advances to the next queued run. Returns False if nothing is running."""
+        """Stop the active run: cancel its daemon job (benchmark) and/or kill local download
+        subprocesses, so the run loop unblocks and advances. False if nothing is running."""
         with self._run_lock:
             if not self.run_active:
                 self.notify("no active run")
                 return False
             self._run_cancelled = True
             procs = list(self._run_procs)
-        for p in procs:
+            jid = self._run_job_id
+        for p in procs:                            # local download procs
             reproduce.stop(p)
+        if jid:
+            try:
+                client.cancel_job(jid)             # tell the daemon to kill the benchmark
+            except client.APIError:
+                pass
         self.notify("cancelling active run…")
         return True
 
     def shutdown_runs(self) -> None:
-        """Kill any run subprocesses — called on quit so nothing is left orphaned."""
+        """Called on quit. Stops MIRRORING the active run and kills local download subprocesses — but
+        deliberately does NOT cancel the daemon's benchmark job: that's the whole point of decoupling,
+        the run keeps going and can be reattached next launch."""
         with self._run_lock:
-            self._run_cancelled = True
+            self._run_cancelled = True             # breaks the log-mirroring loop; daemon job lives on
             procs = list(self._run_procs)
         for p in procs:
             reproduce.stop(p)
@@ -489,6 +695,16 @@ class Dashboard(App):
         """The context window to serve `name` at: its own override, else the global default, else
         None (the model's native ctx)."""
         return self.ctx_overrides.get(name, self.ctx_overrides.get(""))
+
+    def reasoning_for(self, name: str) -> str | None:
+        """The reasoning budget to serve `name` with: its own override, else the global default,
+        else None (the model's configured budget). 'on' = full thinking, 'off' = no thinking."""
+        return self.reasoning_overrides.get(name, self.reasoning_overrides.get(""))
+
+    def budget_for(self, name: str) -> int | None:
+        """The generation token budget (max_tokens) for `name`: its own override, else the global
+        default, else None (the engine's generous default)."""
+        return self.budget_overrides.get(name, self.budget_overrides.get(""))
 
     def effective_ids(self) -> list[str]:
         """The challenge ids a run will actually cover: a selected level resolves to its set, else
@@ -605,11 +821,18 @@ class Dashboard(App):
         limited = r.get("n_ctx_limited") or 0
         warn = f" [yellow]⚠{limited}[/]" if limited else ""
         lc = f" lc {_fmt(r.get('long_ctx_score'))}" if r.get("long_ctx_score") is not None else ""
-        return (f"{run.get('artifact', '—'):14} c {_fmt(r.get('code_score'))} a {_fmt(r.get('agent_score'))} "
-                f"p {_fmt(r.get('planner_score'))}{lc}  {_fmt(r.get('tok_per_s'), '{:.0f}')} tps  "
+        mth = f" m {_fmt(r.get('math_score'))}" if r.get("math_score") is not None else ""
+        cal = f" cal {_fmt(r.get('self_verify_accuracy'))}" if r.get("self_verify_accuracy") is not None else ""
+        rep = f" rep {_fmt(r.get('recovery_rate'))}" if r.get("recovery_rate") is not None else ""
+        # truncation: only shown when nonzero (clean runs stay uncluttered); a budget-fit warning
+        trunc = f" [magenta]✂{_fmt(r.get('truncation_rate'))}[/]" if r.get("truncation_rate") else ""
+        return (f"{run.get('artifact', '—'):14} h {_fmt(r.get('held_out_score'))} c {_fmt(r.get('code_score'))}"
+                f"{mth} a {_fmt(r.get('agent_score'))} "
+                f"p {_fmt(r.get('planner_score'))}{lc}{cal}{rep}{trunc}  {_fmt(r.get('tok_per_s'), '{:.0f}')} tps  "
                 f"{_fmt(r.get('sol_per_s'), '{:.2f}')} sol/s  {_fmt_dur(r.get('total_time_s'))}  "
                 f"{eff}/1k tok{warn}  {mem} used{ctx}  "
-                f"{(run.get('trust_tier') or '').replace('-', ' ')}  cov {cov}"
+                + (f"think:{run.get('reasoning')}  " if run.get("reasoning") else "")
+                + f"{(run.get('trust_tier') or '').replace('-', ' ')}  cov {cov}"
                 + (f"   [dim]{hw}[/]" if hw else ""))
 
     def _render(self, data: dict, max_vram: float | None) -> None:
@@ -654,40 +877,80 @@ class ReproduceScreen(ModalScreen):
     ReproduceScreen { align: center middle; }
     #repro { width: 92%; height: 90%; border: thick $accent; background: $surface; padding: 1; }
     #repro-stat { height: auto; padding-bottom: 1; }
-    #repro-log { height: 1fr; border: round $primary; }
-    #repro-gen-wrap { height: 40%; border: round $secondary; margin-top: 1; }
+    #repro-completed { height: 1fr; border: round $primary; }
+    #repro-completed:focus { border: round $accent; }
+    #repro-gen-wrap { height: 45%; border: round $secondary; margin-top: 1; }
+    #repro-gen-wrap:focus { border: round $accent; }
     #repro-gen { width: 1fr; }
     #repro-result { height: auto; padding-top: 1; }
     """
-    BINDINGS = [("escape", "dismiss", "Close"), ("s", "submit", "Submit")]
+    BINDINGS = [("escape", "dismiss", "Close"), ("s", "submit", "Submit"),
+                ("tab", "toggle_pane", "Switch pane")]
+    LIVE_KEY = "__live__"
 
     def __init__(self):
         super().__init__()
         self._result: reproduce.ReproduceResult | None = None
-        self._gen_buf = ""       # accumulated live model output for the current challenge
+        self._gen_buf = ""       # accumulated live model output for the current challenge (render-capped)
         self._gen_ch = ""        # the challenge currently being solved (from the runner's progress)
+        self._gen_phase: str | None = None     # "thinking" | "answering" — the model's live channel
+        self._solutions: dict[str, str] = {}   # challenge id -> its captured model output (for review)
+        self._completed: set[str] = set()       # challenge ids already added as a completed-table row
+        self._viewing: str | None = None        # None = follow live; else a completed challenge under review
         # coverage/done/total/elapsed are owned by the app (single source of truth); the view reads them.
 
     def compose(self) -> ComposeResult:
         with Vertical(id="repro"):
             yield Static("", id="repro-title")
             yield Static("", id="repro-stat")
-            yield RichLog(id="repro-log", wrap=True, max_lines=300)
+            yield DataTable(id="repro-completed", cursor_type="row", zebra_stripes=True)
             with VerticalScroll(id="repro-gen-wrap"):
                 yield Static("[dim]model output appears here as it solves each task[/]", id="repro-gen")
-            yield Static("running… (Esc close, run continues · cancel from the queue tab: u)", id="repro-result")
+            yield Static("running… (Esc close · Tab switch pane · ↑↓ pick a test · cancel from queue: u)",
+                         id="repro-result")
 
     def on_mount(self) -> None:
         self.app._viewer = self                 # the active run streams into this view
+        tbl = self.query_one("#repro-completed", DataTable)
+        self._col_status = tbl.add_column(" ", width=2)
+        self._col_test = tbl.add_column("test", width=30)
+        self._col_info = tbl.add_column("result")
+        self.query_one("#repro-gen-wrap", VerticalScroll).can_focus = True   # scrollable + Tab-focusable
         self.reset_view()
         for line in list(self.app._run_log):    # backfill what already streamed (re-opened mid-run)
             self._on_line(line)
+        self._seen_n = self.app._run_log_n      # then the timer renders only lines emitted after this
         if self.app._run_result is not None:
             self.show_result(self.app._run_result)
+        self.query_one("#repro-gen-wrap", VerticalScroll).focus()   # scroll the live output by default
+        self._log_timer = self.set_interval(0.1, self._drain_log)   # pull streamed lines off-thread
 
     def on_unmount(self) -> None:
+        if getattr(self, "_log_timer", None) is not None:
+            self._log_timer.stop()
         if self.app._viewer is self:            # leaving the view doesn't stop the run
             self.app._viewer = None
+
+    def _drain_log(self) -> None:
+        """Render run lines buffered by the reader thread. Runs on the UI thread (so it can touch
+        widgets); the reader thread only appends — never blocks. Coalesces under a flood: if we fell
+        behind past the bounded ring, skip to the most recent retained lines."""
+        n = self.app._run_log_n
+        new = n - getattr(self, "_seen_n", 0)
+        if new <= 0:
+            return
+        buf = list(self.app._run_log)           # snapshot (deque isn't sliceable)
+        lines = buf[-new:] if new <= len(buf) else buf
+        self._seen_n = n
+        for line in lines[-1500:]:              # cap per tick to keep the UI responsive under a flood
+            try:
+                self._on_line(line)
+            except Exception:                  # noqa: BLE001
+                # Last-resort guard: a single un-renderable line must NEVER propagate out of this UI
+                # timer, because an unhandled exception here tears down the whole TUI (and the live
+                # view of a long run with it). The run itself is a detached subprocess and survives a
+                # dead viewer regardless, but we don't even want to lose the view. Skip the bad line.
+                pass
 
     def reset_view(self) -> None:
         """(Re)point the view at the app's current run — clears widgets and counters for a new run."""
@@ -695,35 +958,69 @@ class ReproduceScreen(ModalScreen):
         model, level = spec.get("name", "—"), spec.get("level")
         ids = spec.get("challenge_ids") or REPRODUCE_IDS
         self._result = None
-        self._gen_buf, self._gen_ch = "", ""
+        self._seen_n = 0                         # new run → render its streamed lines from the start
+        self._gen_buf, self._gen_ch, self._gen_phase = "", "", None
+        self._solutions, self._completed, self._viewing = {}, set(), None
         scope = "download" if spec.get("download_only") else (f"level {level}" if level else f"{len(ids)} peakstones")
         ctx = f"  ·  ctx {_ctx_k(spec.get('ctx'))}" if spec.get("ctx") else ""
+        budget = f"  ·  budget {_ctx_k(spec.get('budget'))}" if spec.get("budget") else ""
         queued = f"  ·  {len(self.app.run_queue)} queued" if self.app.run_queue else ""
         self.query_one("#repro-title", Static).update(
-            f"[b]Run[/b] {model}  ·  {scope}{ctx}  ·  published "
+            f"[b]Run[/b] {model}  ·  {scope}{ctx}{budget}  ·  published "
             f"{_fmt(spec.get('published_tps'), '{:.0f}')} tok/s{queued}")
-        self.query_one("#repro-log", RichLog).clear()
+        tbl = self.query_one("#repro-completed", DataTable)
+        tbl.clear()                              # keep columns, drop rows
+        tbl.add_row(Text.from_markup("[cyan]●[/]"), Text("(running)"), Text(""),
+                    key=self.LIVE_KEY)           # row 0 = the live/current test
         self.query_one("#repro-gen", Static).update("[dim]model output appears here as it solves each task[/]")
-        self.query_one("#repro-result", Static).update("running… (Esc close, run continues · cancel from the queue tab: u)")
+        self.query_one("#repro-result", Static).update(
+            "running… (Esc close · Tab switch pane · ↑↓ pick a test · cancel from queue: u)")
 
     def _on_line(self, s: str) -> None:
-        """Route a streamed line: generation deltas (control-prefixed) to the output panel, everything
-        else to the progress log. Coverage/sol-s come from the app's counters (single source of truth)."""
+        """Route a streamed line: generation deltas (control-prefixed) stream into the output panel and
+        accumulate per-challenge (for later review); result lines become rows in the completed-tests
+        table. Coverage/sol-s come from the app's counters (single source of truth)."""
         if s.startswith(GEN_MARK):
-            self._gen_buf += s[len(GEN_MARK):].replace(GEN_NL, "\n")
-            self._gen_buf = self._gen_buf[-8000:]
+            delta = s[len(GEN_MARK):].replace(GEN_NL, "\n")
+            self._gen_buf = (self._gen_buf + delta)[-8000:]            # render-capped (live perf)
+            if self._gen_ch:                                          # keep a fuller copy for review
+                self._solutions[self._gen_ch] = (self._solutions.get(self._gen_ch, "") + delta)[-24000:]
+            self._render_gen()
+            return
+        if s.startswith(GEN_PHASE):
+            self._gen_phase = s[len(GEN_PHASE):]   # "thinking" | "answering" — shown in the panel header
             self._render_gen()
             return
         if "→ solving" in s:
-            # the "solving" line shows live in the gen panel header; skip the log so each test is one
-            # line (the result), not a dim "solving" line followed by its ✓/✗.
+            # the "solving" line shows live in the gen panel header; it isn't logged (each test is one
+            # row — its result — not a "solving" line followed by its ✓/✗).
             self._gen_ch = s.split("→ solving")[0].split("|")[-1].strip()
-            self._gen_buf = ""
+            self._gen_buf, self._gen_phase = "", None
+            self._solutions.setdefault(self._gen_ch, "")
+            self._update_live_row()
             self._render_gen()
             self._update_stat()
             return
+        parsed = _parse_result(s)               # a per-challenge result/skip/error line?
+        if parsed:
+            self._add_completed(*parsed)
         self._update_stat()
-        self.query_one("#repro-log", RichLog).write(_pretty_progress(s))
+
+    def _update_live_row(self) -> None:
+        tbl = self.query_one("#repro-completed", DataTable)
+        try:
+            tbl.update_cell(self.LIVE_KEY, self._col_test, Text(self._gen_ch or "(running)"))
+        except Exception:  # noqa: BLE001 — row gone (cleared); next reset re-adds it
+            pass
+
+    def _add_completed(self, ch: str, status: str, info: str) -> None:
+        if ch in self._completed:               # one row per challenge (retries print a single line)
+            return
+        self._completed.add(ch)
+        # status carries intentional color markup; info is raw runner text that may contain literal
+        # brackets (e.g. the retry note "[green on try 1/2]"), so render it as a Text — never parsed.
+        self.query_one("#repro-completed", DataTable).add_row(
+            Text.from_markup(status), Text(ch), Text(info), key=ch)
 
     def _update_stat(self) -> None:
         p = self.app.run_progress()             # app owns the counters; the view just renders them
@@ -743,9 +1040,58 @@ class ReproduceScreen(ModalScreen):
             f"elapsed {int(elapsed // 60)}:{int(elapsed % 60):02d}")
 
     def _render_gen(self) -> None:
-        head = f"[b]solving[/] {self._gen_ch}" if self._gen_ch else "[dim]model output[/]"
-        self.query_one("#repro-gen", Static).update(f"{head}\n{self._gen_buf}")
-        self.query_one("#repro-gen-wrap", VerticalScroll).scroll_end(animate=False)
+        if self._viewing is not None:           # user is reviewing a completed test — don't clobber it
+            return
+        phase = {"thinking": "  ·  [magenta]🧠 thinking[/]",
+                 "answering": "  ·  [green]✍ answering[/]"}.get(self._gen_phase, "")
+        head = Text.from_markup(
+            (f"[b]solving[/] {escape(self._gen_ch)}{phase}" if self._gen_ch else "[dim]model output[/]"))
+        # the model's live output (esp. a reasoner's chain-of-thought) is full of [ ] / backticks /
+        # code that Rich's markup parser chokes on. escape() doesn't catch every bracket shape (it
+        # crashed mid-run on e.g. `[^[]`), so render the body as a Text — a renderable Static never
+        # markup-parses — making a MarkupError structurally impossible.
+        head.append("\n")
+        head.append_text(Text(self._gen_buf))
+        self._set_output(head, follow=True)
+
+    def _render_review(self, ch: str) -> None:
+        """Show a completed test's captured solution in the output panel (static, scrolled to the top)."""
+        body = self._solutions.get(ch) or "(no captured output for this test)"
+        head = Text.from_markup(f"[b]{escape(ch)}[/] — proposed solution  [dim](completed)[/]")
+        head.append("\n")
+        head.append_text(Text(body))
+        self._set_output(head, follow=False)
+
+    def _set_output(self, renderable, *, follow: bool) -> None:
+        """Update the output panel. follow=True keeps the view pinned to the bottom ONLY if it was
+        already there — so once the user scrolls up to read, live generation never yanks them back
+        down. follow=False (review) jumps to the top so the solution reads from the start."""
+        wrap = self.query_one("#repro-gen-wrap", VerticalScroll)
+        at_bottom = wrap.scroll_y >= wrap.max_scroll_y - 2
+        self.query_one("#repro-gen", Static).update(renderable)
+        if not follow:
+            wrap.scroll_home(animate=False)
+        elif at_bottom:
+            wrap.scroll_end(animate=False)
+
+    def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
+        try:
+            key = event.row_key.value if event.row_key is not None else None
+            if key in (None, self.LIVE_KEY):     # back on the live row → resume following generation
+                self._viewing = None
+                self._render_gen()
+            else:                                # a completed test → show its captured solution
+                self._viewing = key
+                self._render_review(key)
+        except Exception:  # noqa: BLE001 — selecting a row must never crash the viewer mid-run
+            pass
+
+    def action_toggle_pane(self) -> None:
+        """Tab: switch focus between the completed-tests table (↑↓ picks a test) and the output panel
+        (↑↓ scrolls the solution at your own pace)."""
+        tbl = self.query_one("#repro-completed", DataTable)
+        wrap = self.query_one("#repro-gen-wrap", VerticalScroll)
+        (tbl if self.focused is wrap else wrap).focus()
 
     def show_result(self, res: "reproduce.ReproduceResult") -> None:
         self._result = res
@@ -1095,11 +1441,14 @@ def run_with_preflight(screen, name: str, *, challenge_ids=None, level=None, pub
     def launch(free_first: bool) -> None:
         procs = pf.freeable if (free_first and pf) else None
         started = app.start_run(name, published_tps=published_tps, challenge_ids=challenge_ids,
-                                level=level, free_procs=procs, ctx=app.ctx_for(name))
+                                level=level, free_procs=procs, ctx=app.ctx_for(name),
+                                reasoning=app.reasoning_for(name), budget=app.budget_for(name))
         if started:
             app.push_screen(ReproduceScreen())
 
-    if pf and not pf.fits_now:
+    # The preflight VRAM check only matters when the run starts NOW. If a run is already active this
+    # one is QUEUED, and the active model stops (freeing its VRAM) before it starts — so don't warn.
+    if pf and not pf.fits_now and not app.run_active:
         app.push_screen(PreflightScreen(name, pf, on_proceed=launch))
     else:
         launch(False)
@@ -1179,6 +1528,111 @@ class CtxScreen(ModalScreen):
         self.dismiss()
 
 
+class ReasoningScreen(ModalScreen):
+    """Pick the reasoning (chain-of-thought) budget for the next run — a run condition like context.
+    'off' disables thinking; 'full' lets it think freely; a numeric cap (e.g. 4k/8k) limits thinking
+    to that many tokens then forces the answer (guarantees answer room — trace 'accuracy vs thinking
+    budget'); 'default' keeps the model's configured budget. Numeric caps need model support."""
+    CSS = """
+    ReasoningScreen { align: center middle; }
+    #rsn { width: 70; height: auto; border: thick $accent; background: $surface; padding: 1; }
+    #rsn-tbl { height: auto; }
+    """
+    BINDINGS = [("escape", "dismiss", "Close"), ("enter", "choose", "Select")]
+    OPTIONS = [(None, "default", "use the model's configured reasoning budget"),
+               ("on", "full", "think freely  (--reasoning-budget -1)"),
+               (8192, "8k cap", "think up to 8192 tokens, then force the answer"),
+               (4096, "4k cap", "think up to 4096 tokens, then force the answer"),
+               (2048, "2k cap", "think up to 2048 tokens, then force the answer"),
+               ("off", "off", "no thinking  (--reasoning-budget 0) — faster, often less accurate")]
+
+    def __init__(self, entry, key, current):
+        super().__init__()
+        self.entry = entry            # the selected model's registry entry (None if unknown)
+        self.key = key                # reasoning_overrides key: the model name, or "" for the default
+        self.current = current        # the override currently set for this key
+
+    def compose(self) -> ComposeResult:
+        name = getattr(self.entry, "name", None) if self.entry else None
+        head = (f"[b]Reasoning[/b] for {name}" if name else "[b]Reasoning[/b] (default for all models)")
+        with Vertical(id="rsn"):
+            yield Static(head + "  ·  ⏎ select · Esc cancel")
+            yield DataTable(id="rsn-tbl", cursor_type="row", zebra_stripes=True)
+            yield Static("Only reasoning models think; for others this is a no-op.", id="rsn-note")
+
+    def on_mount(self) -> None:
+        t = self.query_one("#rsn-tbl", DataTable)
+        t.add_columns(" ", "Mode", "Effect")
+        cur = 0
+        for i, (val, label, desc) in enumerate(self.OPTIONS):
+            if val == self.current:
+                cur = i
+            t.add_row(">" if val == self.current else " ", label, desc)
+        t.move_cursor(row=cur)
+
+    def on_data_table_row_selected(self, _event) -> None:
+        self.action_choose()
+
+    def action_choose(self) -> None:
+        t = self.query_one("#rsn-tbl", DataTable)
+        if t.cursor_row is None or t.cursor_row >= len(self.OPTIONS):
+            return
+        self.app.reasoning_overrides[self.key] = self.OPTIONS[t.cursor_row][0]
+        self.dismiss()
+
+
+class BudgetScreen(ModalScreen):
+    """Pick the generation token budget (max_tokens) for the next run — a run condition like context.
+    A larger budget gives reasoning models room to finish (fewer truncated-mid-thought failures); a
+    smaller one measures efficiency-at-task under a tighter cost. Recorded in the bundle so runs at
+    different budgets stay distinguishable. Effective use is capped by the served context window."""
+    CSS = """
+    BudgetScreen { align: center middle; }
+    #bdg { width: 72; height: auto; border: thick $accent; background: $surface; padding: 1; }
+    #bdg-tbl { height: auto; }
+    """
+    BINDINGS = [("escape", "dismiss", "Close"), ("enter", "choose", "Select")]
+    OPTIONS = [(None, "default (16k)", "engine default — generous, avoids mid-thought truncation"),
+               (8192, "8k", "constrained — measures efficiency-at-task under a tighter budget"),
+               (24576, "24k", "extra room for heavy/inline reasoners"),
+               (32768, "32k", "maximum headroom (slowest, most tokens spent)")]
+
+    def __init__(self, entry, key, current):
+        super().__init__()
+        self.entry = entry            # the selected model's registry entry (None if unknown)
+        self.key = key                # budget_overrides key: the model name, or "" for the default
+        self.current = current        # the override currently set for this key
+
+    def compose(self) -> ComposeResult:
+        name = getattr(self.entry, "name", None) if self.entry else None
+        head = (f"[b]Budget[/b] for {name}" if name else "[b]Budget[/b] (default for all models)")
+        with Vertical(id="bdg"):
+            yield Static(head + "  ·  ⏎ select · Esc cancel")
+            yield DataTable(id="bdg-tbl", cursor_type="row", zebra_stripes=True)
+            yield Static("Generation token budget (max_tokens); effective use is capped by the served ctx.",
+                         id="bdg-note")
+
+    def on_mount(self) -> None:
+        t = self.query_one("#bdg-tbl", DataTable)
+        t.add_columns(" ", "Budget", "Effect")
+        cur = 0
+        for i, (val, label, desc) in enumerate(self.OPTIONS):
+            if val == self.current:
+                cur = i
+            t.add_row(">" if val == self.current else " ", label, desc)
+        t.move_cursor(row=cur)
+
+    def on_data_table_row_selected(self, _event) -> None:
+        self.action_choose()
+
+    def action_choose(self) -> None:
+        t = self.query_one("#bdg-tbl", DataTable)
+        if t.cursor_row is None or t.cursor_row >= len(self.OPTIONS):
+            return
+        self.app.budget_overrides[self.key] = self.OPTIONS[t.cursor_row][0]
+        self.dismiss()
+
+
 class ModelsScreen(ModalScreen):
     """Pick a model to run the selected peakstones on. Models are grouped as family → quant: the
     registry (serve/models.toml) provides the runnable/present quants; expanding a family lists the
@@ -1190,7 +1644,8 @@ class ModelsScreen(ModalScreen):
     """
     BINDINGS = [("escape", "dismiss", "Close"), ("a", "add", "Add"),
                 ("l", "levels", "Levels"), ("r", "run", "Run"), ("k", "ctx", "Context"),
-                ("v", "quants", "Quants"), ("u", "queue", "Queue")]
+                ("t", "reasoning", "Think"), ("b", "budget", "Budget"), ("v", "quants", "Quants"),
+                ("u", "queue", "Queue"), ("x", "delete", "Delete")]
 
     def _header(self) -> str:
         ids, lvl = self.app.run_ids(), self.app.selected_level
@@ -1199,8 +1654,12 @@ class ModelsScreen(ModalScreen):
         cur = self.app.ctx_for(e.name) if e else self.app.ctx_overrides.get("")
         who = e.name if e else "default"
         ctx = f"[b]{_ctx_k(cur)}[/] ({who})" if cur else f"[b]default[/] ({who})"
-        return (f"[b]Models[/b] — will run {scope} @ ctx {ctx}  ·  ⏎ expand · download · run  ·  r run  "
-                "·  k ctx  ·  v quants  ·  l levels  ·  a add  ·  u queue  ·  Esc close")
+        rsn = self.app.reasoning_for(e.name) if e else self.app.reasoning_overrides.get("")
+        think = f"  ·  think [b]{_think_label(rsn)}[/]" if rsn is not None else ""
+        bdg = self.app.budget_for(e.name) if e else self.app.budget_overrides.get("")
+        budget = f"  ·  budget [b]{_ctx_k(bdg)}[/]" if bdg else ""
+        return (f"[b]Models[/b] — will run {scope} @ ctx {ctx}{think}{budget}  ·  ⏎ expand · download · run  "
+                "·  r run · k ctx · t think · b budget · v quants · l levels · a add · x del · u queue · Esc")
 
     def compose(self) -> ComposeResult:
         with Vertical(id="models"):
@@ -1218,6 +1677,20 @@ class ModelsScreen(ModalScreen):
         key = e.name if e else ""
         self.app.push_screen(
             CtxScreen(e, key, self.app.ctx_overrides.get(key)),
+            lambda _=None: self._refresh_header())
+
+    def action_reasoning(self) -> None:
+        e = self._target_entry()
+        key = e.name if e else ""
+        self.app.push_screen(
+            ReasoningScreen(e, key, self.app.reasoning_overrides.get(key)),
+            lambda _=None: self._refresh_header())
+
+    def action_budget(self) -> None:
+        e = self._target_entry()
+        key = e.name if e else ""
+        self.app.push_screen(
+            BudgetScreen(e, key, self.app.budget_overrides.get(key)),
             lambda _=None: self._refresh_header())
 
     def on_mount(self) -> None:
@@ -1358,6 +1831,26 @@ class ModelsScreen(ModalScreen):
         """The registry entry to act on: a quant leaf's entry, or a family's present/first quant."""
         d = self._node_data()
         return d.get("entry") if d.get("kind") in ("registry", "family") else None
+
+    def action_delete(self) -> None:
+        """Delete the highlighted model's downloaded GGUF from disk (confirmed)."""
+        e = self._target_entry()
+        if not (e and e.present):
+            self.notify("no downloaded model under the cursor to delete")
+            return
+        size = f" · {e.size_gb} GB" if e.size_gb else ""
+
+        def do_delete() -> None:
+            if models.delete_model(e):
+                self.notify(f"deleted {e.name} {e.quant}{size}")
+                self.refresh_models()
+            else:
+                self.notify("delete failed", severity="error")
+
+        self.app.push_screen(ConfirmScreen(
+            f"Delete [b]{e.name}[/] {e.quant}{size} from disk?\n"
+            "The GGUF file is removed (re-download anytime); the registry entry stays.",
+            do_delete))
 
     def action_queue(self) -> None:
         self.app.push_screen(QueueScreen())
@@ -1505,6 +1998,9 @@ class ChallengesScreen(ModalScreen):
                                        "chs": dchs, "filled": False})
         root.expand()
         self._refresh()
+        # open ready-to-run on the official 'standard' level (press 1/2/4/5 or edit to change)
+        if "standard" in self._level_names:
+            self.action_select_level(self._level_names.index("standard"))
 
     def on_tree_node_expanded(self, ev: "Tree.NodeExpanded") -> None:
         d = ev.node.data or {}
@@ -1757,9 +2253,35 @@ class LevelScreen(ModalScreen):
 
 def main() -> None:
     import argparse
+    import sys
+
+    # `peakstone serve …` runs the standing model-swapping OpenAI gateway; `peakstone jobs …` drives
+    # its benchmark queue headless. Both own their argparsers. Bare `peakstone` launches the TUI.
+    if len(sys.argv) > 1 and sys.argv[1] == "serve":
+        from peakstone.gateway.__main__ import main as serve_main
+        sys.exit(serve_main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "jobs":
+        from peakstone.gateway.__main__ import jobs_main
+        sys.exit(jobs_main(sys.argv[2:]))
+
     ap = argparse.ArgumentParser(prog="peakstone", description="Peakstone hardware dashboard")
     ap.add_argument("--api", default=client.API_DEFAULT, help="Peakstone API base URL")
+    ap.add_argument("--no-gateway", action="store_true",
+                    help="don't auto-spawn the local model gateway (peakstone serve) on startup")
     args = ap.parse_args()
+
+    # Bring up the standing model gateway (detached) so a local OpenAI endpoint is available while
+    # the dashboard runs — and keeps running after it quits. Best-effort: never block launching the
+    # TUI on it. Disable with --no-gateway or PEAKSTONE_NO_GATEWAY=1.
+    if not args.no_gateway and os.environ.get("PEAKSTONE_NO_GATEWAY") not in ("1", "true"):
+        try:
+            from peakstone.gateway.app import load_gateway_config
+            from peakstone.gateway.launch import ensure_running
+            g = load_gateway_config()
+            ensure_running(g["host"], g["port"], g["idle_timeout_s"], wait=0)
+        except Exception:  # noqa: BLE001
+            pass   # the gateway is a convenience here in Phase 1; the TUI works without it
+
     Dashboard(args.api).run()
 
 

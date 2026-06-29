@@ -10,7 +10,8 @@ import re
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
 
 _MAC = sys.platform == "darwin"
 
@@ -48,6 +49,7 @@ class HardwareSnapshot:
     ram_total_mib: int
     ram_used_mib: int
     cores: int
+    cpu_names: list[str] = field(default_factory=lambda: ["CPU"])  # one per physical socket
 
     @property
     def max_vram_gb(self) -> float:
@@ -202,11 +204,40 @@ def cpu_percent() -> float:
     return _proc_cpu_percent()
 
 
+_CPU_NAMES: list[str] | None = None
+
+
+def cpu_names() -> list[str]:
+    """Each physical CPU package's marketing name (e.g. ['AMD Ryzen 9 7950X']). Dual-socket boxes
+    return two. Static — read once and cache."""
+    global _CPU_NAMES
+    if _CPU_NAMES is not None:
+        return _CPU_NAMES
+    names: list[str] = []
+    if _MAC:
+        n = _sysctl("machdep.cpu.brand_string")
+        names = [n] if n else []
+    else:
+        sockets: dict[str, str] = {}   # physical-package id -> model name (one entry per socket)
+        cur = "0"
+        try:
+            for line in Path("/proc/cpuinfo").read_text().splitlines():
+                if line.startswith("physical id"):
+                    cur = line.split(":", 1)[1].strip()
+                elif line.startswith("model name") and cur not in sockets:
+                    sockets[cur] = line.split(":", 1)[1].strip()
+        except OSError:
+            pass
+        names = list(sockets.values())
+    _CPU_NAMES = names or ["CPU"]
+    return _CPU_NAMES
+
+
 def snapshot() -> HardwareSnapshot:
     total, avail = _meminfo_mib()
     return HardwareSnapshot(gpus=query_gpus(), cpu_pct=cpu_percent(),
                             ram_total_mib=total, ram_used_mib=max(0, total - avail),
-                            cores=os.cpu_count() or 0)
+                            cores=os.cpu_count() or 0, cpu_names=cpu_names())
 
 
 # --------------------------------------------------------------------------- #
@@ -280,3 +311,43 @@ def freeable_gpu_procs() -> list[GpuProc]:
     """Our llama-server processes currently holding accelerator memory — the ones a pre-flight check
     can offer to kill to make room. Empty when none are running."""
     return _mac_llama_procs() if _MAC else _nvidia_llama_procs()
+
+
+def loaded_models() -> list[dict]:
+    """Every model currently being served — one per running llama-server, parsed from its command
+    line (works for any served model, TUI-launched or not). Each is {file, ctx, reasoning}
+    (reasoning = the --reasoning-budget value if set, else None). Empty if nothing is serving."""
+    import shlex
+    try:
+        pids = subprocess.run(["pgrep", "-f", "llama-server"], capture_output=True,
+                              text=True, timeout=3).stdout.split()
+    except Exception:  # noqa: BLE001
+        return []
+    found = []
+    for pid in pids:
+        try:
+            cmd = subprocess.run(["ps", "-o", "args=", "-p", pid], capture_output=True,
+                                 text=True, timeout=3).stdout.strip()
+        except Exception:  # noqa: BLE001
+            continue
+        if "llama-server" not in cmd:
+            continue
+        args = shlex.split(cmd)
+        out = {"file": None, "ctx": None, "reasoning": None}
+        for i, a in enumerate(args):
+            nxt = args[i + 1] if i + 1 < len(args) else None
+            if a == "-m":
+                out["file"] = nxt
+            elif a == "-c" and nxt and nxt.lstrip("-").isdigit():
+                out["ctx"] = int(nxt)
+            elif a == "--reasoning-budget":
+                out["reasoning"] = nxt
+        if out["file"]:
+            found.append(out)
+    return found
+
+
+def loaded_model() -> dict | None:
+    """The first served model (back-compat single-model accessor); None if nothing is serving."""
+    models = loaded_models()
+    return models[0] if models else None

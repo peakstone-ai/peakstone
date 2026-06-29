@@ -15,6 +15,35 @@ from peakstone.dashboard.app import Dashboard, _bar, _fmt
 _REAL_AVAILABLE_QUANTS = _models.available_quants
 
 
+def _stub_daemon(monkeypatch, *, status="done", summary=None, lines=(), enqueued=None,
+                 bundle=None, repo=None):
+    """Stub the gateway daemon client so benchmark runs don't need a real `peakstone serve`. Records
+    enqueued model names, replays `lines` as the job log, and returns a terminal job with `summary`.
+    Optionally writes a bundle.json under `repo` (set PEAKSTONE_REPO to a tmp dir first) so the TUI's
+    manual-submit path has a bundle to read."""
+    import json as _json
+    from peakstone.dashboard import client as _client
+    from peakstone.gateway import launch as _launch
+    summary = summary or {}
+    jid = "testjob"
+
+    def enqueue(spec, **k):
+        if enqueued is not None:
+            enqueued.append(spec)
+        if bundle is not None and repo is not None:
+            out = repo / "results" / f"job-{jid}"
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "bundle.json").write_text(_json.dumps(bundle))
+        return jid
+
+    monkeypatch.setattr(_launch, "ensure_running", lambda *a, **k: True)
+    monkeypatch.setattr(_client, "enqueue_job", enqueue)
+    monkeypatch.setattr(_client, "stream_job_log", lambda j, **k: iter(lines))
+    monkeypatch.setattr(_client, "get_job",
+                        lambda j, **k: {"id": j, "status": status, "summary": summary})
+    monkeypatch.setattr(_client, "cancel_job", lambda j, **k: True)
+
+
 @pytest.fixture(autouse=True)
 def _no_hf_network(monkeypatch):
     """The models screen auto-expands families, which kicks off HF quant discovery in worker threads;
@@ -57,6 +86,26 @@ def test_helpers():
     assert _hw({}) == ""
 
 
+def test_model_output_brackets_never_crash_markup():
+    """Regression: a reasoner's chain-of-thought is full of brackets/backticks that crashed Rich's
+    markup parser mid-run (MarkupError on shapes like `[^[]`). Both render paths must survive it and
+    render the brackets verbatim — escape() alone did not."""
+    from rich.console import Console
+    from rich.text import Text
+    from peakstone.dashboard.app import _pretty_progress
+    c = Console(width=100, file=None)
+    nasty = [r"if tok[0] == 'NUMBER': arr[1:] and [^[]*? `chars` empty.",
+             r"regex \d+ \n and a path C:\Users\x[0]", "[/] [b] [red] ]]] unmatched"]
+    for s in nasty:
+        with c.capture() as cap:                       # log path: must not raise, brackets verbatim
+            c.print(_pretty_progress("  ok  " + s))
+        assert s in cap.get()
+        t = Text("solving\n"); t.append_text(Text(s))  # gen-panel path: Text is never markup-parsed
+        with c.capture() as cap:
+            c.print(t)
+        assert s in cap.get()
+
+
 def test_app_renders_filtered_leaderboard(monkeypatch):
     captured = {}
 
@@ -84,11 +133,12 @@ def test_app_renders_filtered_leaderboard(monkeypatch):
             leaf = str(tree.root.children[0].children[0].label)
             assert "24/26 GB" in leaf and "50/1965" in leaf and "32K ctx" in leaf
             assert "RTX 4090 24G" in leaf and "Ryzen 9 7950X 64G" in leaf   # hardware it ran on
-            # cycling sort re-queries with the next axis
+            # the board defaults to the held-out lens; cycling sort moves to the next axis
+            assert captured["sort"] == "held_out_score"        # default lens
             await pilot.press("s")
             await app.workers.wait_for_complete()
             await pilot.pause()
-            assert captured["sort"] == "held_out_score"
+            assert captured["sort"] == "code_score"            # next axis after cycling
             # toggling the fit filter off drops the VRAM scope
             await pilot.press("f")
             await app.workers.wait_for_complete()
@@ -207,6 +257,92 @@ def test_submit_bundle(monkeypatch):
     assert status == 201 and "id" in detail
 
 
+def test_bench_threads_generation_budget(tmp_path):
+    """The TUI budget picker -> reproduce.bench -> the runner's --max-tokens flag (recorded in the
+    bundle). Present only when a budget is chosen; absent (engine default) otherwise."""
+    from peakstone.dashboard import reproduce
+
+    class FakeProc:
+        def __init__(self):
+            self.stdout = iter(())          # no streamed lines; we only inspect the launched command
+        def wait(self):
+            return 0
+        def poll(self):
+            return 0
+
+    captured = {}
+    def fake_popen(cmd, **k):
+        captured["cmd"] = cmd
+        return FakeProc()
+
+    reproduce.bench("m", ["a"], out_dir=tmp_path, popen=fake_popen, max_tokens=24576)
+    assert "--max-tokens" in captured["cmd"] and "24576" in captured["cmd"]
+
+    reproduce.bench("m", ["a"], out_dir=tmp_path, popen=fake_popen, max_tokens=None)
+    assert "--max-tokens" not in captured["cmd"]   # no override -> engine's generous default applies
+
+
+def test_gen_phase_drives_overview_status():
+    from peakstone.dashboard.app import Dashboard, GEN_PHASE
+    app = Dashboard.__new__(Dashboard)
+    import threading
+    from collections import deque
+    app._run_lock = threading.Lock()
+    app.run_active = True
+    app.run_queue = []
+    app._run_spec = {"name": "m"}
+    app._run_phase, app._run_done, app._run_total = "run", 3, 200
+    app._run_t0, app._run_tps, app._run_gen_phase = None, 48.0, None
+    app._dl_done = app._dl_total = 0
+
+    app._track(GEN_PHASE + "thinking")          # a phase line from the stream
+    assert app.run_progress()["gen_phase"] == "thinking"
+    assert "thinking" in app.job_status()
+    app._track(GEN_PHASE + "answering")
+    assert "answering" in app.job_status()
+    app._track("   m | c1   ok  final=1.00 tests=3/3 50tok/s")   # challenge done -> phase cleared
+    assert app.run_progress()["gen_phase"] is None
+
+
+def test_reasoning_budget_mapping_and_threading(monkeypatch, tmp_path):
+    """The reasoning override -> PEAKSTONE_REASONING_BUDGET: off=0, full=-1, and a numeric thinking
+    cap passes through verbatim (capping thinking, leaving room for the answer)."""
+    from peakstone.dashboard import reproduce
+    assert reproduce._reasoning_budget("off") == "0"
+    assert reproduce._reasoning_budget("on") == "-1"
+    assert reproduce._reasoning_budget(4096) == "4096"      # numeric thinking budget
+    assert reproduce._reasoning_budget(None) is None and reproduce._reasoning_budget(0) is None
+
+    class FakeProc:
+        def __init__(self):
+            self.stdout = iter(())
+        def wait(self):
+            return 0
+        def poll(self):
+            return 0
+
+    captured = {}
+    def fake_popen(cmd, **k):
+        captured["env"] = k.get("env", {})
+        return FakeProc()
+
+    reproduce.bench("m", ["a"], out_dir=tmp_path, popen=fake_popen, reasoning=4096)
+    assert captured["env"].get("PEAKSTONE_REASONING_BUDGET") == "4096"
+    reproduce.bench("m", ["a"], out_dir=tmp_path, popen=fake_popen, reasoning=None)
+    assert "PEAKSTONE_REASONING_BUDGET" not in captured["env"]   # default -> no override
+
+
+def test_budget_for_resolves_override_then_default():
+    from peakstone.dashboard.app import Dashboard
+    app = Dashboard.__new__(Dashboard)
+    app.budget_overrides = {}
+    assert app.budget_for("m") is None                 # nothing set -> engine default
+    app.budget_overrides[""] = 16384                   # global default
+    assert app.budget_for("m") == 16384
+    app.budget_overrides["m"] = 32768                  # per-model override wins
+    assert app.budget_for("m") == 32768 and app.budget_for("other") == 16384
+
+
 def test_history_append_load(monkeypatch, tmp_path):
     from peakstone.dashboard import history
     monkeypatch.setattr(history, "HOME", tmp_path)
@@ -250,17 +386,58 @@ def test_reproduce_orchestration(monkeypatch):
     assert crashed.ok is False and "exited before serving" in crashed.note
 
 
-def test_reproduce_screen_shows_result_and_records_history(monkeypatch):
+def test_viewer_never_crashes_on_bad_lines(monkeypatch):
+    """The hard guarantee for long runs: NOTHING streamed from the runner — not crash-shaped model
+    output, not even a line that makes our own renderer throw — may propagate out of the _drain_log
+    UI timer, because an unhandled exception there tears down the whole TUI mid-run. Feed the exact
+    markup crash shape AND a line forced to raise; the viewer must survive and keep rendering."""
+    from collections import deque
+    from peakstone.dashboard.app import Dashboard, ReproduceScreen, GEN_MARK
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            app._run_spec = {"name": "m", "level": "standard"}
+            app._run_log, app._run_log_n = deque(), 0
+            screen = ReproduceScreen()
+            await app.push_screen(screen)
+            await pilot.pause()
+            screen.reset_view()
+
+            poison = "POISON_FORCE_RAISE"
+            real_on_line = screen._on_line
+            def maybe_boom(s):                       # force a renderer failure on one specific line
+                if s == poison:
+                    raise ValueError("simulated render bug")
+                return real_on_line(s)
+            monkeypatch.setattr(screen, "_on_line", maybe_boom)
+
+            for ln in [GEN_MARK + "reasoning: regex [^[]*? then tok[0] and `chars` empty.",
+                       poison,
+                       "  m | he-001  ok  final=1.00 tests=3/3 120tok/s"]:
+                app._run_log.append(ln)
+                app._run_log_n += 1
+
+            screen._drain_log()                      # must NOT raise despite the poison line
+            await pilot.pause()
+            # the crash-shaped chain-of-thought rendered verbatim (not crashed, not mangled)
+            gen = str(screen.query_one("#repro-gen", Static).render())
+            assert "[^[]*?" in gen and "tok[0]" in gen
+
+    asyncio.run(scenario())
+
+
+def test_reproduce_screen_shows_result_and_records_history(monkeypatch, tmp_path):
     from peakstone.dashboard import history
-    from peakstone.dashboard import reproduce as R
     from peakstone.dashboard.app import Dashboard, ReproduceScreen
-    monkeypatch.setattr(R, "reproduce", lambda model, **k: R.ReproduceResult(
-        model, True, your_tps=80.0, published_tps=100.0, code_score=0.9, passed=9, total=10,
-        note="done", bundle={"bundle_version": "1"}))
+    monkeypatch.setenv("PEAKSTONE_REPO", str(tmp_path))             # bundle read/write lands in tmp
+    # the run executes in the daemon; stub it to return a finished job (+ a bundle on disk for submit)
+    _stub_daemon(monkeypatch, summary={"your_tps": 80.0, "code_score": 0.9, "passed": 9, "total": 10,
+                                       "submitted": None},
+                 bundle={"bundle_version": "1"}, repo=tmp_path)
     recorded = []
     monkeypatch.setattr(history, "append", recorded.append)
     submitted = {}
-    monkeypatch.setattr(R, "ReproduceResult", R.ReproduceResult)  # keep dataclass
 
     async def scenario():
         app = Dashboard("http://x")
@@ -270,10 +447,10 @@ def test_reproduce_screen_shows_result_and_records_history(monkeypatch):
             await app.push_screen(ReproduceScreen())                 # viewer backfills the finished run
             await pilot.pause()
             result = str(app.screen.query_one("#repro-result", Static).render())
-            assert "80" in result and "0.8" in result and "submit" in result
+            assert "80" in result and "0.9" in result and "submit" in result
             # the run was recorded in history
             assert recorded and recorded[0]["model"] == "qwen3-coder" and recorded[0]["your_tps"] == 80.0
-            # pressing 's' submits the bundle
+            # pressing 's' re-submits the daemon-produced bundle (read off disk)
             from peakstone.dashboard import client
             monkeypatch.setattr(client, "submit_bundle", lambda url, b, **k: submitted.update(b=b) or (201, "ok"))
             await pilot.press("s")
@@ -371,6 +548,8 @@ def test_tree_nav_keys(monkeypatch):
             await pilot.pause()
             scr = app.screen
             tree = scr.query_one("#ch-tree", NavTree)
+            await pilot.press("c")              # clear the default-selected 'standard' level first
+            await pilot.pause()
             await pilot.press("space")          # space = select (root -> selects all)
             await pilot.pause()
             assert scr.sel.ids                  # selection happened on space, not expand
@@ -472,8 +651,8 @@ def test_model_tree_enter_expands_then_confirms_download_run(monkeypatch):
     monkeypatch.setattr(models, "available_quants", lambda repo, **k: [])
     monkeypatch.setattr("peakstone.dashboard.preflight.check", lambda e: None)
     monkeypatch.setattr(history, "append", lambda e: None)
-    ran = []
-    monkeypatch.setattr(R, "reproduce", lambda model, **k: ran.append(model) or R.ReproduceResult(model, True))
+    enqueued = []
+    _stub_daemon(monkeypatch, enqueued=enqueued)
 
     async def scenario():
         app = Dashboard("http://x")
@@ -490,10 +669,10 @@ def test_model_tree_enter_expands_then_confirms_download_run(monkeypatch):
             await pilot.press("enter")                 # ⏎ on a not-present quant -> confirm download+run
             await pilot.pause()
             assert isinstance(app.screen, ConfirmScreen)
-            await pilot.press("y")                     # confirm -> queue a download+run job
+            await pilot.press("y")                     # confirm -> queue the run on the daemon
             await pilot.pause()
             await app.workers.wait_for_complete()
-            assert ran == ["m-q4"]                     # the run executed (reproduce downloads first)
+            assert [s["model"] for s in enqueued] == ["m-q4"]   # the run was queued on the daemon
 
     asyncio.run(scenario())
 
@@ -538,7 +717,7 @@ def test_register_quant(tmp_path, monkeypatch):
 
 def test_reproduce_screen_routes_generation_stream():
     from peakstone.dashboard.app import Dashboard, ReproduceScreen, GEN_MARK, GEN_NL
-    from textual.widgets import Static, RichLog
+    from textual.widgets import Static, DataTable
 
     async def scenario():
         app = Dashboard("http://x")
@@ -546,16 +725,56 @@ def test_reproduce_screen_routes_generation_stream():
             scr = ReproduceScreen()
             await app.push_screen(scr)
             await pilot.pause()
-            scr._on_line("   m | py-05-calc          → solving [tests] …")   # sets challenge (gen panel only)
+            scr._on_line("   m | py-05-calc          → solving [tests] …")   # sets the live challenge
             scr._on_line(GEN_MARK + "def f():" + GEN_NL + "  return 1")       # gen delta -> output panel
             scr._on_line(GEN_MARK + " more")
-            scr._on_line("   m | py-05-calc          ok  tests 10/10")        # result -> the one log line
+            scr._on_line("   m | py-05-calc          ok  final=1.00 tests=10/10")   # result -> table row
             await pilot.pause()
             gen = str(scr.query_one("#repro-gen", Static).render())
-            assert "py-05-calc" in gen and "def f():\n  return 1 more" in gen
-            log = str(scr.query_one("#repro-log", RichLog).lines)
-            # collapsed: the "solving" line stays in the gen panel; the log shows only the result
-            assert "py-05-calc" in log and "solving" not in log and GEN_MARK not in gen
+            assert "py-05-calc" in gen and "def f():\n  return 1 more" in gen and GEN_MARK not in gen
+            # the completed test is a row in the navigable table (not a scrolling log)
+            tbl = scr.query_one("#repro-completed", DataTable)
+            assert "py-05-calc" in scr._completed and tbl.row_count == 2   # live row + the result
+
+            # arrow-selecting the completed row brings up THAT test's captured solution for review
+            tbl.focus()
+            await pilot.pause()
+            await pilot.press("down")            # live row (0) -> the completed test (1)
+            await pilot.pause()
+            assert scr._viewing == "py-05-calc"
+            review = str(scr.query_one("#repro-gen", Static).render())
+            assert "proposed solution" in review and "def f():\n  return 1 more" in review
+
+            # arrowing back to the live row resumes following live generation
+            await pilot.press("up")
+            await pilot.pause()
+            assert scr._viewing is None
+
+    asyncio.run(scenario())
+
+
+def test_reproduce_output_does_not_force_scroll_when_user_scrolled_up():
+    """Long-run readability: once the user scrolls up to read, streaming deltas must NOT yank the
+    output back to the bottom. _set_output only pins to the end if the view was already there."""
+    from peakstone.dashboard.app import Dashboard, ReproduceScreen, GEN_MARK
+    from textual.containers import VerticalScroll
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            scr = ReproduceScreen()
+            await app.push_screen(scr)
+            await pilot.pause()
+            scr._on_line("   m | c1          → solving [tests] …")
+            for i in range(400):                 # enough output to make the panel scrollable
+                scr._on_line(GEN_MARK + f"line {i} of generated reasoning and code")
+            await pilot.pause()
+            wrap = scr.query_one("#repro-gen-wrap", VerticalScroll)
+            wrap.scroll_to(y=0, animate=False)    # user scrolls to the top to read
+            await pilot.pause()
+            scr._on_line(GEN_MARK + "a freshly streamed delta")   # more generation arrives
+            await pilot.pause()
+            assert wrap.scroll_y < wrap.max_scroll_y - 2          # NOT yanked to the bottom
 
     asyncio.run(scenario())
 
@@ -747,16 +966,14 @@ def test_run_with_preflight_routing(monkeypatch):
 
 def test_run_ctx_selection_threads_through(monkeypatch):
     from peakstone.dashboard import models, history
-    from peakstone.dashboard import reproduce as R
     from peakstone.dashboard.app import Dashboard, ModelsScreen, CTX_CHOICES, run_with_preflight
     entry = models.ModelEntry("m", "org/r", "models/m/x.gguf", 8081, 32768, "")
     monkeypatch.setattr(models, "load_registry", lambda: {"m": entry})
     monkeypatch.setattr(models, "available_quants", lambda repo, **k: [])
     monkeypatch.setattr("peakstone.dashboard.preflight.check", lambda e: None)
     monkeypatch.setattr(history, "append", lambda e: None)
-    seen = {}
-    monkeypatch.setattr(R, "reproduce",
-                        lambda model, **k: seen.update(ctx=k.get("ctx")) or R.ReproduceResult(model, True))
+    enqueued = []
+    _stub_daemon(monkeypatch, enqueued=enqueued)
 
     async def scenario():
         from peakstone.dashboard.app import CtxScreen
@@ -777,7 +994,7 @@ def test_run_ctx_selection_threads_through(monkeypatch):
             run_with_preflight(scr, "m")
             await app.workers.wait_for_complete()
             await pilot.pause()
-            assert seen.get("ctx") == CTX_CHOICES[1]            # chosen ctx threaded into the run
+            assert enqueued and enqueued[0].get("ctx") == CTX_CHOICES[1]   # chosen ctx → job spec
 
     asyncio.run(scenario())
 
@@ -947,12 +1164,10 @@ def test_queue_enter_opens_viewer():
 
 def test_run_auto_submits(monkeypatch):
     from peakstone.dashboard import history, client
-    from peakstone.dashboard import reproduce as R
     from peakstone.dashboard.app import Dashboard
     monkeypatch.setattr(history, "append", lambda e: None)
-    monkeypatch.setattr(R, "reproduce", lambda model, **k: R.ReproduceResult(model, True, bundle={"bundle_version": "1"}))
-    submitted = []
-    monkeypatch.setattr(client, "submit_bundle", lambda url, b, **k: submitted.append(b) or (201, "ok"))
+    # the daemon auto-submits; it reports that in the job summary. The TUI reflects it and refreshes.
+    _stub_daemon(monkeypatch, summary={"submitted": True, "your_tps": 50.0})
     lb_calls = []
     monkeypatch.setattr(client, "get_leaderboard",
                         lambda *a, **k: lb_calls.append(1) or {"count": 0, "leaderboard": []})
@@ -966,7 +1181,7 @@ def test_run_auto_submits(monkeypatch):
             await app.workers.wait_for_complete()
             await pilot.pause()                             # let the post-submit refresh worker spawn
             await app.workers.wait_for_complete()
-            assert submitted == [{"bundle_version": "1"}]   # completed run auto-submitted
+            assert app._run_submitted is True               # daemon-submitted state reflected
             assert len(lb_calls) > before                   # leaderboard refreshed to show the result
 
     asyncio.run(scenario())
