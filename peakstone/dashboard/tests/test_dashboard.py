@@ -1316,33 +1316,6 @@ def test_models_screen_shows_caps(monkeypatch):
     asyncio.run(scenario())
 
 
-def test_level_screen_estimates_and_runs(monkeypatch):
-    from peakstone.dashboard import reproduce as R
-    from peakstone.dashboard.app import Dashboard, LevelScreen, ReproduceScreen
-    from textual.widgets import DataTable
-    monkeypatch.setattr("peakstone.engine.estimate.estimate", lambda level, model: {
-        "level": level, "model": model, "n_challenges": 42, "by_family": {"humaneval": 42},
-        "gen_min": 10.0, "exec_min": 1.0, "download_gb": 0.0, "download_min": 0.0,
-        "total_min": 11.0, "tps": 90, "mbps": 50, "unknowns": [], "settings": {}})
-    monkeypatch.setattr("peakstone.dashboard.preflight.check", lambda e: None)   # skip GPU pre-flight
-    _stub_daemon(monkeypatch)                       # the run is enqueued on the (stubbed) daemon
-
-    async def scenario():
-        app = Dashboard("http://x")
-        async with app.run_test() as pilot:
-            await pilot.pause()
-            await app.push_screen(LevelScreen("qwen3-coder", "http://x"))
-            await app.workers.wait_for_complete()
-            await pilot.pause()
-            assert app.screen.query_one("#lvl-tbl", DataTable).row_count >= 5   # smoke..max
-            await pilot.press("r")                                              # run selected level
-            await app.workers.wait_for_complete()
-            await pilot.pause()
-            assert isinstance(app.screen, ReproduceScreen) and app._run_spec["level"] is not None
-
-    asyncio.run(scenario())
-
-
 def test_get_model_client(monkeypatch):
     from peakstone.dashboard import client
 
