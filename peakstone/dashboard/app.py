@@ -24,7 +24,6 @@ from rich.table import Table
 from rich.text import Text
 
 from peakstone.engine import capabilities as eng_caps
-from peakstone.engine import estimate as eng_estimate
 from peakstone.engine import levels as eng_levels
 from peakstone.engine import paths as eng_paths
 
@@ -1214,8 +1213,8 @@ class SolutionScreen(ModalScreen):
     The bottom pane shows the proposed solution, the execution output, and the test's reaction; for
     iterative runs the attempts and their results appear in order within the transcript."""
     CSS = """
-    SolutionScreen { align: center middle; }
-    #sol { width: 92%; height: 90%; border: thick $accent; background: $surface; padding: 1; }
+    SolutionScreen { layout: vertical; }
+    #sol { width: 100%; height: 1fr; border: thick $accent; background: $surface; padding: 0 1; }
     #sol-spec-wrap { height: 1fr; border: round $primary; }
     #sol-out-wrap { height: 1fr; border: round $secondary; margin-top: 1; }
     #sol-spec, #sol-out { width: 1fr; }
@@ -1237,6 +1236,7 @@ class SolutionScreen(ModalScreen):
                 yield Static(self.spec or "(challenge spec not in the local corpus)", id="sol-spec", markup=False)
             with VerticalScroll(id="sol-out-wrap"):
                 yield Static("loading…", id="sol-out", markup=False)
+        yield Footer()                          # full-bleed: matches the run viewer
 
     def on_mount(self) -> None:
         self.load_solution()                 # fetch the (potentially large) transcript on demand
@@ -1690,7 +1690,7 @@ class ModelsScreen(ModalScreen):
     #models-tree { height: 1fr; }
     """
     BINDINGS = [("escape", "dismiss", "Close"), ("a", "add", "Add"),
-                ("l", "levels", "Levels"), ("r", "run", "Run"), ("k", "ctx", "Context"),
+                ("r", "run", "Run"), ("k", "ctx", "Context"),
                 ("t", "reasoning", "Think"), ("b", "budget", "Budget"), ("v", "quants", "Quants"),
                 ("u", "queue", "Queue"), ("x", "delete", "Delete")]
 
@@ -1706,7 +1706,7 @@ class ModelsScreen(ModalScreen):
         bdg = self.app.budget_for(e.name) if e else self.app.budget_overrides.get("")
         budget = f"  ·  budget [b]{_ctx_k(bdg)}[/]" if bdg else ""
         return (f"[b]Models[/b] — will run {scope} @ ctx {ctx}{think}{budget}  ·  ⏎ expand · download · run  "
-                "·  r run · k ctx · t think · b budget · v quants · l levels · a add · x del · u queue · Esc")
+                "·  r run · k ctx · t think · b budget · v quants · a add · x del · u queue · Esc")
 
     def compose(self) -> ComposeResult:
         with Vertical(id="models"):
@@ -1919,11 +1919,6 @@ class ModelsScreen(ModalScreen):
             self.notify("pick a registered quant — ⏎ an HF quant to download + run it")
             return
         run_with_preflight(self, e.name, challenge_ids=self.app.run_ids(), level=self.app.selected_level)
-
-    def action_levels(self) -> None:
-        e = self._target_entry()
-        if e:
-            self.app.push_screen(LevelScreen(e.name, self.app.base_url))
 
     def action_enter(self) -> None:
         """⏎ on a quant: run it if it's downloaded; otherwise confirm, then queue a download+run job."""
@@ -2225,75 +2220,6 @@ class QuantScreen(ModalScreen):
         if started:
             self.notify(f"queued download: {entry.name} — open the queue (u) to watch it")
         self.app.call_from_thread(self.load)
-
-
-class LevelScreen(ModalScreen):
-    """Pick a test level for a model with a time/data estimate, then run it. Estimates account for
-    generation (tokens/tps), test execution, and download (prebuilt image bytes / measured bandwidth)."""
-    CSS = """
-    LevelScreen { align: center middle; }
-    #levels { width: 96; height: 24; border: thick $accent; background: $surface; padding: 1; }
-    #lvl-tbl { height: 1fr; }
-    #lvl-note { height: auto; padding-top: 1; }
-    """
-    BINDINGS = [("escape", "dismiss", "Close"), ("r", "run", "Run"), ("enter", "run", "Run")]
-
-    def __init__(self, model: str, base_url: str):
-        super().__init__()
-        self.model = model
-        self.base_url = base_url
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="levels"):
-            yield Static(f"[b]Levels[/b] for {self.model}  ·  ⏎/r run  ·  Esc close")
-            yield DataTable(id="lvl-tbl", cursor_type="row", zebra_stripes=True)
-            yield Static("estimating…", id="lvl-note")
-
-    def on_mount(self) -> None:
-        self.query_one("#lvl-tbl", DataTable).add_columns(
-            "Level", "Budget", "Challenges", "~Time", "~GB", "Flags")
-        self.estimate_levels()
-
-    @work(thread=True, exclusive=True)
-    def estimate_levels(self) -> None:
-        version, lvls = eng_levels.load_levels()
-        rows = []
-        for name, lv in lvls.items():
-            try:
-                e = eng_estimate.estimate(name, self.model)
-            except Exception:  # noqa: BLE001
-                e = None
-            rows.append((name, lv, e))
-        self.app.call_from_thread(self._fill, rows, version)
-
-    def _fill(self, rows, version) -> None:
-        t = self.query_one("#lvl-tbl", DataTable)
-        t.clear()
-        for name, lv, e in rows:
-            if e:
-                mins = e["total_min"]
-                tm = f"{mins/60:.1f}h" if mins >= 90 else f"{mins:.0f}m"
-                gb = f"{e['download_gb']:.0f}" if e["download_gb"] else "—"
-                n = str(e["n_challenges"])
-            else:
-                tm = gb = n = "?"
-            flags = "".join(c for c, on in [("J", lv.judge), ("A", lv.agent), ("P", lv.prebuilt)] if on) or "-"
-            t.add_row(name, lv.time_hint, n, tm, gb, flags)
-        self.query_one("#lvl-note", Static).update(
-            f"manifest {version}  ·  estimates are rough (tps from last run, bandwidth from past "
-            f"downloads).  ⏎ runs the selected level on {self.model}.")
-
-    def _selected(self) -> str | None:
-        t = self.query_one("#lvl-tbl", DataTable)
-        if t.row_count == 0 or t.cursor_row is None:
-            return None
-        return str(t.get_row_at(t.cursor_row)[0])
-
-    def action_run(self) -> None:
-        name = self._selected()
-        if name:
-            self.dismiss()
-            run_with_preflight(self, self.model, level=name)
 
 
 def main() -> None:
