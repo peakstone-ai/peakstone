@@ -298,6 +298,10 @@ def _run_info(db, sub: models.Submission, art: models.ModelArtifact) -> dict:
             "context": sub.context, "engine": sub.engine, "trust_tier": sub.trust_tier,
             "reasoning": _submission_reasoning(sub),     # run condition: chain-of-thought on/off (or None)
             "reasoning_budget": _submission_reasoning_budget(sub),   # thinking budget served (0/-1/N)
+            # negative data: a non-viable config (looped out of every category, passed nothing). Tied to
+            # THIS run's (quant, ctx, reasoning), so it shows which configs aren't worth testing.
+            "run_status": (sub.raw or {}).get("run_status"),
+            "abandoned_categories": (sub.raw or {}).get("abandoned_categories"),
             "submitted_at": str(sub.submitted_at), "submitter": _submitter_handle(db, sub),
             "bundle_hash": sub.bundle_hash}
 
@@ -312,7 +316,7 @@ def _sort_value(row: dict, key: str):
 def leaderboard(db: Session = Depends(get_session), suite: str | None = None,
                 version: str | None = None, max_vram_gb: float | None = None,
                 quant: str | None = None, trust: str | None = None, reasoning: str | None = None,
-                reasoning_budget: str | None = None,
+                reasoning_budget: str | None = None, verdict: str | None = None,
                 sort: str = "held_out_score", order: str | None = None, collapse: str = "family"):
     """Faceted: under the active filters, each family collapses to its best-qualifying run (§6a),
     then rows are ranked by `sort`.
@@ -355,6 +359,11 @@ def leaderboard(db: Session = Depends(get_session), suite: str | None = None,
             continue                          # reasoning facet: thinking on/off is a distinct run
         if reasoning_budget is not None and str(_submission_reasoning_budget(s)) != reasoning_budget:
             continue                          # thinking-budget facet: a served --reasoning-budget value
+        rs = (s.raw or {}).get("run_status")
+        if verdict == "not_capable" and rs != "not_capable":
+            continue                          # only the negative data: non-viable configs
+        if verdict == "viable" and rs == "not_capable":
+            continue                          # exclude non-viable configs from the board
         fam = db.get(models.ModelFamily, art.family_id)
         summ = _summarize(s, fam)
         row = {"family": fam.name, "release_date": fam.release_date,
@@ -401,7 +410,7 @@ def leaderboard(db: Session = Depends(get_session), suite: str | None = None,
         r.pop("_cov", None)
     return {"filters": {"suite": suite, "version": version, "max_vram_gb": max_vram_gb,
                         "quant": quant, "trust": trust, "reasoning": reasoning,
-                        "reasoning_budget": reasoning_budget, "sort": sort,
+                        "reasoning_budget": reasoning_budget, "verdict": verdict, "sort": sort,
                         "order": order, "collapse": collapse},
             "thresholds": ({"held_out_min_clean": HELD_OUT_MIN_CLEAN,
                             "held_out_min_coverage": HELD_OUT_MIN_COVERAGE} if default_heldout else {}),

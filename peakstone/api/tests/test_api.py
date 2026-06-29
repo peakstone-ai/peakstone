@@ -527,3 +527,29 @@ def test_observed_capabilities_from_runs(client):
     assert client.post("/submissions", json=b).status_code == 201
     obs = client.get("/models/capM").json()["observed_capabilities"]
     assert "tools" in obs and "agentic" in obs
+
+
+def test_not_capable_verdict_on_leaderboard(client):
+    """A non-viable run (looped out of every category) submits as negative data and surfaces on the
+    leaderboard with run_status='not_capable' on its run, filterable via ?verdict=."""
+    ap, a = _newkey()
+    b = bundle.produce_bundle(
+        {"models": ["dudcfg"], "judge": None, "timestamp": "nc",
+         "gpu": {"name": "RTX 4090", "driver_version": "595"},
+         "run_status": "not_capable", "abandoned_categories": ["python", "go"],
+         "run_verdict": {"reason": "repetition_loops",
+                         "abandoned_categories": ["python", "go"], "loop_streak": 3}},
+        [_result("arch-0", "architecture", 0.0), _result("arch-1", "architecture", 0.0)],
+        sign=False)
+    b["environment"]["vram_gb"] = 24
+    bundle.sign_inplace(b, ap, a)
+    assert client.post("/submissions", json=b).status_code == 201
+
+    row = next(r for r in client.get("/leaderboard").json()["leaderboard"] if r["family"] == "dudcfg")
+    assert row["run"]["run_status"] == "not_capable"
+    assert row["run"]["abandoned_categories"] == ["python", "go"]
+
+    only = client.get("/leaderboard", params={"verdict": "not_capable"}).json()["leaderboard"]
+    assert only and all(r["run"]["run_status"] == "not_capable" for r in only)
+    viable = client.get("/leaderboard", params={"verdict": "viable"}).json()["leaderboard"]
+    assert all(r["family"] != "dudcfg" for r in viable)
