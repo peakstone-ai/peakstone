@@ -909,8 +909,8 @@ class Dashboard(App):
 class ReproduceScreen(ModalScreen):
     """Reproduce a model on local hardware and compare your tok/s to the published number."""
     CSS = """
-    ReproduceScreen { align: center middle; }
-    #repro { width: 92%; height: 90%; border: thick $accent; background: $surface; padding: 1; }
+    ReproduceScreen { layout: vertical; }
+    #repro { width: 100%; height: 1fr; border: thick $accent; background: $surface; padding: 0 1; }
     #repro-stat { height: auto; padding-bottom: 1; }
     #repro-completed { height: 1fr; border: round $primary; }
     #repro-completed:focus { border: round $accent; }
@@ -943,6 +943,7 @@ class ReproduceScreen(ModalScreen):
                 yield Static("[dim]model output appears here as it solves each task[/]", id="repro-gen")
             yield Static("running… (Esc close · Tab switch pane · ↑↓ pick a test · cancel from queue: u)",
                          id="repro-result")
+        yield Footer()                          # full-bleed: panel fills to this bottom bar
 
     def on_mount(self) -> None:
         self.app._viewer = self                 # the active run streams into this view
