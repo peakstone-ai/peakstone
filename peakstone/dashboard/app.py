@@ -911,10 +911,11 @@ class ReproduceScreen(ModalScreen):
     ReproduceScreen { layout: vertical; }
     #repro { width: 100%; height: 1fr; border: thick $accent; background: $surface; padding: 0 1; }
     #repro-stat { height: auto; padding-bottom: 1; }
-    #repro-completed { height: 1fr; border: round $primary; }
-    #repro-completed:focus { border: round $accent; }
-    #repro-gen-wrap { height: 45%; border: round $secondary; margin-top: 1; }
-    #repro-gen-wrap:focus { border: round $accent; }
+    /* dim gray = inactive (recedes); bright blue = the active scroll pane (pops forward) */
+    #repro-completed { height: 1fr; border: round dimgray; }
+    #repro-completed:focus { border: round dodgerblue; }
+    #repro-gen-wrap { height: 45%; border: round dimgray; margin-top: 1; }
+    #repro-gen-wrap:focus { border: round dodgerblue; }
     #repro-gen { width: 1fr; }
     #repro-result { height: auto; padding-top: 1; }
     """
@@ -1217,11 +1218,14 @@ class SolutionScreen(ModalScreen):
     CSS = """
     SolutionScreen { layout: vertical; }
     #sol { width: 100%; height: 1fr; border: thick $accent; background: $surface; padding: 0 1; }
-    #sol-spec-wrap { height: 1fr; border: round $primary; }
-    #sol-out-wrap { height: 1fr; border: round $secondary; margin-top: 1; }
+    /* dim gray = inactive (recedes); bright blue = the active scroll pane (pops forward) */
+    #sol-spec-wrap { height: 1fr; border: round dimgray; }
+    #sol-spec-wrap:focus { border: round dodgerblue; }
+    #sol-out-wrap { height: 1fr; border: round dimgray; margin-top: 1; }
+    #sol-out-wrap:focus { border: round dodgerblue; }
     #sol-spec, #sol-out { width: 1fr; }
     """
-    BINDINGS = [("escape", "dismiss", "Close")]
+    BINDINGS = [("escape", "dismiss", "Close"), ("tab", "toggle_pane", "Switch pane")]
 
     def __init__(self, challenge_id: str, spec: str | None, base_url: str, bundle_hash: str | None):
         super().__init__()
@@ -1234,7 +1238,7 @@ class SolutionScreen(ModalScreen):
         yield Header(show_clock=True)            # status bar on top …
         yield HardwarePanel()                    # live GPU/CPU/RAM + loaded model, refreshes each second
         with Vertical(id="sol"):
-            yield Static(f"[b]{self.challenge_id}[/]  ·  challenge (top) · solution + result (bottom)  ·  Esc close")
+            yield Static(f"[b]{self.challenge_id}[/]  ·  challenge (top) · solution + result (bottom)  ·  Tab switch · ↑↓ scroll · Esc close")
             with VerticalScroll(id="sol-spec-wrap"):
                 # markup off: specs/solutions contain [ ] that Rich would try to parse
                 yield Static(self.spec or "(challenge spec not in the local corpus)", id="sol-spec", markup=False)
@@ -1243,7 +1247,14 @@ class SolutionScreen(ModalScreen):
         yield Footer()                          # … and on the bottom (matches the run viewer)
 
     def on_mount(self) -> None:
+        self.query_one("#sol-out-wrap", VerticalScroll).focus()   # active pane (highlighted) by default
         self.load_solution()                 # fetch the (potentially large) transcript on demand
+
+    def action_toggle_pane(self) -> None:
+        """Tab: switch the active scroll pane between the challenge spec and the solution."""
+        spec = self.query_one("#sol-spec-wrap", VerticalScroll)
+        out = self.query_one("#sol-out-wrap", VerticalScroll)
+        (spec if self.focused is out else out).focus()
 
     @work(thread=True, exclusive=True)
     def load_solution(self) -> None:
