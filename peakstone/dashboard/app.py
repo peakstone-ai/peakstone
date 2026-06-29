@@ -532,11 +532,15 @@ class Dashboard(App):
                 bundle = json.loads(bpath.read_text())
         except (OSError, ValueError):
             pass
+        note = job.get("status") or "?"
+        if summary.get("run_status") == "not_capable":   # non-viable config — surface the verdict
+            cats = ", ".join(summary.get("abandoned_categories") or []) or "every category"
+            note = f"not capable — repetition loops ({cats})"
         return reproduce.ReproduceResult(
             name, job.get("status") == "done", your_tps=summary.get("your_tps"),
             published_tps=published_tps, code_score=summary.get("code_score"),
             passed=summary.get("passed", 0), total=summary.get("total", 0),
-            note=job.get("status") or "?", bundle=bundle)
+            note=note, bundle=bundle)
 
     def _dl_progress(self, done, total) -> None:
         with self._run_lock:
