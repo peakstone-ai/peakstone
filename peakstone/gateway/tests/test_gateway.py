@@ -442,3 +442,99 @@ def test_serve_failed_raises_with_tail():
         await mgr.aclose()
 
     asyncio.run(scenario())
+
+
+# --- end-to-end wiring (real gateway + fake llama-server, no GPU) ------------------------------
+
+def _free_port():
+    import socket
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    p = s.getsockname()[1]
+    s.close()
+    return p
+
+
+def _make_backend(text):
+    """A fake llama-server: /health → 200, /v1/chat/completions → an SSE stream emitting `text`."""
+    import http.server
+    import json as _json
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            self.send_response(200 if self.path == "/health" else 404)
+            self.end_headers()
+            if self.path == "/health":
+                self.wfile.write(b"ok")
+
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("content-length", 0) or 0))
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream")
+            self.end_headers()
+            delta = {"choices": [{"index": 0, "delta": {"content": text}}]}
+            final = {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                     "usage": {"prompt_tokens": 3, "completion_tokens": 1}}
+            self.wfile.write(f"data: {_json.dumps(delta)}\n\n".encode())
+            self.wfile.write(f"data: {_json.dumps(final)}\n\n".encode())
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+
+    return H
+
+
+def test_end_to_end_real_gateway_proxies_and_swaps():
+    """The runner's actual generation path, minus the GPU: provider.LLMClient → a REAL uvicorn gateway
+    → reverse-proxy → a fake llama-server, streamed back. Two models on two backends prove the swap
+    routes to the right one. Stubs only the serve/health primitives (the fake backends are already up)."""
+    import http.server
+    import threading
+    import time
+
+    import uvicorn
+
+    from peakstone.engine.provider import LLMClient
+    from peakstone.engine.serving import ServeModel
+
+    # two fake backends on ephemeral ports
+    srv_a = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _make_backend("alpha"))
+    srv_b = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _make_backend("bravo"))
+    port_a, port_b = srv_a.server_address[1], srv_b.server_address[1]
+    threading.Thread(target=srv_a.serve_forever, daemon=True).start()
+    threading.Thread(target=srv_b.serve_forever, daemon=True).start()
+
+    registry = {"model-a": ServeModel("model-a", port=port_a, ctx=4096, file=None, flags=""),
+                "model-b": ServeModel("model-b", port=port_b, ctx=4096, file=None, flags="")}
+    # serve() is a no-op (the backend is already listening); wait() reports healthy.
+    mgr = ModelManager(registry=registry, _serve=lambda name, **_: FakeProc(),
+                       _wait=lambda port, **_: True, _stop=lambda p: None)
+
+    gw_port = _free_port()
+    app = build_app(manager=mgr, token="", start_worker=False, submit=None)
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=gw_port, log_level="error"))
+    gw_thread = threading.Thread(target=server.run, daemon=True)
+    gw_thread.start()
+    try:
+        for _ in range(200):
+            if server.started:
+                break
+            time.sleep(0.05)
+        assert server.started, "gateway did not start"
+
+        cl = LLMClient(f"http://127.0.0.1:{gw_port}")
+        cl.stream = True                                  # the runner streams (loop detection)
+        assert cl.health()                                # provider → gateway /v1/models
+
+        r1 = cl.chat("model-a", [{"role": "user", "content": "hi"}], max_tokens=16)
+        assert r1.error is None and r1.text == "alpha"    # proxied to backend A, streamed back
+        r2 = cl.chat("model-b", [{"role": "user", "content": "hi"}], max_tokens=16)
+        assert r2.error is None and r2.text == "bravo"    # swapped → routed to backend B
+        assert mgr.last_swap == {"from": "model-a", "to": "model-b"}
+    finally:
+        server.should_exit = True
+        gw_thread.join(timeout=5)
+        srv_a.shutdown()
+        srv_b.shutdown()
