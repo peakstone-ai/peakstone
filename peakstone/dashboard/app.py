@@ -305,6 +305,7 @@ class HardwarePanel(Static):
         job = self.app.job_status()
         if job:
             rows.append(Text.from_markup(job))
+        self.border_title = time.strftime("%a %H:%M:%S")   # the clock lives with the live hardware info
         self.update(Group(*rows))
 
 
@@ -664,7 +665,7 @@ class Dashboard(App):
                    if j.get("status") == "queued" and j.get("kind", "run") == "run")
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
+        yield Header()                           # clock now lives in the HardwarePanel below
         yield HardwarePanel()
         yield BoardTree("leaderboard", id="board")
         yield Footer()
@@ -935,17 +936,17 @@ class ReproduceScreen(ModalScreen):
         # coverage/done/total/elapsed are owned by the app (single source of truth); the view reads them.
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)            # status bar on top …
-        yield HardwarePanel()                    # live GPU/CPU/RAM + loaded model, refreshes each second
+        # top status = live hardware (with the clock); then the run-context title bar; bottom = Footer
+        # (key shortcuts). No generic app header — the bar under the hardware relates to this run.
+        yield HardwarePanel()
         with Vertical(id="repro"):
             yield Static("", id="repro-title")
             yield Static("", id="repro-stat")
             yield DataTable(id="repro-completed", cursor_type="row", zebra_stripes=True)
             with VerticalScroll(id="repro-gen-wrap"):
                 yield Static("[dim]model output appears here as it solves each task[/]", id="repro-gen")
-            yield Static("running… (Esc close · Tab switch pane · ↑↓ pick a test · cancel from queue: u)",
-                         id="repro-result")
-        yield Footer()                          # … and on the bottom (panel fills between them)
+            yield Static("running…  ·  ↑↓ pick a finished test to review", id="repro-result")
+        yield Footer()
 
     def on_mount(self) -> None:
         self.app._viewer = self                 # the active run streams into this view
@@ -1014,7 +1015,7 @@ class ReproduceScreen(ModalScreen):
                                                  # tests finish (see _add_completed)
         self.query_one("#repro-gen", Static).update("[dim]model output appears here as it solves each task[/]")
         self.query_one("#repro-result", Static).update(
-            "running… (Esc close · Tab switch pane · ↑↓ pick a test · cancel from queue: u)")
+            "running…  ·  ↑↓ pick a finished test to review")
 
     def _on_line(self, s: str) -> None:
         """Route a streamed line: generation deltas (control-prefixed) stream into the output panel and
@@ -1235,10 +1236,10 @@ class SolutionScreen(ModalScreen):
         self.bundle_hash = bundle_hash
 
     def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)            # status bar on top …
-        yield HardwarePanel()                    # live GPU/CPU/RAM + loaded model, refreshes each second
+        # top status = live hardware (with the clock); then this challenge's context bar; bottom = Footer
+        yield HardwarePanel()
         with Vertical(id="sol"):
-            yield Static(f"[b]{self.challenge_id}[/]  ·  challenge (top) · solution + result (bottom)  ·  Tab switch · ↑↓ scroll · Esc close")
+            yield Static(f"[b]{self.challenge_id}[/]  ·  challenge (top) · solution + result (bottom)  ·  ↑↓ scroll")
             with VerticalScroll(id="sol-spec-wrap"):
                 # markup off: specs/solutions contain [ ] that Rich would try to parse
                 yield Static(self.spec or "(challenge spec not in the local corpus)", id="sol-spec", markup=False)
