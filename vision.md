@@ -318,6 +318,37 @@ Shape it carefully (the risks are real):
 - Reuses the planner eval, the sandbox, `propose.py`'s reference-must-pass gate, and the faceted
   leaderboard — mostly *composition*, not new infrastructure.
 
+#### Commit-and-reveal: making private results *publicly verifiable* — **post-release; revisit pronto**
+> Status: designed, **not built**. The minimal slices are scoped below. Pick this up right after
+> launch — it's the highest-leverage extension of the keystone.
+
+Today the private side is framed as fully local ("nothing leaves the box"), which means it produces
+**zero public exhaust** — a private run can't be shown without leaking the challenge. A
+**commit-and-reveal** scheme fixes that and makes a private run the *strongest possible held-out
+point* (the public side fights contamination by *date*; a sealed-then-revealed challenge proves
+"couldn't have trained on it" *by construction*):
+
+- **Commit (at submission):** submit **only** the score numbers (`final/passed/total`) + a salted
+  commitment `H(spec ‖ tests ‖ reference ‖ salt)` + safe metadata (category/difficulty). **Omit
+  spec/solution/transcript** (they leak the challenge). Server stamps `submitted_at` — the integrity
+  anchor proving the numbers predate the reveal. Recorded as a `committed-private` trust tier with
+  **no headline credit** (a sealed claim is just a timestamped self-report until opened).
+- **Reveal (later):** publish content + salt → server verifies `H(content‖salt) == commitment`
+  (unaltered + pre-existing), runs the reference-must-pass gate, sets `published_at` (source
+  `private-reveal`), flips trust to `revealed` → joins the held-out board. Re-runs by others →
+  `reproduced`. Publishing also makes the challenge **public → contaminated for models released after
+  the reveal**: a one-shot gold held-out probe that converts to a normal regression test.
+
+Mostly composition — reuses per-result `challenge_hash`, signed bundles + server `submitted_at`,
+`published_at` boundary logic, the reference-must-pass gate, and the now-recorded seed+stack (so the
+numbers are re-runnable). **Honest caveats:** the headline must credit *only revealed+verified*
+results; selective reveal (file-drawer) can't be prevented cryptographically, only made visible via a
+"committed N / revealed M" count; reproduction proves correctness (`passed/total`), not perf.
+**Staged build:** (1) redaction-safe private-result shape in the bundle + optional schema fields;
+(2) pure `verify_reveal(content, salt, commitment)` + the reference gate (the crypto core,
+unit-testable, zero UI); (3) ingest `committed-private` tier + `peakstone reveal` flow + leaderboard
+surfacing. Sequence it after the public board has seed runs (CI gate → runs flow → this layers on).
+
 ### ★ Idea 3 — Model recommender / advisor — **flagship UX, mostly built**
 `recommend.py` exists; promote it to a front-door. Input: hardware + a task profile ("mostly Rust,
 need 128k ctx, latency-sensitive"). Output: the model + the *exact serve config* to run it.
