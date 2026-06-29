@@ -433,6 +433,15 @@ def produce_bundle(meta: dict, results: list[dict], *, harness_version: str = "0
     }
     if meta.get("coder_model"):
         bundle["harness"]["coder_model"] = meta["coder_model"]
+    # Negative data: a non-viable run (model looped out of every category it tried, passing nothing) is
+    # recorded as a verdict so the leaderboard can show which (quant, ctx, reasoning) configs aren't
+    # worth testing. `abandoned_categories` is carried even on otherwise-viable runs for transparency.
+    if meta.get("run_status"):
+        bundle["run_status"] = meta["run_status"]
+    if meta.get("run_verdict"):
+        bundle["run_verdict"] = meta["run_verdict"]
+    if meta.get("abandoned_categories"):
+        bundle["abandoned_categories"] = list(meta["abandoned_categories"])
 
     # content-address + sign
     if sign:

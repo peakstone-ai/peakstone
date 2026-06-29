@@ -122,6 +122,8 @@ def summarize_bundle(bundle: dict) -> dict:
         "code_score": round(sum(codes) / len(codes), 3) if codes else None,
         "passed": passed, "total": total, "n_challenges": len(results),
         "bundle_hash": bundle.get("bundle_hash") or (bundle.get("meta") or {}).get("bundle_hash"),
+        "run_status": bundle.get("run_status"),                   # "not_capable" for non-viable configs
+        "abandoned_categories": bundle.get("abandoned_categories"),
     }
 
 

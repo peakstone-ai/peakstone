@@ -55,7 +55,27 @@
         "by_category": { "type": "object", "additionalProperties": { "type": "number" } }
       }
     },
-    "bundle_hash": { "type": "string", "description": "sha256 of the canonical JSON (signature omitted). Self-reported; the server recomputes and verifies it." }
+    "bundle_hash": { "type": "string", "description": "sha256 of the canonical JSON (signature omitted). Self-reported; the server recomputes and verifies it." },
+    "run_status": {
+      "type": "string",
+      "enum": ["not_capable"],
+      "description": "Run-level verdict for negative data. 'not_capable' = the model passed nothing and looped out of every category it tried, so this (model, quant, ctx, reasoning) config is not worth testing."
+    },
+    "run_verdict": {
+      "type": "object",
+      "additionalProperties": true,
+      "description": "Why the run was flagged (only set alongside run_status).",
+      "properties": {
+        "reason": { "type": "string", "description": "e.g. 'repetition_loops'" },
+        "abandoned_categories": { "type": "array", "items": { "type": "string" } },
+        "loop_streak": { "type": "integer", "description": "consecutive repetition-loop failures that abandons a category" }
+      }
+    },
+    "abandoned_categories": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Categories (challenge families) abandoned mid-run after a repetition-loop streak — carried even on otherwise-viable runs for transparency."
+    }
   },
   "$defs": {
     "model": {

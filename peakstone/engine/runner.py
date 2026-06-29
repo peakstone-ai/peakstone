@@ -61,6 +61,25 @@ def _budget(args, run_cfg, *, reasoning_heavy: bool = False) -> int:
     return run_cfg.get("max_tokens") or (REASONING_MAX_TOKENS if reasoning_heavy else DEFAULT_MAX_TOKENS)
 
 
+def update_loop_streak(family, *, won, looped, streaks, passed, abandoned, threshold):
+    """Update per-category repetition-loop tracking after one challenge result; return True if the
+    category should now be abandoned (it just hit `threshold` CONSECUTIVE repetition-loop failures with
+    no pass). A pass resets the streak and immunizes the category. Mutates streaks/passed/abandoned.
+
+    Pure (no I/O) so the non-viability policy is unit-testable apart from the big run loop."""
+    if won:
+        passed.add(family)
+        streaks[family] = 0
+    elif looped:
+        streaks[family] = streaks.get(family, 0) + 1
+    else:
+        streaks[family] = 0          # a non-loop failure breaks the consecutive streak
+    if family not in passed and streaks.get(family, 0) >= threshold and family not in abandoned:
+        abandoned.add(family)
+        return True
+    return False
+
+
 def _emit_gen(chunk: str) -> None:
     print(GEN_MARK + chunk.replace("\n", GEN_NL), flush=True)
 
@@ -442,6 +461,13 @@ def main(argv=None):
     models = _csv(args.models)
     results = []
     mem_used: dict = {}   # the loaded model's measured footprint (VRAM + host RAM), for the bundle env
+    # Non-viability guard: a model stuck in degenerate repetition loops shouldn't grind the whole suite.
+    # Skip the rest of a category (family) after this many CONSECUTIVE repetition-loop failures with no
+    # pass in it; a category that never produces a pass becomes negative data. If a model passes nothing
+    # at all and at least one category was abandoned this way, the whole run is flagged "not_capable".
+    loop_skip_streak = int(run_cfg.get("giveup_loop_streak", 3))
+    run_passed_any = False
+    run_abandoned: list[str] = []   # categories abandoned (in order) across the run — negative data
     print(f"Running {len(models)} model(s) over {len(chs)} challenge(s). "
           f"judge={judge_model if use_judge else False}")
 
@@ -477,8 +503,14 @@ def main(argv=None):
 
         caps = model_capabilities(model)   # gated axes (tools/agentic) this model can attempt
         served_ctx = _served_ctx(model)    # gate long-context challenges this run can't fit
+        fam_loop_streak: dict[str, int] = {}   # consecutive repetition-loop fails in each category
+        fam_passed: set[str] = set()           # categories that produced at least one pass
+        abandoned: set[str] = set()            # categories skipped this model (repetition loops)
         for ch in chs:
             label = f"{model:>18} | {ch.id:<28}"
+            if ch.family in abandoned:         # category given up on after a repetition-loop streak
+                print(f"{label}  SKIP (category '{ch.family}' abandoned — repetition loops)")
+                continue
             print(f"{label}  → solving [{ch.scoring}] …")   # live progress: what's running now
 
             if not relevant(ch.family, caps):
@@ -844,6 +876,17 @@ def main(argv=None):
                   + retry_note + ("  (repetition loop)" if looped else "")
                   + (f"  ✂truncated ({first_trunc_phase})" if first_truncated else ""))
 
+            # Repetition-loop streak per category → abandon a hopeless category, collect negative data.
+            won = run.ok or (sc.get("final_score") or 0) > 0
+            if won:
+                run_passed_any = True
+            if update_loop_streak(ch.family, won=won, looped=looped, streaks=fam_loop_streak,
+                                  passed=fam_passed, abandoned=abandoned, threshold=loop_skip_streak):
+                if ch.family not in run_abandoned:
+                    run_abandoned.append(ch.family)
+                print(f"{label}  ✗ abandoning category '{ch.family}' "
+                      f"({loop_skip_streak} consecutive repetition loops) — skipping the rest")
+
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     outdir = Path(args.out) if args.out else ROOT / "results" / stamp
     meta = {
@@ -855,6 +898,16 @@ def main(argv=None):
         "max_tokens": args.max_tokens or DEFAULT_MAX_TOKENS,   # the run's generation budget (run identity)
         **level_meta,
     }
+    # Negative data: categories abandoned to repetition loops, and a run-level verdict when the model
+    # never passed anything yet looped out of a category — i.e. this (quant, ctx, reasoning) config is
+    # not worth testing. Recorded in the bundle and faceted on the leaderboard.
+    if run_abandoned:
+        meta["abandoned_categories"] = run_abandoned
+        if not run_passed_any and not args.reference:
+            meta["run_status"] = "not_capable"
+            meta["run_verdict"] = {"reason": "repetition_loops",
+                                   "abandoned_categories": run_abandoned,
+                                   "loop_streak": loop_skip_streak}
     write_report(results, outdir, meta)
     print(f"\nReport: {outdir / 'leaderboard.md'}")
     if not args.reference:   # refine each model's capability cache from what it demonstrated (positives)
