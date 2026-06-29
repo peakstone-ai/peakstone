@@ -909,7 +909,8 @@ class Dashboard(App):
 class ReproduceScreen(ModalScreen):
     """Reproduce a model on local hardware and compare your tok/s to the published number."""
     CSS = """
-    ReproduceScreen { layout: vertical; }
+    ReproduceScreen { layout: vertical; background: $surface; }  /* opaque: no base board bleeding through */
+    ReproduceScreen HardwarePanel { margin: 0; }                 /* flush to the top/sides (full-bleed) */
     #repro { width: 100%; height: 1fr; border: thick $accent; background: $surface; padding: 0 1; }
     #repro-stat { height: auto; padding-bottom: 1; }
     /* dim gray = inactive (recedes); bright blue = the active scroll pane (pops forward) */
@@ -1217,7 +1218,8 @@ class SolutionScreen(ModalScreen):
     The bottom pane shows the proposed solution, the execution output, and the test's reaction; for
     iterative runs the attempts and their results appear in order within the transcript."""
     CSS = """
-    SolutionScreen { layout: vertical; }
+    SolutionScreen { layout: vertical; background: $surface; }   /* opaque: no base board bleeding through */
+    SolutionScreen HardwarePanel { margin: 0; }                  /* flush to the top/sides (full-bleed) */
     #sol { width: 100%; height: 1fr; border: thick $accent; background: $surface; padding: 0 1; }
     /* dim gray = inactive (recedes); bright blue = the active scroll pane (pops forward) */
     #sol-spec-wrap { height: 1fr; border: round dimgray; }
