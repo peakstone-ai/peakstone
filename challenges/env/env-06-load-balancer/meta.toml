@@ -1,0 +1,9 @@
+id = "env-06-load-balancer"
+title = "Round-robin load balancer (router fans requests to 3 backends)"
+type = "goal-state-env"
+category = "multi-machine"
+difficulty = 3
+max_turns = 12
+timeout = 60
+published_at        = "2026-06-30"
+published_at_source = "author"

@@ -1,0 +1,11 @@
+id            = "js-03-lru-cache"
+title         = "LRU cache"
+language      = "javascript"
+difficulty    = 3
+category      = "data-structures"
+type          = "data-structures"
+scoring       = "tests"
+solution_file = "solution.js"
+timeout       = 30
+published_at        = "2026-06-30"
+published_at_source = "author"

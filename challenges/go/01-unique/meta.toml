@@ -1,0 +1,11 @@
+id            = "go-01-unique"
+title         = "Unique preserving order"
+language      = "go"
+difficulty    = 1
+category      = "data"
+type          = "basic"
+scoring       = "tests"
+solution_file = "solution.go"
+timeout       = 60
+published_at        = "2026-06-30"
+published_at_source = "author"

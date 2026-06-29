@@ -1,0 +1,9 @@
+id = "env-07-pubsub"
+title = "Publish/subscribe broker (ordered topic fan-out)"
+type = "goal-state-env"
+category = "multi-machine"
+difficulty = 4
+max_turns = 14
+timeout = 60
+published_at        = "2026-06-30"
+published_at_source = "author"

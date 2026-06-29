@@ -1,0 +1,11 @@
+id            = "js-01-slugify"
+title         = "Slugify a title"
+language      = "javascript"
+difficulty    = 1
+category      = "strings"
+type          = "basic"
+scoring       = "tests"
+solution_file = "solution.js"
+timeout       = 30
+published_at        = "2026-06-30"
+published_at_source = "author"

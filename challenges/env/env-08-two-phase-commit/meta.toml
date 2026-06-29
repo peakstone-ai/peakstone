@@ -1,0 +1,9 @@
+id = "env-08-two-phase-commit"
+title = "Two-phase commit (atomic commit across participants)"
+type = "goal-state-env"
+category = "multi-machine"
+difficulty = 5
+max_turns = 16
+timeout = 60
+published_at        = "2026-06-30"
+published_at_source = "author"

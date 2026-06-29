@@ -21,6 +21,9 @@ _ENV = Path(__file__).resolve().parents[4] / "challenges" / "env"
 ELECT_DIR = _ENV / "env-03-elect-collect"
 KVQ_DIR = _ENV / "env-04-kv-quorum"
 PARTITION_DIR = _ENV / "env-05-partition-heal"
+LB_DIR = _ENV / "env-06-load-balancer"
+PUBSUB_DIR = _ENV / "env-07-pubsub"
+TPC_DIR = _ENV / "env-08-two-phase-commit"
 
 
 @pytest.fixture(scope="module")
@@ -46,6 +49,21 @@ def kvq():
 @pytest.fixture(scope="module")
 def partition():
     return load_env_challenge(PARTITION_DIR)
+
+
+@pytest.fixture(scope="module")
+def load_balancer():
+    return load_env_challenge(LB_DIR)
+
+
+@pytest.fixture(scope="module")
+def pubsub():
+    return load_env_challenge(PUBSUB_DIR)
+
+
+@pytest.fixture(scope="module")
+def two_phase_commit():
+    return load_env_challenge(TPC_DIR)
 
 
 def test_gossip_convergence_reference_local(gossip):
@@ -126,6 +144,49 @@ def test_kv_quorum_requires_quorum_read(kvq):
     files["peer2"]["peer.go"] = local_only
     with LocalProvider().provision(kvq.env) as env:
         res = run_once(env, kvq.env, files, kvq.load_verifier(), fixtures=kvq.fixtures())
+    assert res["passed"] is False
+
+
+def test_load_balancer_reference_local(load_balancer):
+    # router round-robins 9 client requests so each of 3 backends handles exactly 3
+    res = run_reference(load_balancer, LocalProvider())
+    assert res["passed"] is True
+    assert len(res["checks"]) == 3 and all(c["ok"] for c in res["checks"])
+
+
+def test_load_balancer_imbalance_fails(load_balancer):
+    # a router that always hits backend0 -> uneven distribution -> goal-state must FAIL
+    files = copy.deepcopy(load_balancer.reference_files())
+    files["router"]["router.py"] = files["router"]["router.py"].replace(
+        "BACKENDS[_next % len(BACKENDS)]", "BACKENDS[0]")
+    with LocalProvider().provision(load_balancer.env) as env:
+        res = run_once(env, load_balancer.env, files, load_balancer.load_verifier(),
+                       fixtures=load_balancer.fixtures())
+    assert res["passed"] is False
+
+
+def test_pubsub_reference_local(pubsub):
+    # broker fans each topic's messages to the right subscriber, in publish order
+    res = run_reference(pubsub, LocalProvider())
+    assert res["passed"] is True
+    assert len(res["checks"]) == 2 and all(c["ok"] for c in res["checks"])
+
+
+def test_two_phase_commit_reference_local(two_phase_commit):
+    # t1 commits on all three participants; t2 aborts on all three (one no-vote forces global abort)
+    res = run_reference(two_phase_commit, LocalProvider())
+    assert res["passed"] is True
+    assert len(res["checks"]) == 3 and all(c["ok"] for c in res["checks"])
+
+
+def test_two_phase_commit_non_atomic_fails(two_phase_commit):
+    # a participant that commits regardless of the decision breaks atomicity on t2 -> must FAIL
+    files = copy.deepcopy(two_phase_commit.reference_files())
+    files["participant0"]["participant.py"] = files["participant0"]["participant.py"].replace(
+        'state[txn] = "aborted"', 'state[txn] = "committed"')
+    with LocalProvider().provision(two_phase_commit.env) as env:
+        res = run_once(env, two_phase_commit.env, files, two_phase_commit.load_verifier(),
+                       fixtures=two_phase_commit.fixtures())
     assert res["passed"] is False
 
 

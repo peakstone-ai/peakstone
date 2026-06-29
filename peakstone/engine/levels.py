@@ -42,6 +42,7 @@ class Level:
     agent: bool = False
     prebuilt: bool = False
     retries: int = 0
+    calibration: bool = False
     select: list[dict] = field(default_factory=list)
 
 
@@ -56,14 +57,20 @@ def load_levels(path: Path | None = None) -> tuple[str, dict[str, Level]]:
             name=name, description=d.get("description", ""), time_hint=d.get("time_hint", ""),
             judge=bool(d.get("judge", False)), agent=bool(d.get("agent", False)),
             prebuilt=bool(d.get("prebuilt", False)), retries=int(d.get("retries", 0)),
+            calibration=bool(d.get("calibration", False)),
             select=list(d.get("select", [])))
     return version, levels
 
 
 def resolve(level: Level, challenges) -> list[str]:
     """Deterministic, ordered, unique challenge ids selected by this level against the corpus.
-    Each axis: filter by family/difficulty, sort by id, take first `limit`. Order = axis order in
-    the manifest, then id — so the resulting content_hash is reproducible across runs."""
+
+    Each axis: filter by family/difficulty, then take `limit`. When an axis is **capped** by `limit`,
+    the NEWEST challenges win — sort by `published_at` descending (id breaks ties) before truncating —
+    so a limited dated family (livecodebench/codeforces/…) contributes its most recent, least-
+    contaminated problems and maximizes held-out coverage for recently-released models. Uncapped axes
+    keep id order. Selection stays model-INDEPENDENT and content-pinned (publish dates are fixed
+    challenge content), so the resulting content_hash is still reproducible across models/quants."""
     out: list[str] = []
     seen: set[str] = set()
     for sel in level.select:
@@ -76,7 +83,11 @@ def resolve(level: Level, challenges) -> list[str]:
         )
         matched.sort(key=lambda c: c.id)
         if sel.get("limit"):
+            # newest-first when capping (stable, so id order breaks date ties; undated sort last),
+            # then restore id order for a stable run sequence (content_hash is order-independent).
+            matched.sort(key=lambda c: c.published_at or "", reverse=True)
             matched = matched[: int(sel["limit"])]
+            matched.sort(key=lambda c: c.id)
         for c in matched:
             if c.id not in seen:
                 seen.add(c.id)

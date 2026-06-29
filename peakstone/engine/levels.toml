@@ -9,7 +9,7 @@
 # corpus by `family` (the dir under challenges/) and optional `difficulty`, sorts by id, and takes the
 # first `limit` (omit limit = all). Bump `version` when you change selections so old comparisons stand.
 
-version = "2026.07"
+version = "2026.06"
 
 [smoke]
 description = "Fastest sanity + tok/s probe."
@@ -35,18 +35,47 @@ select = [
   { family = "injection" },
 ]
 
-[standard]
-description = "Bigger per-axis samples + judge + a small generic SWE-bench slice. Held-out reported."
-time_hint = "~2-6 h"
-judge = true
+[calibration]
+description = "Metacognition probe: pre-hoc confidence + post-hoc self-verification on a difficulty-spanning subset."
+time_hint = "~20-40 min"
+judge = false
+calibration = true
+# A small set spanning easy→hard so pass/fail VARIES (that's where calibration has signal): HumanEval
+# floor, the native Python ladder (T2→T5 incl. the architecture challenges), and Go/Rust (compiled).
 select = [
-  { family = "humaneval", limit = 40 },
-  { family = "bigcodebench", limit = 60 },
-  { family = "livecodebench", limit = 60 },
-  { family = "codeforces", limit = 40 },
-  { family = "aime" },
+  { family = "humaneval", limit = 4 },
+  { family = "python" },
+  { family = "go", limit = 3 },
+  { family = "rust", limit = 3 },
+]
+
+[standard]
+description = "The official suite: broad multi-axis coverage, held-out reported. Ordered cheap-first."
+time_hint = "~2-4 h"
+judge = true
+# Modifiers ride on the coding challenges already being run, so one `--level standard` run yields the
+# full coding profile: retries=self-repair (headline stays FIRST-TRY; recovery is its own axis),
+# calibration=metacognition probes (auto-skips long-context). Retries only re-run first-try failures.
+retries = 2
+calibration = true
+# Axis ORDER here IS the run order (runner preserves it). Cheapest/fastest axes first, so a run shows
+# quick early signal and a stall is obvious; the slow, long-generation axes (competitive programming +
+# AIME math) run last. Per-axis limits keep the whole suite to ~2-3 h/model on a single GPU — light
+# enough that community submitters will actually run it. Dated families take their NEWEST entries
+# (resolve() sorts by published_at desc), so trimming them keeps held-out coverage strong.
+select = [
+  # fast: floor + the contamination-resistant native code core + short-response safety/tools
+  { family = "humaneval", limit = 30 },
+  { family = "python" }, { family = "go" }, { family = "rust" },
+  { family = "typescript" }, { family = "javascript" },
   { family = "tool-calling" },
   { family = "refusal" }, { family = "hallucination" }, { family = "injection" }, { family = "security" },
+  # moderate
+  { family = "bigcodebench", limit = 30 },
+  # slow (long generations) — run last; newest-dated for held-out coverage
+  { family = "livecodebench", limit = 35 },
+  { family = "codeforces", limit = 25 },
+  { family = "aime", limit = 20 },          # math is a separate axis; 20 is plenty of signal
   { family = "longcontext" },
   { family = "swebench", limit = 5 },
 ]

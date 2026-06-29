@@ -1,0 +1,11 @@
+id            = "js-02-merge-intervals"
+title         = "Merge overlapping intervals"
+language      = "javascript"
+difficulty    = 2
+category      = "algorithms"
+type          = "algorithms"
+scoring       = "tests"
+solution_file = "solution.js"
+timeout       = 30
+published_at        = "2026-06-30"
+published_at_source = "author"

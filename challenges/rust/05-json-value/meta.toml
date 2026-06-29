@@ -1,0 +1,11 @@
+id            = "rs-05-json-value"
+title         = "JSON parser to a typed value"
+language      = "rust"
+difficulty    = 5
+category      = "parsing"
+type          = "architecture"
+scoring       = "tests"
+solution_file = "src/lib.rs"
+timeout       = 120
+published_at        = "2026-06-30"
+published_at_source = "author"
