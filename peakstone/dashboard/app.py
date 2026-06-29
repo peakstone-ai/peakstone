@@ -934,6 +934,7 @@ class ReproduceScreen(ModalScreen):
         # coverage/done/total/elapsed are owned by the app (single source of truth); the view reads them.
 
     def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)            # status bar on top …
         with Vertical(id="repro"):
             yield Static("", id="repro-title")
             yield Static("", id="repro-stat")
@@ -942,7 +943,7 @@ class ReproduceScreen(ModalScreen):
                 yield Static("[dim]model output appears here as it solves each task[/]", id="repro-gen")
             yield Static("running… (Esc close · Tab switch pane · ↑↓ pick a test · cancel from queue: u)",
                          id="repro-result")
-        yield Footer()                          # full-bleed: panel fills to this bottom bar
+        yield Footer()                          # … and on the bottom (panel fills between them)
 
     def on_mount(self) -> None:
         self.app._viewer = self                 # the active run streams into this view
@@ -1229,6 +1230,7 @@ class SolutionScreen(ModalScreen):
         self.bundle_hash = bundle_hash
 
     def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)            # status bar on top …
         with Vertical(id="sol"):
             yield Static(f"[b]{self.challenge_id}[/]  ·  challenge (top) · solution + result (bottom)  ·  Esc close")
             with VerticalScroll(id="sol-spec-wrap"):
@@ -1236,7 +1238,7 @@ class SolutionScreen(ModalScreen):
                 yield Static(self.spec or "(challenge spec not in the local corpus)", id="sol-spec", markup=False)
             with VerticalScroll(id="sol-out-wrap"):
                 yield Static("loading…", id="sol-out", markup=False)
-        yield Footer()                          # full-bleed: matches the run viewer
+        yield Footer()                          # … and on the bottom (matches the run viewer)
 
     def on_mount(self) -> None:
         self.load_solution()                 # fetch the (potentially large) transcript on demand
