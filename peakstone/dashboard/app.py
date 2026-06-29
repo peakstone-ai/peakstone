@@ -935,6 +935,7 @@ class ReproduceScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)            # status bar on top …
+        yield HardwarePanel()                    # live GPU/CPU/RAM + loaded model, refreshes each second
         with Vertical(id="repro"):
             yield Static("", id="repro-title")
             yield Static("", id="repro-stat")
@@ -1231,6 +1232,7 @@ class SolutionScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)            # status bar on top …
+        yield HardwarePanel()                    # live GPU/CPU/RAM + loaded model, refreshes each second
         with Vertical(id="sol"):
             yield Static(f"[b]{self.challenge_id}[/]  ·  challenge (top) · solution + result (bottom)  ·  Esc close")
             with VerticalScroll(id="sol-spec-wrap"):
