@@ -88,12 +88,27 @@ that hash. Transcripts may be stored inline (small) or as content-addressed blob
 
 Three orthogonal axes so the model extends to every future test type without schema churn:
 
-1. **Capability category** (what's tested): `code-correctness`, `library-fluency`, `self-repair`,
-   `tool-calling`, `multi-step-agentic`, `planning`, `distributed/multi-machine`,
-   `instruction-following`, `safety` (injection/refusal/secure-code), `vision-to-code`, `game-playing`.
+1. **Capability category** (what's tested — a skill with its *own* challenges): `code-correctness`,
+   `math` (kept distinct from code — a strong coder may be weak at competition math, and vice-versa),
+   `library-fluency`, `long-context`, `tool-calling`, `multi-step-agentic` (multi-machine goal-state),
+   `planning`, `instruction-following`, `safety` (injection/refusal/secure-code), `logic`,
+   `vision-to-code`, `game-playing`.
 2. **Verification method** (how it's scored → drives trust): `deterministic-tests` |
    `llm-judge` | `goal-state-env` | `human`.
 3. **Difficulty tier**: 1–5.
+
+**Modifiers vs. categories (added 2026-06):** a category needs its own corpus; a **modifier** is a
+*probe layered on existing challenges*, so it's near-free and rides on runs we already do. Modifiers:
+`self-repair` (re-run with the test error fed back — debugging-from-feedback; the `--retries`
+machinery), `calibration` (ask *before* "will you solve this?" + *after* "did you?" → does the model
+know what it knows?), `language-robustness` (restate a spec in another language → pass-rate delta),
+`efficiency` (tokens/LOC/RAM per solve). **`agentic` ≠ `self-repair` ≠ `calibration`** are distinct
+axes (drive-an-environment vs. fix-one-file-from-its-error vs. know-if-you're-right) and scored
+separately. **Efficiency principle:** prefer modifiers over new corpora; run modifiers on
+representative **probe subsets** (calibration ~20 difficulty-spanning, self-repair *failures-only*,
+language-robustness ~10 translated), not the full suite; gate by capability + where-it-makes-sense;
+harvest free byproducts (post-hoc confidence = one extra yes/no). Roadmap (cheap→expensive):
+calibration → self-repair → language-robustness → (post-launch) logic, then multimodal/vision.
 
 A challenge *declares* the capabilities it requires (e.g. `tool-calling`, `multi-turn`,
 `networked-env`, `vision`). A model's per-category score is aggregated over the challenges it
@@ -194,6 +209,9 @@ Q4@24GB run and a Q8@48GB run of the same model are distinct points. The leaderb
 /engine     today's bench/ harness, refactored into a library + CLI that emits result bundles
             (serve, run, extract, sandbox, scoring, judge — already exist). Adds: bundle writer,
             signing, env capture, content-hashing of challenges/suites.
+/gateway    `peakstone serve` — standing llama-swap-style OpenAI gateway (model-from-request,
+            hot-swap) that also owns the persisted benchmark job queue, so TUI/CLI are thin
+            clients and runs survive client disconnect.
 /schema     the result-bundle JSON Schema + capability taxonomy enums (shared contract, versioned).
 /api        FastAPI: submission ingest + validation, leaderboard/query endpoints, verification jobs.
 /web        Next.js: leaderboards, capability-vs-time charts, model & challenge pages, submit flow.
