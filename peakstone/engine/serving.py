@@ -1,0 +1,207 @@
+"""Launch / health-check / stop a single llama-server for one registered model.
+
+These are the low-level serving primitives shared by every consumer that needs to bring a model
+up on the GPU: the dashboard's reproduce flow, and the model-swapping gateway (`peakstone serve`).
+They were originally inlined in ``dashboard/reproduce.py``; they live here now so an engine-level
+service can use them WITHOUT importing the Textual/HF dashboard layer. ``reproduce.py`` re-exports
+them, so its public API is unchanged.
+
+Everything here is stdlib-only (subprocess + urllib) and the external steps are injectable, so the
+orchestration is testable without a GPU.
+"""
+from __future__ import annotations
+
+import json
+import os
+import signal
+import subprocess
+import threading
+import time
+import tomllib
+import urllib.request
+from dataclasses import dataclass
+from pathlib import Path
+
+from . import paths
+
+
+def serve_sh() -> Path:
+    """Path to serve/serve.sh — the per-model llama-server launcher (override via PEAKSTONE_SERVE)."""
+    return paths.serve_dir() / "serve.sh"
+
+
+def serve_log_path(name: str) -> Path:
+    return paths.repo_root() / "results" / f"serve-{name}.log"
+
+
+def serve_log_tail(name: str, lines: int = 12) -> str:
+    """Last few lines of a model's serve log — the crash reason (e.g. CUDA OOM) when it won't start."""
+    p = serve_log_path(name)
+    if not p.exists():
+        return ""
+    return "\n".join(p.read_text(errors="replace").splitlines()[-lines:]).strip()
+
+
+def reasoning_budget(reasoning) -> str | None:
+    """Map a reasoning override to a --reasoning-budget value (via PEAKSTONE_REASONING_BUDGET):
+    'off'→0 (no thinking), 'on'→-1 (think freely), a positive int N → cap thinking at N tokens then
+    force the answer (guarantees answer room; the numeric thinking budget). None = leave the model's
+    configured budget. Numeric caps require model/llama.cpp support for a positive budget."""
+    if reasoning == "off":
+        return "0"
+    if reasoning == "on":
+        return "-1"
+    if isinstance(reasoning, int) and reasoning > 0:
+        return str(reasoning)
+    return None
+
+
+def serve(name: str, *, popen=subprocess.Popen, ctx: int | None = None,
+          reasoning=None) -> subprocess.Popen:
+    """Spawn `bash serve/serve.sh <name>` (one llama-server), logging stdout+stderr to
+    results/serve-<name>.log so a failed launch (OOM, missing binary) is diagnosable. The child runs
+    in its own session so the whole process group can be killed later."""
+    log = serve_log_path(name)
+    log.parent.mkdir(parents=True, exist_ok=True)
+    env = {**os.environ}
+    if ctx:
+        env["PEAKSTONE_CTX"] = str(ctx)   # serve.sh + the bundle pick this up
+    rb = reasoning_budget(reasoning)      # off=0, on=-1, int=cap thinking at N tokens
+    if rb is not None:
+        env["PEAKSTONE_REASONING_BUDGET"] = rb
+    # close the parent's handle once spawned — the child keeps its own dup (no fd leak per serve).
+    with open(log, "wb") as logf:
+        return popen(["bash", str(serve_sh()), name], cwd=str(paths.repo_root()), stdout=logf,
+                     stderr=subprocess.STDOUT, start_new_session=True, env=env)
+
+
+def wait_healthy(port: int, *, timeout: float = 180, opener=urllib.request.urlopen, proc=None) -> bool:
+    """Poll /health until the server answers. Fails fast if the serve process exits first (a crashed
+    llama-server otherwise leaves us polling a dead port for the whole timeout)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if proc is not None and getattr(proc, "poll", lambda: None)() is not None:
+            return False   # server process died before binding the port
+        try:
+            with opener(f"http://localhost:{port}/health", timeout=3) as r:
+                if getattr(r, "status", 200) == 200:
+                    return True
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(2)
+    return False
+
+
+def _kill(proc) -> None:
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (ProcessLookupError, OSError):
+        pass
+
+
+def stop(proc) -> None:
+    """Kill the serve process group (frees VRAM). No-op if it already exited."""
+    if proc and proc.poll() is None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, OSError):
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
+
+@dataclass(frozen=True)
+class ServeModel:
+    """One model's serving config from serve/models.toml (the fields needed to launch + reach it)."""
+    name: str
+    port: int | None
+    ctx: int | None
+    file: str | None = None
+    flags: str = ""
+
+    @property
+    def present(self) -> bool:
+        """Whether the GGUF is on disk (so a request can actually load it without a download)."""
+        return bool(self.file and (paths.repo_root() / self.file).exists())
+
+
+def load_registry() -> dict[str, ServeModel]:
+    """Parse serve/models.toml into {name: ServeModel}. The same file serve.sh reads. Empty if the
+    registry is absent (e.g. a bare wheel with no checkout)."""
+    mt = paths.models_toml()
+    if not mt.exists():
+        return {}
+    data = tomllib.loads(mt.read_text())
+    return {n: ServeModel(n, m.get("port"), m.get("ctx"), m.get("file"), m.get("flags", ""))
+            for n, m in data.items()}
+
+
+# --- running the benchmark engine as a subprocess ----------------------------------------------
+# Shared by the dashboard's reproduce flow and the gateway's job worker so the command, watchdog,
+# and stall-detection are identical. `gateway` (a base URL) routes generation through `peakstone
+# serve` instead of per-model llama-server ports — used by the daemon, which owns serving.
+
+def build_runner_cmd(name: str, ids: list[str] | None = None, *, level: str | None = None,
+                     out: Path, max_tokens: int | None = None,
+                     gateway: str | None = None) -> tuple[list[str], float]:
+    """Build the `python -m peakstone.engine.runner …` command + a hard timeout for one bench run.
+    Generation-only (--no-judge): one model at a time, so judging is a separate judge-last pass."""
+    cmd = ["python", "-u", "-m", "peakstone.engine.runner", "--models", name, "--bundle",
+           "--stream-output", "--out", str(out)]
+    if gateway:
+        cmd += ["--gateway", gateway]
+    if max_tokens:
+        cmd += ["--max-tokens", str(max_tokens)]   # generation budget; recorded in the bundle
+    if level:
+        # the runner resolves the level's selection + settings; --prune-images keeps prebuilt image
+        # disk bounded. Levels span minutes..weeks, so give it a very generous cap.
+        cmd += ["--level", level, "--no-judge", "--prune-images"]
+        timeout = 14 * 24 * 3600.0
+    else:
+        cmd += ["--no-judge"]
+        if ids:
+            # pass the selection via a file (not --ids) so an arbitrarily large set never hits argv.
+            ids_file = out / "selection.ids"
+            ids_file.write_text("\n".join(ids))
+            cmd += ["--ids-file", str(ids_file)]
+        timeout = 1800.0 if (ids and len(ids) <= 50) else 6 * 3600.0
+    return cmd, timeout
+
+
+def stream_runner(cmd: list[str], *, out: Path, timeout: float, env_extra: dict | None = None,
+                  log=lambda s: None, popen=subprocess.Popen, on_proc=None) -> dict | None:
+    """Spawn the runner, stream its stdout line-by-line to `log`, and return the parsed bundle.json
+    (or None). A hard timeout and a stall watchdog (no output for PEAKSTONE_STALL_SECONDS) kill a
+    wedged run so the caller fails gracefully instead of hanging."""
+    env = {**os.environ, "PYTHONUNBUFFERED": "1"}   # flush each progress line as it happens
+    if env_extra:
+        env.update(env_extra)
+    proc = popen(cmd, cwd=str(paths.repo_root()), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                 text=True, bufsize=1, env=env, start_new_session=True)
+    if on_proc:
+        on_proc(proc)          # register so a cancel can kill the run mid-flight
+    killer = threading.Timer(timeout, lambda: _kill(proc))   # hard cap even if the child goes silent
+    killer.start()
+    stall = float(os.environ.get("PEAKSTONE_STALL_SECONDS", "900"))
+    last = [time.monotonic()]
+
+    _poll = getattr(proc, "poll", lambda: 0)   # a stub proc without poll() -> watchdog is a no-op
+    def _watchdog():
+        while _poll() is None:
+            time.sleep(15)
+            if time.monotonic() - last[0] > stall:
+                log(f"!! no output for {int(stall)}s — run appears stuck; killing it and moving on")
+                _kill(proc)
+                return
+
+    threading.Thread(target=_watchdog, daemon=True).start()
+    try:
+        for line in proc.stdout:
+            last[0] = time.monotonic()
+            log(line.rstrip("\n"))
+    finally:
+        killer.cancel()
+        proc.wait()
+    bundle = out / "bundle.json"
+    return json.loads(bundle.read_text()) if bundle.exists() else None

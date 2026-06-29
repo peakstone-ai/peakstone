@@ -1,4 +1,8 @@
-"""Peakstone API client for the dashboard — stdlib urllib (no extra deps)."""
+"""Peakstone API client for the dashboard — stdlib urllib (no extra deps).
+
+Two services live here: the leaderboard API (submissions, board, runs) and the local model gateway
+(`peakstone serve`) job-control endpoints. The dashboard is a thin client over both.
+"""
 from __future__ import annotations
 
 import json
@@ -8,6 +12,11 @@ import urllib.parse
 import urllib.request
 
 API_DEFAULT = os.environ.get("PEAKSTONE_API_URL", "http://localhost:8000")
+
+# The local model gateway (peakstone serve). Loopback is auth-exempt, so the dashboard usually needs
+# no token; PEAKSTONE_GATEWAY_TOKEN is sent as a bearer header when set (e.g. remote gateway).
+GATEWAY_DEFAULT = os.environ.get("PEAKSTONE_GATEWAY_URL", "http://127.0.0.1:11434")
+GATEWAY_TOKEN = os.environ.get("PEAKSTONE_GATEWAY_TOKEN", "")
 
 
 class APIError(Exception):
@@ -61,5 +70,71 @@ def submit_bundle(base_url: str, bundle: dict, *, timeout: float = 30) -> tuple[
             return r.status, r.read().decode()[:200]
     except urllib.error.HTTPError as e:
         return e.code, e.read().decode()[:200]
+    except (urllib.error.URLError, OSError) as e:
+        raise APIError(str(e))
+
+
+# --- model gateway: job control ----------------------------------------------------------------
+
+def _gw_headers() -> dict:
+    h = {"content-type": "application/json"}
+    if GATEWAY_TOKEN:
+        h["authorization"] = f"Bearer {GATEWAY_TOKEN}"
+    return h
+
+
+def _gw_request(method: str, base_url: str, path: str, body: dict | None = None,
+                *, timeout: float = 10) -> tuple[int, dict]:
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(f"{base_url.rstrip('/')}{path}", data=data,
+                                 headers=_gw_headers(), method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read().decode()
+            return r.status, (json.loads(raw) if raw else {})
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode()
+        try:
+            return e.code, json.loads(raw)
+        except ValueError:
+            return e.code, {"detail": raw[:200]}
+    except (urllib.error.URLError, OSError) as e:
+        raise APIError(str(e))
+
+
+def enqueue_job(spec: dict, *, base_url: str = GATEWAY_DEFAULT, timeout: float = 10) -> str:
+    """Queue a benchmark job on the gateway; returns the job id. `spec` keys: model, level|ids, ctx,
+    reasoning, budget."""
+    status, body = _gw_request("POST", base_url, "/jobs", spec, timeout=timeout)
+    if status != 201:
+        raise APIError(f"enqueue failed ({status}): {body.get('detail', body)}")
+    return body["id"]
+
+
+def list_jobs(*, base_url: str = GATEWAY_DEFAULT, timeout: float = 10) -> list[dict]:
+    return _gw_request("GET", base_url, "/jobs", timeout=timeout)[1].get("jobs", [])
+
+
+def get_job(jid: str, *, base_url: str = GATEWAY_DEFAULT, timeout: float = 10) -> dict | None:
+    status, body = _gw_request("GET", base_url, f"/jobs/{jid}", timeout=timeout)
+    return body if status == 200 else None
+
+
+def cancel_job(jid: str, *, base_url: str = GATEWAY_DEFAULT, timeout: float = 10) -> bool:
+    return _gw_request("DELETE", base_url, f"/jobs/{jid}", timeout=timeout)[0] == 200
+
+
+def stream_job_log(jid: str, *, base_url: str = GATEWAY_DEFAULT, timeout: float = 600):
+    """Yield a job's log lines (SSE `data:` payloads) until the run finishes or the connection drops.
+    Disconnecting does NOT affect the run — it lives in the daemon."""
+    req = urllib.request.Request(f"{base_url.rstrip('/')}/jobs/{jid}/log", headers=_gw_headers())
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            for raw in r:
+                line = raw.decode("utf-8", "replace").rstrip("\n")
+                if line.startswith("data:"):
+                    payload = line[5:].strip()
+                    if payload and payload != "{}":
+                        yield payload
     except (urllib.error.URLError, OSError) as e:
         raise APIError(str(e))

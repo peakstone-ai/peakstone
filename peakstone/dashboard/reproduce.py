@@ -3,19 +3,27 @@ serve it → bench it → compare your tok/s to the published number.
 
 The external steps (serve / health / bench / stop) are injectable so the orchestration is testable
 without a GPU; the real path uses serve/serve.sh + peakstone.engine.runner on a host with llama-server.
+
+The serve/health/stop primitives live in peakstone.engine.serving (so the model-swapping gateway can
+reuse them without importing this Textual/HF dashboard layer); they're re-exported here for the
+dashboard's existing call sites (reproduce.serve, reproduce.stop, reproduce._reasoning_budget, …).
 """
 from __future__ import annotations
 
-import json
-import os
-import signal
 import subprocess
-import threading
-import time
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
+from ..engine import serving
+from ..engine.serving import (  # re-exported: keep reproduce.* call sites + tests working
+    _kill,
+    reasoning_budget as _reasoning_budget,
+    serve,
+    serve_log_path,
+    serve_log_tail,
+    stop,
+    wait_healthy,
+)
 from . import models
 from .models import REPO
 
@@ -42,106 +50,23 @@ class ReproduceResult:
         return None
 
 
-def serve_log_path(name: str) -> Path:
-    return REPO / "results" / f"serve-{name}.log"
-
-
-def serve_log_tail(name: str, lines: int = 12) -> str:
-    """Last few lines of a model's serve log — the crash reason (e.g. CUDA OOM) when it won't start."""
-    p = serve_log_path(name)
-    if not p.exists():
-        return ""
-    return "\n".join(p.read_text(errors="replace").splitlines()[-lines:]).strip()
-
-
-def serve(name: str, *, popen=subprocess.Popen, ctx: int | None = None) -> subprocess.Popen:
-    log = serve_log_path(name)
-    log.parent.mkdir(parents=True, exist_ok=True)
-    env = {**os.environ}
-    if ctx:
-        env["PEAKSTONE_CTX"] = str(ctx)   # serve.sh + the bundle pick this up
-    # capture stdout+stderr to a file so a failed launch (OOM, missing binary) is diagnosable.
-    # close the parent's handle once spawned — the child keeps its own dup (no fd leak per serve).
-    with open(log, "wb") as logf:
-        return popen(["bash", str(SERVE_SH), name], cwd=str(REPO), stdout=logf,
-                     stderr=subprocess.STDOUT, start_new_session=True, env=env)
-
-
-def wait_healthy(port: int, *, timeout: float = 180, opener=urllib.request.urlopen, proc=None) -> bool:
-    """Poll /health until the server answers. Fails fast if the serve process exits first (a crashed
-    llama-server otherwise leaves us polling a dead port for the whole timeout)."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if proc is not None and getattr(proc, "poll", lambda: None)() is not None:
-            return False   # server process died before binding the port
-        try:
-            with opener(f"http://localhost:{port}/health", timeout=3) as r:
-                if getattr(r, "status", 200) == 200:
-                    return True
-        except Exception:  # noqa: BLE001
-            pass
-        time.sleep(2)
-    return False
-
-
 def bench(name: str, ids: list[str] | None = None, *, level: str | None = None,
           out_dir: Path | None = None, log=lambda s: None, popen=subprocess.Popen, on_proc=None,
-          ctx: int | None = None) -> dict | None:
+          ctx: int | None = None, reasoning=None, max_tokens: int | None = None) -> dict | None:
     """Run the engine over the selection, streaming the runner's per-challenge output line-by-line to
-    `log` so the dashboard can show progress live (each challenge solving + its ✓/✗ result)."""
+    `log` so the dashboard can show progress live (each challenge solving + its ✓/✗ result). The TUI
+    serves ONE model at a time (no --gateway), so judging is a separate judge-last pass."""
     out = Path(out_dir) if out_dir else (REPO / "results" / f"repro-{name}")
     out.mkdir(parents=True, exist_ok=True)
-    # -u + PYTHONUNBUFFERED so the child flushes each progress line as it happens (live streaming).
-    cmd = ["python", "-u", "-m", "peakstone.engine.runner", "--models", name, "--bundle",
-           "--stream-output", "--out", str(out)]
-    if level:
-        # the runner resolves the level's selection + settings (judge/agent/prebuilt); stream-prune
-        # so prebuilt image disk stays bounded.
-        cmd += ["--level", level, "--prune-images"]
-        timeout = 14 * 24 * 3600   # levels span minutes..weeks; let it run
-    else:
-        cmd += ["--no-judge"]
-        if ids:
-            # pass the selection via a file (not --ids) so an arbitrarily large set never hits argv.
-            ids_file = out / "selection.ids"
-            ids_file.write_text("\n".join(ids))
-            cmd += ["--ids-file", str(ids_file)]
-        timeout = 1800 if (ids and len(ids) <= 50) else 6 * 3600
-    env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    cmd, timeout = serving.build_runner_cmd(name, ids, level=level, out=out, max_tokens=max_tokens)
+    env_extra = {}
     if ctx:
-        env["PEAKSTONE_CTX"] = str(ctx)   # the runner's bundle records this as the served context
-    proc = popen(cmd, cwd=str(REPO), stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                 text=True, bufsize=1, env=env, start_new_session=True)
-    if on_proc:
-        on_proc(proc)          # register so a cancel can kill the benchmark mid-run
-    killer = threading.Timer(timeout, lambda: _kill(proc))   # hard cap even if the child goes silent
-    killer.start()
-    try:
-        for line in proc.stdout:
-            log(line.rstrip("\n"))
-    finally:
-        killer.cancel()
-        proc.wait()
-    bundle = out / "bundle.json"
-    return json.loads(bundle.read_text()) if bundle.exists() else None
-
-
-def _kill(proc) -> None:
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except (ProcessLookupError, OSError):
-        pass
-
-
-def stop(proc) -> None:
-    if proc and proc.poll() is None:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except (ProcessLookupError, OSError):
-            try:
-                proc.kill()
-            except OSError:
-                pass
+        env_extra["PEAKSTONE_CTX"] = str(ctx)   # the runner's bundle records this as the served context
+    rb = _reasoning_budget(reasoning)           # so the runner's bundle records the EFFECTIVE serve flags
+    if rb is not None:
+        env_extra["PEAKSTONE_REASONING_BUDGET"] = rb
+    return serving.stream_runner(cmd, out=out, timeout=timeout, env_extra=env_extra, log=log,
+                                 popen=popen, on_proc=on_proc)
 
 
 def fetch(name: str, *, on_proc=None, on_dl_progress=None, cancel=None, log=lambda s: None,
@@ -160,7 +85,7 @@ def fetch(name: str, *, on_proc=None, on_dl_progress=None, cancel=None, log=lamb
 
 def reproduce(name: str, *, challenge_ids: list[str] | None = None, level: str | None = None,
               published_tps: float | None = None, on_proc=None, on_dl_progress=None, cancel=None,
-              ctx: int | None = None,
+              ctx: int | None = None, reasoning=None, max_tokens: int | None = None,
               log=lambda s: None, _serve=serve, _wait=wait_healthy, _bench=bench, _stop=stop,
               _download=models.download) -> ReproduceResult:
     entry = models.load_registry().get(name)
@@ -171,7 +96,7 @@ def reproduce(name: str, *, challenge_ids: list[str] | None = None, level: str |
         if not _download(entry, log, progress=on_dl_progress, on_proc=on_proc, cancel=cancel):
             return ReproduceResult(name, False, published_tps=published_tps, note="download failed")
     log(f"serving {name} on :{entry.port}{f' (ctx {ctx})' if ctx else ''} …")
-    proc = _serve(name, ctx=ctx)
+    proc = _serve(name, ctx=ctx, reasoning=reasoning)
     if on_proc:
         on_proc(proc)          # register so the run can be cancelled (killed) mid-flight
     try:
@@ -187,7 +112,8 @@ def reproduce(name: str, *, challenge_ids: list[str] | None = None, level: str |
                 note = "model never became healthy in time (is llama-server installed / GPU free?)"
             return ReproduceResult(name, False, published_tps=published_tps, note=note)
         log(f"benchmarking ({'level ' + level if level else 'selection'}) …")
-        bundle = _bench(name, challenge_ids, level=level, log=log, on_proc=on_proc, ctx=ctx)
+        bundle = _bench(name, challenge_ids, level=level, log=log, on_proc=on_proc, ctx=ctx,
+                        reasoning=reasoning, max_tokens=max_tokens)
     finally:
         _stop(proc)
         log("stopped serving")

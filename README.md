@@ -24,6 +24,11 @@ Early. **P1 (reproducible coding leaderboard)** is in progress. What exists toda
   of the repo workspace, not the PyPI wheel; running the suite needs a checkout (set `PEAKSTONE_REPO`
   if the package and corpus live apart).
 - **`serve/`** — local model-serving helpers (run your own GGUF models to test).
+- **`gateway/`** — `peakstone serve`: a standing, **llama-swap-style OpenAI-compatible gateway** on one
+  port. It picks (and hot-swaps) the backend `llama-server` from the `model` field of each request, so
+  it doubles as a local OpenAI endpoint for everyday use — not just benchmarking. It also owns the
+  **benchmark job queue** (sqlite-persisted), so the TUI/CLI are thin clients: runs survive quitting
+  the dashboard.
 
 - **`api/`** — the submission/leaderboard API (FastAPI + Postgres) that runs on peakstone.ai. Validates
   signed result bundles, serves faceted leaderboards, and moderates the open challenge corpus.
@@ -38,6 +43,8 @@ python -m peakstone.engine.runner --reference --models reference
 
 # 1. Serve a model over an OpenAI-compatible API (any engine works; helper for llama.cpp GGUFs):
 ./serve/serve.sh <model-name>          # see serve/models.toml for the local registry
+# …or run the model gateway, which hot-swaps models per request (see "Model gateway" below):
+peakstone serve                        # then add `--gateway http://localhost:11434` to step 2
 
 # 2. Evaluate it
 export PATH="$HOME/opt/node/bin:$PATH"   # JS/TS test runners need this Node
@@ -112,6 +119,35 @@ submission API (`api/`) is the *server* and is deployed from this repo, never in
 see **Running the server** below.
 
 See **[peakstone/dashboard/README.md](./peakstone/dashboard/README.md)**.
+
+## Model gateway (`peakstone serve`)
+
+A standing, **llama-swap-style** OpenAI-compatible gateway on a single port (default `:11434`). The
+`model` field of each request selects the backend — the gateway loads/swaps the right `llama-server`
+on demand — so it's a drop-in local OpenAI endpoint for editors, scripts, and agents, *and* the
+serving layer the benchmark harness runs on.
+
+```bash
+peakstone serve                              # foreground; or `peakstone serve --detach`
+# point any OpenAI client at it:
+curl http://localhost:11434/v1/chat/completions \
+  -d '{"model": "<model-name>", "messages": [{"role":"user","content":"hi"}]}'
+```
+
+The gateway also owns the **benchmark job queue** (persisted to `results/jobs.db`), so the TUI/CLI are
+thin clients over it — **runs keep going after you quit the dashboard**, and reconnecting shows their
+state. Drive it headless with the `jobs` CLI:
+
+```bash
+peakstone jobs add <model-name> --level standard   # queue a run on the daemon
+peakstone jobs list                                # queued / running / done
+peakstone jobs logs <id>                            # stream a job's log
+peakstone jobs cancel <id>
+```
+
+`peakstone` (the TUI) auto-spawns the gateway detached on startup; disable with `--no-gateway` or
+`PEAKSTONE_NO_GATEWAY=1`. Config lives under `[gateway]` in `peakstone/engine/config.toml`
+(host/port/idle-timeout); set a bearer token to expose it on a LAN.
 
 ## Running the server (peakstone.ai)
 

@@ -4,6 +4,14 @@
 # mirrored here so the harness knows where to reach each model.
 host = "127.0.0.1"
 
+[gateway]
+# `peakstone serve` — the standing llama-swap-style OpenAI gateway. One front port; the request's
+# `model` field selects which registry model is loaded (the backend llama-server is swapped on
+# demand). Use host "0.0.0.0" to expose it on the LAN (like serve.sh); 127.0.0.1 keeps it local.
+host = "127.0.0.1"
+port = 11434
+idle_timeout_s = 0   # unload the model after this many idle seconds to free VRAM; 0 = never
+
 [models]
 # model name -> port (must match serve/models.toml)
 "glm-4.7-flash"      = 8081
