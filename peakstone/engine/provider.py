@@ -89,6 +89,13 @@ class LLMClient:
         # stream the response even with no on_delta — enables repetition-loop detection/abort for every
         # run (the runner sets this), not just dashboard runs that forward deltas.
         self.stream = False
+        # RNG seed sent on every request (llama.cpp honours OpenAI `seed`). Fixed per run → with the
+        # served model/quant/flags pinned, temperature>0 generations are reproducible on this stack.
+        # None = let the server pick (non-reproducible). The runner sets it from config [run].seed.
+        self.seed = None
+
+    def _seed(self) -> dict:
+        return {"seed": self.seed} if self.seed is not None else {}
 
     def chat(
         self,
@@ -109,6 +116,7 @@ class LLMClient:
             "temperature": temperature,
             "max_tokens": max_tokens,
             "stream": False,
+            **self._seed(),
         }
         data = json.dumps(payload).encode()
         headers = {"Content-Type": "application/json"}
@@ -152,7 +160,8 @@ class LLMClient:
         on_delta as it arrives (batched ~48 chars to keep the consumer light). Used for live output."""
         url = f"{self.base_url}/v1/chat/completions"
         payload = {"model": model, "messages": messages, "temperature": temperature,
-                   "max_tokens": max_tokens, "stream": True, "stream_options": {"include_usage": True}}
+                   "max_tokens": max_tokens, "stream": True, "stream_options": {"include_usage": True},
+                   **self._seed()}
         headers = {"Content-Type": "application/json"}
         if self.api_key:
             headers["Authorization"] = f"Bearer {self.api_key}"
@@ -248,6 +257,7 @@ class LLMClient:
             "model": model, "messages": messages, "tools": tools,
             "tool_choice": tool_choice, "temperature": temperature,
             "max_tokens": max_tokens, "stream": False,
+            **self._seed(),
         }
         headers = {"Content-Type": "application/json"}
         if self.api_key:

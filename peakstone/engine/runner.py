@@ -209,6 +209,33 @@ def _gpu_info():
         return None
 
 
+def _host_load():
+    """Coarse contention snapshot taken once at run start — load average + GPU utilization + how many
+    compute processes are sharing the GPU. Recorded so a slow tok/s can be ATTRIBUTED to a busy box;
+    correctness scores are deterministic and load-independent, so they're never adjusted for it."""
+    import shutil
+    import subprocess
+    snap: dict = {}
+    try:
+        snap["load_avg_1m"] = round(os.getloadavg()[0], 2)
+    except Exception:  # noqa: BLE001
+        pass
+    if shutil.which("nvidia-smi"):
+        try:
+            u = subprocess.run(["nvidia-smi", "--query-gpu=utilization.gpu",
+                                "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=10)
+            snap["gpu_util_pct"] = int(u.stdout.split("\n")[0])
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            p = subprocess.run(["nvidia-smi", "--query-compute-apps=pid", "--format=csv,noheader"],
+                               capture_output=True, text=True, timeout=10)
+            snap["gpu_procs"] = len([x for x in p.stdout.splitlines() if x.strip()])
+        except Exception:  # noqa: BLE001
+            pass
+    return snap or None
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="Local coding-LLM eval harness")
     ap.add_argument("--models",
@@ -474,6 +501,7 @@ def main(argv=None):
     # When --gateway is set, all models are reached through one swapping gateway (the model name in
     # each request selects/loads it) instead of a per-model llama-server port. One shared client.
     gateway_client = LLMClient(args.gateway, api_key=args.gateway_key or "") if args.gateway else None
+    host_load = None if args.reference else _host_load()   # coarse contention snapshot at run start
 
     for model in models:
         client = None
@@ -495,6 +523,7 @@ def main(argv=None):
                           file=sys.stderr)
                     continue
             client.stream = True              # detect/abort repetition loops on every run (not just dashboard)
+            client.seed = run_cfg.get("seed")  # fixed seed → reproducible generations (recorded in the bundle)
             if args.stream_output:
                 client.on_delta = _emit_gen   # live token stream for the dashboard
                 client.on_phase = _emit_phase  # live thinking/answering status
@@ -894,7 +923,7 @@ def main(argv=None):
         "judge": (judge_model if use_judge else None),
         "sandbox": effective_sandbox(run_cfg.get("sandbox")), "reference": args.reference,
         "gpu": _gpu_info(), "retries": args.retries,
-        "agents_md": bool(agents_md), "mem_used": mem_used,
+        "agents_md": bool(agents_md), "mem_used": mem_used, "host_load": host_load,
         "max_tokens": args.max_tokens or DEFAULT_MAX_TOKENS,   # the run's generation budget (run identity)
         **level_meta,
     }

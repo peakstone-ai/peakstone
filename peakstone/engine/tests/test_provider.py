@@ -4,6 +4,13 @@ from __future__ import annotations
 from peakstone.engine import provider
 
 
+def test_seed_is_sent_only_when_set():
+    c = provider.LLMClient("http://x")
+    assert c._seed() == {}            # default: no seed → server picks (non-reproducible)
+    c.seed = 42
+    assert c._seed() == {"seed": 42}  # fixed seed → reproducible generations, recorded in the bundle
+
+
 class _FakeSSE:
     """Stand-in for urlopen()'s response: iterates raw SSE byte lines."""
     def __init__(self, lines):

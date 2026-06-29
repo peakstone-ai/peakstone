@@ -30,6 +30,9 @@ api_key  = ""
 
 [run]
 temperature   = 0.2
+seed          = 42    # fixed RNG seed sent on every request → reproducible generations (recorded in
+                      # the bundle's sampling). Reproducible only on the SAME stack (gpu/driver/llama.cpp/
+                      # quant); a different seed is a different run. Models run at their configured temp.
 max_tokens    = 6144
 request_timeout = 600   # seconds per model call
 sandbox       = "subprocess"   # subprocess | docker

@@ -50,6 +50,21 @@ def test_a_pass_immunizes_the_category():
     assert abandon_at is None
 
 
+def test_bundle_records_seed_and_stack():
+    """Reproducibility: the fixed seed (config [run].seed) lands in sampling, and the run documents its
+    stack (python/os) + a coarse contention snapshot (host_load) for attributing perf shifts."""
+    from peakstone.engine import bundle as B
+    res = [{"model": "m", "challenge": "c1", "language": "py", "difficulty": 1, "category": "code",
+            "type": "code", "scoring": "tests", "final_score": 1.0, "passed": 3, "total": 3,
+            "response": "x"}]
+    b = B.produce_bundle({"timestamp": "t", "models": ["m"], "judge": None, "gpu": None,
+                          "mem_used": {}, "host_load": {"load_avg_1m": 0.5, "gpu_procs": 1}},
+                         res, sign=False)
+    assert "seed" in b["model"]["sampling"]                 # seed captured (config default 42)
+    assert b["environment"].get("python") and b["environment"].get("os")
+    assert b["environment"]["host_load"] == {"load_avg_1m": 0.5, "gpu_procs": 1}
+
+
 def test_not_capable_bundle_validates():
     from peakstone.engine import bundle as B
     meta = {"timestamp": "t", "models": ["m"], "judge": None, "gpu": None, "mem_used": {},

@@ -8,8 +8,8 @@ deterministic result is independently re-runnable.
 This layer is auth-agnostic: it signs with the local key (engine/keys.py) and embeds pubkey +
 signature; binding a pubkey to an account is a server-side concern.
 
-TODO (tracked in PLAN.md): hf_revision pinning, params_total/active, sampling seed (deterministic
-runs), full (untruncated) transcripts, robust split-GGUF + multi-engine identity.
+TODO (tracked in PLAN.md): hf_revision pinning, params_total/active, full (untruncated) transcripts,
+robust split-GGUF + multi-engine identity. (Sampling seed is now captured — `sampling.seed`.)
 """
 from __future__ import annotations
 
@@ -149,7 +149,8 @@ def _nominal_ram_gib(total_bytes: int) -> int:
     return math.ceil(total_bytes / 2**30 / 2) * 2
 
 
-def capture_env(gpu_meta: dict | None, mem_used: dict | None = None) -> dict:
+def capture_env(gpu_meta: dict | None, mem_used: dict | None = None,
+                host_load: dict | None = None) -> dict:
     env: dict = {}
     gpu_meta = gpu_meta or {}
     env["gpu"] = gpu_meta.get("name", "unknown")
@@ -194,7 +195,22 @@ def capture_env(gpu_meta: dict | None, mem_used: dict | None = None) -> dict:
         env["vram_used_gb"] = round(mem_used["vram_mib"] / 1024, 1)
     if mem_used.get("ram_mib") is not None:
         env["ram_used_gb"] = round(mem_used["ram_mib"] / 1024, 1)
-    env["os"] = platform.platform()
+    env["os"] = platform.platform()                  # includes the kernel release on Linux
+    env["python"] = platform.python_version()
+    # CUDA version the driver supports (nvidia-smi header) — pairs with `driver` to attribute a tok/s
+    # shift to a toolkit/driver change. (The llama.cpp build version is in model.engine.version.)
+    try:
+        if sys.platform != "darwin":
+            out = subprocess.run(["nvidia-smi"], capture_output=True, text=True, timeout=10)
+            m = re.search(r"CUDA Version:\s*([0-9.]+)", out.stdout)
+            if m:
+                env["cuda"] = m.group(1)
+    except Exception:  # noqa: BLE001
+        pass
+    # Coarse contention snapshot (load avg, GPU util, other GPU procs) taken at run start — to ATTRIBUTE
+    # a slow tok/s to a busy box, NOT to adjust scores (correctness is deterministic + load-independent).
+    if host_load:
+        env["host_load"] = host_load
     return env
 
 
@@ -260,7 +276,8 @@ def _sampling(flags: str, run_cfg: dict) -> dict:
             s[key] = float(m.group(1)) if "." in m.group(1) else int(m.group(1))
     if run_cfg.get("max_tokens"):
         s["max_tokens"] = run_cfg["max_tokens"]
-    # NOTE: no seed captured yet -> temperature>0 runs are not bit-reproducible (PLAN.md TODO).
+    if run_cfg.get("seed") is not None:
+        s["seed"] = run_cfg["seed"]   # fixed RNG seed → reproducible on this stack; part of run identity
     return s
 
 
@@ -425,7 +442,7 @@ def produce_bundle(meta: dict, results: list[dict], *, harness_version: str = "0
         "submitted_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "harness": {"name": "peakstone-engine", "version": harness_version},
         "model": model,
-        "environment": capture_env(meta.get("gpu"), meta.get("mem_used")),
+        "environment": capture_env(meta.get("gpu"), meta.get("mem_used"), meta.get("host_load")),
         "suite": {"id": meta.get("suite_id", "adhoc"),
                   "version": meta.get("suite_version", meta.get("timestamp", "unversioned")),
                   "content_hash": suite_hash},
