@@ -12,20 +12,48 @@ import os
 import subprocess
 import sys
 import time
+import tomllib
 import urllib.request
 from pathlib import Path
 
 from ..engine import paths
 
 
-def base_url(host: str = "127.0.0.1", port: int = 11434) -> str:
+def load_gateway_config() -> dict:
+    """Read the [gateway] block from the engine config.toml (host/port/idle_timeout_s). This is the
+    single source of truth for where the gateway binds; launch + client defaults all derive from it."""
+    try:
+        cfg = tomllib.loads(paths.config_path().read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        cfg = {}
+    g = cfg.get("gateway", {})
+    return {
+        "host": g.get("host", "127.0.0.1"),
+        "port": int(g.get("port", 12434)),
+        "idle_timeout_s": float(g.get("idle_timeout_s", 0)),
+    }
+
+
+def _resolve(host, port):
+    """Fill in host/port from config when a caller passes None — so the configured port is honoured
+    even on the no-arg ensure_running() the TUI uses."""
+    if host is None or port is None:
+        cfg = load_gateway_config()
+        host = cfg["host"] if host is None else host
+        port = cfg["port"] if port is None else port
+    return host, port
+
+
+def base_url(host: str | None = None, port: int | None = None) -> str:
+    host, port = _resolve(host, port)
     # 0.0.0.0 isn't a connectable address — probe loopback when the daemon binds all interfaces.
     reach = "127.0.0.1" if host in ("", "0.0.0.0") else host
     return f"http://{reach}:{port}"
 
 
-def is_running(host: str = "127.0.0.1", port: int = 11434, *, timeout: float = 1.0) -> bool:
+def is_running(host: str | None = None, port: int | None = None, *, timeout: float = 1.0) -> bool:
     """True if a gateway answers /health at host:port."""
+    host, port = _resolve(host, port)
     try:
         with urllib.request.urlopen(f"{base_url(host, port)}/health", timeout=timeout) as r:
             return getattr(r, "status", 200) == 200
@@ -37,10 +65,11 @@ def gateway_log_path() -> Path:
     return paths.repo_root() / "results" / "gateway.log"
 
 
-def spawn_detached(host: str = "127.0.0.1", port: int = 11434, idle_timeout: float = 0.0,
+def spawn_detached(host: str | None = None, port: int | None = None, idle_timeout: float = 0.0,
                    *, popen=subprocess.Popen) -> subprocess.Popen:
     """Start `python -m peakstone.gateway` in its own session (survives the parent), logging to
     results/gateway.log."""
+    host, port = _resolve(host, port)
     log = gateway_log_path()
     log.parent.mkdir(parents=True, exist_ok=True)
     cmd = [sys.executable, "-m", "peakstone.gateway", "--host", host, "--port", str(port),
@@ -50,10 +79,11 @@ def spawn_detached(host: str = "127.0.0.1", port: int = 11434, idle_timeout: flo
                      start_new_session=True, env={**os.environ})
 
 
-def ensure_running(host: str = "127.0.0.1", port: int = 11434, idle_timeout: float = 0.0,
+def ensure_running(host: str | None = None, port: int | None = None, idle_timeout: float = 0.0,
                    *, wait: float = 15.0) -> bool:
     """Ensure a gateway is up at host:port, spawning one detached if not. Returns True once it answers
     /health (or was already running); False if it didn't come up in `wait` seconds."""
+    host, port = _resolve(host, port)
     if is_running(host, port):
         return True
     spawn_detached(host, port, idle_timeout)

@@ -15,7 +15,19 @@ API_DEFAULT = os.environ.get("PEAKSTONE_API_URL", "http://localhost:8000")
 
 # The local model gateway (peakstone serve). Loopback is auth-exempt, so the dashboard usually needs
 # no token; PEAKSTONE_GATEWAY_TOKEN is sent as a bearer header when set (e.g. remote gateway).
-GATEWAY_DEFAULT = os.environ.get("PEAKSTONE_GATEWAY_URL", "http://127.0.0.1:11434")
+# The base URL follows the [gateway] block in config.toml (via launch.load_gateway_config) so the
+# client and daemon can't drift; PEAKSTONE_GATEWAY_URL overrides for a remote gateway.
+def _gateway_default() -> str:
+    if env := os.environ.get("PEAKSTONE_GATEWAY_URL"):
+        return env
+    try:
+        from ..gateway.launch import base_url
+        return base_url()
+    except Exception:  # noqa: BLE001 — fall back if the gateway package isn't importable
+        return "http://127.0.0.1:12434"
+
+
+GATEWAY_DEFAULT = _gateway_default()
 GATEWAY_TOKEN = os.environ.get("PEAKSTONE_GATEWAY_TOKEN", "")
 
 

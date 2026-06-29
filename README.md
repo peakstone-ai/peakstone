@@ -44,7 +44,7 @@ python -m peakstone.engine.runner --reference --models reference
 # 1. Serve a model over an OpenAI-compatible API (any engine works; helper for llama.cpp GGUFs):
 ./serve/serve.sh <model-name>          # see serve/models.toml for the local registry
 # …or run the model gateway, which hot-swaps models per request (see "Model gateway" below):
-peakstone serve                        # then add `--gateway http://localhost:11434` to step 2
+peakstone serve                        # then add `--gateway http://localhost:12434` to step 2
 
 # 2. Evaluate it
 export PATH="$HOME/opt/node/bin:$PATH"   # JS/TS test runners need this Node
@@ -122,7 +122,7 @@ See **[peakstone/dashboard/README.md](./peakstone/dashboard/README.md)**.
 
 ## Model gateway (`peakstone serve`)
 
-A standing, **llama-swap-style** OpenAI-compatible gateway on a single port (default `:11434`). The
+A standing, **llama-swap-style** OpenAI-compatible gateway on a single port (default `:12434`). The
 `model` field of each request selects the backend — the gateway loads/swaps the right `llama-server`
 on demand — so it's a drop-in local OpenAI endpoint for editors, scripts, and agents, *and* the
 serving layer the benchmark harness runs on.
@@ -130,7 +130,7 @@ serving layer the benchmark harness runs on.
 ```bash
 peakstone serve                              # foreground; or `peakstone serve --detach`
 # point any OpenAI client at it:
-curl http://localhost:11434/v1/chat/completions \
+curl http://localhost:12434/v1/chat/completions \
   -d '{"model": "<model-name>", "messages": [{"role":"user","content":"hi"}]}'
 ```
 

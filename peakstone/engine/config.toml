@@ -9,7 +9,7 @@ host = "127.0.0.1"
 # `model` field selects which registry model is loaded (the backend llama-server is swapped on
 # demand). Use host "0.0.0.0" to expose it on the LAN (like serve.sh); 127.0.0.1 keeps it local.
 host = "127.0.0.1"
-port = 11434
+port = 12434   # default front port (11434 is Ollama's; keep them distinct so both can run)
 idle_timeout_s = 0   # unload the model after this many idle seconds to free VRAM; 0 = never
 
 [models]

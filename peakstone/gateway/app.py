@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import json
 import secrets
-import tomllib
 from contextlib import asynccontextmanager
 
 import httpx
@@ -27,26 +26,13 @@ from fastapi.responses import StreamingResponse
 from ..engine import paths
 from . import auth as gw_auth
 from .jobs import JobManager, JobStore
+from .launch import load_gateway_config  # re-exported: config lives in launch (single source of truth)
 from .swap import Busy, ModelManager, ServeFailed, UnknownModel
 
 # Per-request headers we forward upstream / drop. Hop-by-hop and length headers must not be copied
 # (we re-stream the body, so the original framing no longer applies).
 _DROP_REQUEST_HEADERS = {"host", "content-length", "connection", "accept-encoding"}
 _DROP_RESPONSE_HEADERS = {"content-length", "transfer-encoding", "connection", "content-encoding"}
-
-
-def load_gateway_config() -> dict:
-    """Read the [gateway] block from the engine config.toml (host/port/idle_timeout_s)."""
-    try:
-        cfg = tomllib.loads(paths.config_path().read_text())
-    except (OSError, tomllib.TOMLDecodeError):
-        cfg = {}
-    g = cfg.get("gateway", {})
-    return {
-        "host": g.get("host", "127.0.0.1"),
-        "port": int(g.get("port", 11434)),
-        "idle_timeout_s": float(g.get("idle_timeout_s", 0)),
-    }
 
 
 def _default_submit(bundle: dict) -> tuple[int, str]:
