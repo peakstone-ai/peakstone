@@ -33,11 +33,16 @@ cfg = tomllib.load(open("serve/models.toml", "rb"))
 if name not in cfg:
     sys.stderr.write(f"unknown model {name!r}; run serve.sh --list\n"); sys.exit(2)
 m = cfg[name]
-import shlex
+import shlex, re
+flags = m.get('flags', '')
+rb = os.environ.get('PEAKSTONE_REASONING_BUDGET')   # override thinking: 0=off, -1=full, N=token cap
+if rb not in (None, ''):
+    flags = re.sub(r'--reasoning-budget\s+\S+', '', flags).strip()
+    flags = (flags + f' --reasoning-budget {rb}').strip()
 print(f"FILE={shlex.quote(m['file'])}")
 print(f"PORT={m['port']}")
 print(f"CTX={os.environ.get('PEAKSTONE_CTX') or m['ctx']}")   # PEAKSTONE_CTX overrides the configured ctx
-print(f"FLAGS={shlex.quote(m.get('flags',''))}")
+print(f"FLAGS={shlex.quote(flags)}")
 PY
 )"
 

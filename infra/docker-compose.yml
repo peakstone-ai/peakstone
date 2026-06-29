@@ -24,6 +24,8 @@ services:
       dockerfile: infra/Dockerfile
     environment:
       PEAKSTONE_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-peakstone}:${POSTGRES_PASSWORD:-peakstone}@db:5432/${POSTGRES_DB:-peakstone}
+      # the suite the default (held-out) leaderboard scopes to, so the headline is apples-to-apples
+      PEAKSTONE_OFFICIAL_SUITE: ${PEAKSTONE_OFFICIAL_SUITE:-level-standard@2026.06}
     # apply migrations, then serve. Migrations run before the app so the schema is current on deploy.
     command: ["sh", "-c", "alembic upgrade head && uvicorn peakstone.api.main:app --host 0.0.0.0 --port 8000"]
     depends_on:
