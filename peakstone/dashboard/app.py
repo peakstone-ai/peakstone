@@ -311,7 +311,8 @@ class HardwarePanel(Static):
 
 class Dashboard(App):
     CSS = """
-    HardwarePanel { height: auto; border: round $accent; padding: 0 1; margin: 1 1 0 1; }
+    HardwarePanel { height: auto; border: round $accent; padding: 0 1; margin: 0 1; }
+    #sortbar { height: 1; margin: 0 1; padding: 0 1; background: $panel; color: $foreground; }
     DataTable { height: 1fr; margin: 0 1; }
     #board { height: 1fr; margin: 0 1; }
     """
@@ -665,8 +666,10 @@ class Dashboard(App):
                    if j.get("status") == "queued" and j.get("kind", "run") == "run")
 
     def compose(self) -> ComposeResult:
-        yield Header()                           # clock now lives in the HardwarePanel below
+        # No app Header — the hardware panel (with the clock) is the top bar; the sort/filter bar sits
+        # directly under it and relates to the leaderboard below; the Footer holds the key shortcuts.
         yield HardwarePanel()
+        yield Static("", id="sortbar")
         yield BoardTree("leaderboard", id="board")
         yield Footer()
 
@@ -675,6 +678,7 @@ class Dashboard(App):
         tree = self.query_one("#board", BoardTree)
         tree.show_root = False
         tree.auto_expand = False
+        self._update_sortbar()                   # populate the bar immediately (before the board loads)
         self.load_board()
         tree.focus()
         # Poll the daemon's queues: adopt+mirror any benchmark it's already running (CLI-launched, or
@@ -682,15 +686,28 @@ class Dashboard(App):
         self._refresh_daemon_jobs()
         self.set_interval(3.0, self._refresh_daemon_jobs)
 
+    def _update_sortbar(self, max_vram: float | None = None) -> None:
+        """The sort/filter bar under the hardware panel — the controls that shape the leaderboard below.
+        Shows the active sort axis + the hardware-fit filter (keys live in the Footer: s sort · f fit)."""
+        if max_vram is None:
+            snap = hardware.snapshot()
+            max_vram = snap.max_vram_gb if (self.fit and snap.max_vram_gb) else None
+        scope = f"fits ≤{max_vram:g} GB" if max_vram else "all hardware"
+        sel = f"   ·   ▶ {len(self.selected_ids)} peakstones selected" if self.selected_ids else ""
+        self.query_one("#sortbar", Static).update(
+            f"[b]sort[/] {self.SORTS[self.sort_i]}   ·   [b]hardware[/] {scope}{sel}")
+
     def action_refresh(self) -> None:
         self.load_board()
 
     def action_toggle_fit(self) -> None:
         self.fit = not self.fit
+        self._update_sortbar()                   # instant feedback; load_board re-renders the board
         self.load_board()
 
     def action_cycle_sort(self) -> None:
         self.sort_i = (self.sort_i + 1) % len(self.SORTS)
+        self._update_sortbar()                   # instant feedback; load_board re-renders the board
         self.load_board()
 
     def action_models(self) -> None:
@@ -873,10 +890,7 @@ class Dashboard(App):
     def _render(self, data: dict, max_vram: float | None) -> None:
         tree = self.query_one("#board", BoardTree)
         tree.clear()
-        scope = f"fits ≤{max_vram:g} GB" if max_vram else "all hardware"
-        sel = f"  ·  ▶ {len(self.selected_ids)} peakstones selected" if self.selected_ids else ""
-        self.sub_title = (f"{self.base_url}  ·  {scope}  ·  sort: {self.SORTS[self.sort_i]}  ·  "
-                          f"⏎ expand  v quants  c peakstones  m models  u queue{sel}")
+        self._update_sortbar(max_vram)
         rows = data.get("leaderboard", [])
         self._board_rows = rows
         fams: dict[str, list] = {}
