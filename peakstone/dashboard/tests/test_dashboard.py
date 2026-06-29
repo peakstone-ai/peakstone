@@ -72,10 +72,18 @@ def _no_hf_network(monkeypatch):
     """The models screen auto-expands families, which kicks off HF quant discovery in worker threads;
     keep that off the network in tests (a real lookup would block worker shutdown at app exit)."""
     monkeypatch.setattr(_models, "available_quants", lambda repo, **k: [])
-    # The dashboard polls the gateway to adopt daemon-side runs; default to "no daemon jobs" so a real
-    # local `peakstone serve` can't leak into tests (_stub_daemon overrides when a run is exercised).
+    # The dashboard talks to the gateway over these client calls; stub them all so NO test can reach a
+    # real local `peakstone serve` (polling adopts, and the download/run menus enqueue). _stub_daemon
+    # overrides with a stateful fake when a run is actually exercised.
     from peakstone.dashboard import client as _client
     monkeypatch.setattr(_client, "list_jobs", lambda **k: [])
+    monkeypatch.setattr(_client, "enqueue_job", lambda spec, **k: "stub-job")
+    monkeypatch.setattr(_client, "download_model", lambda m, **k: "stub-dl")
+    monkeypatch.setattr(_client, "cancel_job", lambda jid, **k: True)
+    monkeypatch.setattr(_client, "get_job", lambda jid, **k: None)
+    monkeypatch.setattr(_client, "stream_job_log", lambda jid, **k: iter(()))
+    from peakstone.gateway import launch as _launch
+    monkeypatch.setattr(_launch, "ensure_running", lambda *a, **k: True)   # never spawn a real daemon
 
 _FAKE = {"count": 2, "leaderboard": [
     {"rank": 1, "family": "qwen3-coder", "code_score": 0.93, "agent_score": None,
