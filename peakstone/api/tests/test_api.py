@@ -275,6 +275,13 @@ def test_rejects_non_finite_score(client):
     # post raw JSON (json.dumps emits `Infinity`; the test client's json= would refuse to serialize it)
     r = client.post("/submissions", content=json.dumps(b), headers={"content-type": "application/json"})
     assert r.status_code == 400 and "non-finite" in r.json()["detail"]
+    # the guard must also cover metrics/latency_s/tok_per_s — these reach the public aggregates + the
+    # response, where Starlette renders with allow_nan=False (a single NaN row = persistent 500 DoS)
+    b2 = _bundle("nanMetric", [0.5], 25, ap, a, "NF2")
+    b2["results"][0]["metrics"] = {"peak_rss_mb": math.inf}
+    bundle.sign_inplace(b2, ap, a)
+    r2 = client.post("/submissions", content=json.dumps(b2), headers={"content-type": "application/json"})
+    assert r2.status_code == 400 and "metrics" in r2.json()["detail"]
 
 
 def test_account_binding_and_submitter_handle(client):
@@ -579,4 +586,13 @@ def test_xz_zip_bomb_rejected(client):
     assert len(bomb) < 1_000_000                          # the bomb is small on the wire
     r = client.post("/submissions", content=bomb,
                     headers={"content-type": "application/json", "content-encoding": "xz"})
+    assert r.status_code == 413
+
+
+def test_uncompressed_oversized_body_rejected(client, monkeypatch):
+    """The size cap covers PLAIN bodies too — you can't sidestep the bomb guard by not compressing."""
+    from peakstone.api.main import _XzBody
+    monkeypatch.setattr(_XzBody, "MAX_DECOMPRESSED", 2000)   # shrink the cap so the test stays small
+    r = client.post("/submissions", content=b'{"x":"' + b"a" * 5000 + b'"}',
+                    headers={"content-type": "application/json"})
     assert r.status_code == 413

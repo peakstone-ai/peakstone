@@ -103,12 +103,25 @@ def ingest_bundle(db, b: dict) -> models.Submission:
     except Exception as e:  # noqa: BLE001
         raise IngestError(f"schema invalid: {e}")
 
-    # 1b) reject non-finite scores: NaN/Infinity validate as JSON `number` but poison every aggregate
-    # (NaN >= 0.999 is always False; sorting on NaN is undefined) and corrupt the DB.
+    # 1b) reject non-finite numbers anywhere in a result: NaN/Infinity validate as JSON `number` but
+    # poison every aggregate (NaN >= 0.999 is always False; sorting on NaN is undefined) AND make the
+    # response unserialisable (Starlette renders with allow_nan=False -> 500), so a single bundle with
+    # e.g. metrics.peak_rss_mb=NaN is a persistent DoS on the public board. Scan score/metrics/latency/
+    # tok_per_s — every numeric that reaches an aggregate or the API response.
+    def _nonfinite(x) -> bool:
+        if isinstance(x, bool):
+            return False
+        if isinstance(x, float):
+            return not math.isfinite(x)
+        if isinstance(x, dict):
+            return any(_nonfinite(v) for v in x.values())
+        if isinstance(x, (list, tuple)):
+            return any(_nonfinite(v) for v in x)
+        return False
     for r in b.get("results", []):
-        for v in (r.get("score", {}) or {}).values():
-            if isinstance(v, float) and not math.isfinite(v):
-                raise IngestError("non-finite score value (NaN/Infinity)")
+        for fld in ("score", "metrics", "latency_s", "tok_per_s"):
+            if _nonfinite(r.get(fld)):
+                raise IngestError(f"non-finite numeric in result.{fld} (NaN/Infinity)")
 
     # 2) content-address: re-derive bundle_hash and require a match
     claimed = b.get("bundle_hash")

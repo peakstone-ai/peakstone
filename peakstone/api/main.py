@@ -51,23 +51,40 @@ class _XzBody:
         self.app = app
 
     async def __call__(self, scope, receive, send):
-        if scope["type"] != "http" or not any(
-                k == b"content-encoding" and v.strip().lower() == b"xz" for k, v in scope["headers"]):
+        if scope["type"] != "http":
             return await self.app(scope, receive, send)
-
         from starlette.responses import JSONResponse
 
         async def reject(detail, code):
             return await JSONResponse({"detail": detail}, status_code=code)(scope, receive, send)
 
-        body = b""
+        headers = scope["headers"]
+        is_xz = any(k == b"content-encoding" and v.strip().lower() == b"xz" for k, v in headers)
+        # Cap the on-wire size for EVERY request, not just xz: a plain (uncompressed) multi-GB POST to a
+        # public endpoint would otherwise be buffered + json-parsed whole -> memory exhaustion, sidestepping
+        # the bomb guard simply by not compressing. xz bodies cap at the on-wire size; plain bodies at the
+        # full decompressed cap (the route materialises the whole body before any handler runs).
+        cap = self.MAX_COMPRESSED if is_xz else self.MAX_DECOMPRESSED
+        for k, v in headers:                             # reject an oversized declared length up front
+            if k == b"content-length":
+                try:
+                    if int(v) > cap:
+                        return await reject("request body too large", 413)
+                except ValueError:
+                    pass
+                break
+
+        body = b""                                       # read once, hard-capped (covers chunked / lying CL)
         while True:
             msg = await receive()
             body += msg.get("body", b"")
-            if len(body) > self.MAX_COMPRESSED:          # cap the on-wire size (don't read unbounded)
-                return await reject("compressed body too large", 413)
+            if len(body) > cap:
+                return await reject("request body too large", 413)
             if not msg.get("more_body"):
                 break
+
+        if not is_xz:
+            return await self._replay(scope, body, send)
         try:                                             # output-capped → a bomb is rejected, not materialized
             d = lzma.LZMADecompressor(memlimit=self.LZMA_MEMLIMIT)
             out = d.decompress(body, self.MAX_DECOMPRESSED + 1)
@@ -75,9 +92,15 @@ class _XzBody:
                 return await reject("decompressed body too large", 413)
         except (lzma.LZMAError, EOFError, OSError):
             return await reject("invalid xz body", 400)
-        # strip content-encoding, fix content-length, replay the decompressed body once
-        headers = [(k, v) for k, v in scope["headers"] if k != b"content-encoding"]
-        headers = [(k, str(len(out)).encode() if k == b"content-length" else v) for k, v in headers]
+        scope = {**scope, "headers": [(k, v) for k, v in headers if k != b"content-encoding"]}
+        return await self._replay(scope, out, send)
+
+    async def _replay(self, scope, body, send):
+        """Hand `body` to the app as a single request message, with content-length fixed to match."""
+        headers = [(k, str(len(body)).encode() if k == b"content-length" else v)
+                   for k, v in scope["headers"]]
+        if not any(k == b"content-length" for k, _ in headers):
+            headers.append((b"content-length", str(len(body)).encode()))
         scope = {**scope, "headers": headers}
         sent = False
 
@@ -86,7 +109,7 @@ class _XzBody:
             if sent:
                 return {"type": "http.disconnect"}
             sent = True
-            return {"type": "http.request", "body": out, "more_body": False}
+            return {"type": "http.request", "body": body, "more_body": False}
 
         return await self.app(scope, receive2, send)
 
