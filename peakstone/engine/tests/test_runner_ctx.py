@@ -50,6 +50,21 @@ def test_a_pass_immunizes_the_category():
     assert abandon_at is None
 
 
+def test_retry_attempt_without_reasoning_validates():
+    """Regression: a self-repair attempt from a model with no CoT channel (reasoning None/omitted) must
+    still produce a valid bundle — it was failing the whole run on a schema ValidationError."""
+    from peakstone.engine import bundle as B
+    meta = {"timestamp": "t", "models": ["m"], "judge": None, "gpu": None, "mem_used": {}}
+    row = {"model": "m", "challenge": "c1", "language": "py", "difficulty": 1, "category": "code",
+           "type": "code", "scoring": "tests", "final_score": 1.0, "passed": 3, "total": 3,
+           "response": "ok",
+           "attempts_log": [{"answer": "def f(): return 2", "passed": 0, "total": 3, "test_error": "boom"},
+                            {"answer": "def f(): return 1", "passed": 3, "total": 3, "test_error": ""}]}
+    b = B.produce_bundle(meta, [row], sign=False)          # must not raise
+    atts = b["results"][0]["transcript"]["attempts"]
+    assert len(atts) == 2 and atts[0].get("reasoning") is None   # omitted, run still valid
+
+
 def test_metacog_segment():
     # no calibration → nothing shown
     assert runner._metacog(None, None, True) == ""

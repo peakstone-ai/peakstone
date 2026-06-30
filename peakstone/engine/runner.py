@@ -845,8 +845,10 @@ def main(argv=None):
                     ptoks, ctoks, rtoks = res.prompt_tokens, res.completion_tokens, res.reasoning_tokens
                     files = extract_files(res.text, ch.solution_file, ch.language)
                     run = run_tests(ch, files, run_cfg)
-                    attempt_log.append({"answer": res.text, "reasoning": _cap(res.reasoning),
-                                        "passed": run.passed, "total": run.total, "test_error": ""})
+                    att = {"answer": res.text, "passed": run.passed, "total": run.total, "test_error": ""}
+                    if _cap(res.reasoning):          # omit when the model exposed no CoT (schema: string)
+                        att["reasoning"] = _cap(res.reasoning)
+                    attempt_log.append(att)
                     if first_run is None:
                         first_run, first_response, first_files = run, response, files
                         first_reasoning = res.reasoning   # the scored attempt's CoT (capped into the bundle)

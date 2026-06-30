@@ -177,9 +177,9 @@
           "additionalProperties": true,
           "properties": {
             "prompt": { "type": "string" },
-            "system_prompt": { "type": "string", "description": "The exact system prompt sent to the model for this challenge (signed, so the test conditions are reproducible)." },
+            "system_prompt": { "type": ["string", "null"], "description": "The exact system prompt sent to the model for this challenge (signed, so the test conditions are reproducible)." },
             "raw_output": { "type": "string" },
-            "reasoning": { "type": "string", "description": "The scored attempt's chain-of-thought, if the model exposed a reasoning channel. Size-capped (head+tail) to bound bundle growth." },
+            "reasoning": { "type": ["string", "null"], "description": "The scored attempt's chain-of-thought, if the model exposed a reasoning channel. Size-capped (head+tail) to bound bundle growth." },
             "extracted_files": { "type": "object", "additionalProperties": { "type": "string" } },
             "plan": { "type": "string", "description": "For planner runs: the spec/plan the coder executed." },
             "stdout": { "type": "string" },
@@ -192,7 +192,7 @@
                 "additionalProperties": true,
                 "properties": {
                   "answer": { "type": "string" },
-                  "reasoning": { "type": "string" },
+                  "reasoning": { "type": ["string", "null"] },
                   "test_error": { "type": "string", "description": "The failing test output fed back to the model before the next attempt (empty on the final/passing attempt)." },
                   "passed": { "type": "integer" },
                   "total": { "type": "integer" }
