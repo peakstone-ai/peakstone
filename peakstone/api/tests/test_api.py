@@ -553,3 +553,30 @@ def test_not_capable_verdict_on_leaderboard(client):
     assert only and all(r["run"]["run_status"] == "not_capable" for r in only)
     viable = client.get("/leaderboard", params={"verdict": "viable"}).json()["leaderboard"]
     assert all(r["family"] != "dudcfg" for r in viable)
+
+
+def test_xz_upload_accepted(client):
+    """Bundles are uploaded xz-compressed (Content-Encoding: xz); the middleware decompresses them.
+    (Plain uncompressed bodies still parse — every other test posts JSON directly.)"""
+    import json as _json
+    import lzma as _xz
+    ap, a = _newkey()
+    b = _bundle("xzm", [0.5], 24, ap, a, "xz")
+    raw = _xz.compress(_json.dumps(b).encode())
+    r = client.post("/submissions", content=raw,
+                    headers={"content-type": "application/json", "content-encoding": "xz"})
+    assert r.status_code == 201 and r.json()["n_results"] >= 1
+    # a corrupt xz body is a clean 400, not a 500
+    bad = client.post("/submissions", content=b"not-xz",
+                      headers={"content-type": "application/json", "content-encoding": "xz"})
+    assert bad.status_code == 400
+
+
+def test_xz_zip_bomb_rejected(client):
+    """A small body that decompresses past the cap is rejected (413), not allowed to exhaust memory."""
+    import lzma as _xz
+    bomb = _xz.compress(b"\x00" * (256 * 1024 * 1024))   # ~256 MB of zeros -> tiny xz
+    assert len(bomb) < 1_000_000                          # the bomb is small on the wire
+    r = client.post("/submissions", content=bomb,
+                    headers={"content-type": "application/json", "content-encoding": "xz"})
+    assert r.status_code == 413

@@ -5,6 +5,7 @@ Run (Postgres):      PEAKSTONE_DATABASE_URL=postgresql+psycopg://... uvicorn api
 """
 from __future__ import annotations
 
+import lzma
 import os
 import re
 from collections import defaultdict
@@ -33,6 +34,66 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Peakstone API", version="0.1.0", lifespan=lifespan)
 
 
+class _XzBody:
+    """ASGI middleware: transparently decompress an xz/lzma request body (Content-Encoding: xz) so the
+    route sees plain JSON. Bundles are large transcript-heavy JSON; the client compresses the upload
+    (~6.5-8x) to cut bandwidth. Uncompressed requests (every other endpoint) pass straight through.
+
+    Zip-bomb guarded — /submissions is public, so a tiny body must not expand to GBs: cap the on-wire
+    size, decompress with a hard OUTPUT cap, and bound the lzma dictionary via memlimit. Real bundles
+    are ~1.4 MB raw / ~0.2 MB xz, so the defaults leave generous headroom."""
+
+    MAX_COMPRESSED = int(os.environ.get("PEAKSTONE_MAX_UPLOAD_MB", "8")) * 1024 * 1024
+    MAX_DECOMPRESSED = int(os.environ.get("PEAKSTONE_MAX_BUNDLE_MB", "64")) * 1024 * 1024
+    LZMA_MEMLIMIT = 128 * 1024 * 1024                    # bounds a malicious xz dictionary allocation
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not any(
+                k == b"content-encoding" and v.strip().lower() == b"xz" for k, v in scope["headers"]):
+            return await self.app(scope, receive, send)
+
+        from starlette.responses import JSONResponse
+
+        async def reject(detail, code):
+            return await JSONResponse({"detail": detail}, status_code=code)(scope, receive, send)
+
+        body = b""
+        while True:
+            msg = await receive()
+            body += msg.get("body", b"")
+            if len(body) > self.MAX_COMPRESSED:          # cap the on-wire size (don't read unbounded)
+                return await reject("compressed body too large", 413)
+            if not msg.get("more_body"):
+                break
+        try:                                             # output-capped → a bomb is rejected, not materialized
+            d = lzma.LZMADecompressor(memlimit=self.LZMA_MEMLIMIT)
+            out = d.decompress(body, self.MAX_DECOMPRESSED + 1)
+            if len(out) > self.MAX_DECOMPRESSED or not d.eof:
+                return await reject("decompressed body too large", 413)
+        except (lzma.LZMAError, EOFError, OSError):
+            return await reject("invalid xz body", 400)
+        # strip content-encoding, fix content-length, replay the decompressed body once
+        headers = [(k, v) for k, v in scope["headers"] if k != b"content-encoding"]
+        headers = [(k, str(len(out)).encode() if k == b"content-length" else v) for k, v in headers]
+        scope = {**scope, "headers": headers}
+        sent = False
+
+        async def receive2():
+            nonlocal sent
+            if sent:
+                return {"type": "http.disconnect"}
+            sent = True
+            return {"type": "http.request", "body": out, "more_body": False}
+
+        return await self.app(scope, receive2, send)
+
+
+app.add_middleware(_XzBody)
+
+
 @app.get("/healthz")
 def healthz():
     return {"status": "ok"}
@@ -40,7 +101,9 @@ def healthz():
 
 @app.post("/submissions", status_code=201)
 def post_submission(bundle: dict = Body(...), db: Session = Depends(get_session)):
-    """Validate (schema + content-hash + signature) and store a result bundle."""
+    """Validate (schema + content-hash + signature) and store a result bundle. An xz-compressed body
+    (Content-Encoding: xz) is transparently decompressed by the _XzBody middleware before this runs, so
+    large transcript-heavy uploads cost ~6.5-8x less bandwidth."""
     try:
         sub = ingest.ingest_bundle(db, bundle)
     except ingest.IngestError as e:
