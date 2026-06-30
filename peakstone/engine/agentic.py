@@ -79,8 +79,11 @@ class Workspace:
         if path in self.files:
             return {"path": path, "content": self.files[path]}
         if path.startswith("tests/"):
-            f = self.ch.dir / path
-            if f.is_file():
+            # contain the read: `tests/../../secret` would otherwise read any host file into the
+            # agent transcript (which ships in the public bundle). Require it stays under ch.dir.
+            base = self.ch.dir.resolve()
+            f = (self.ch.dir / path).resolve()
+            if f.is_file() and f.is_relative_to(base):
                 return {"path": path, "content": f.read_text()}
         return {"error": f"no such file: {path}"}
 
@@ -88,6 +91,8 @@ class Workspace:
         path = (path or "").lstrip("./")
         if path.startswith("tests/"):
             return {"error": "test files are read-only"}
+        if path.startswith("/") or ".." in Path(path).parts:   # no absolute/traversal escapes (M1)
+            return {"error": f"path escapes the workspace: {path}"}
         self.files[path] = content if content is not None else ""
         return {"ok": True, "path": path, "bytes": len(self.files[path])}
 

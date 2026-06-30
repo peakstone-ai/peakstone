@@ -244,8 +244,16 @@ def _link_node_modules(workdir: Path, cfg: dict) -> str | None:
 
 
 def _write_solution(workdir: Path, files: dict[str, str]) -> None:
+    base = workdir.resolve()
     for rel, content in files.items():
-        dest = workdir / rel
+        # `rel` is UNTRUSTED: it's the filename from the model's fenced-block info string
+        # (extract.py), so it can be a traversal (../../../home/psc/.bashrc) or an absolute path.
+        # Resolve and require the result stays inside the sandbox workdir, else a solution could
+        # overwrite host files (~/.bashrc, ~/.ssh/authorized_keys, a *.pth on PYTHONPATH = RCE)
+        # BEFORE any test runs. run_tests() turns this raise into a failed challenge. Review M1.
+        dest = (workdir / rel).resolve()
+        if dest != base and not dest.is_relative_to(base):
+            raise ValueError(f"solution path escapes the sandbox: {rel!r}")
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(content)
 
