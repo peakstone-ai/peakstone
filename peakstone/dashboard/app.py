@@ -297,6 +297,11 @@ class HardwarePanel(Static):
         # every served model, right-pinned; the first sits on the primary GPU's line, the rest stack
         # under it on lines that are empty on the left (multiple models loaded on the same card).
         details = [_model_detail(lm) for lm in hardware.loaded_models() if lm.get("file")]
+        # live run status rides right-aligned on the model's line, right after its name (not on a
+        # separate line lower down). Concise: "🧠 thinking 48 tok/s" / "✍ answering 48 tok/s".
+        status = self.app.run_status_inline()
+        if details and status:
+            details[0] = f"{details[0]}    {status}"
 
         def _gpu_row(left: str, right: str):
             """One GPU line: meter on the left, loaded-model detail pinned to the right corner."""
@@ -622,6 +627,17 @@ class Dashboard(App):
         snap["queued"] = self.queued_count()       # from the daemon snapshot, outside the run lock
         return snap
 
+    def run_status_inline(self) -> str:
+        """Concise live status shown right after the model name: "🧠 thinking 48 tok/s" /
+        "✍ answering 48 tok/s" / "48 tok/s". "" when no run is being mirrored (or it's downloading)."""
+        p = self.run_progress()
+        if not p["active"] or p.get("phase") == "download":
+            return ""
+        phase = {"thinking": "[magenta]🧠 thinking[/]",
+                 "answering": "[green]✍ answering[/]"}.get(p.get("gen_phase"), "")
+        tps = f"{p['tps']:.0f} tok/s" if p.get("tps") else ""
+        return "  ".join(x for x in (phase, tps) if x) or (p.get("phase") or "starting")
+
     def job_status(self) -> str:
         """One-line status of the active/queued job for the performance overview (incl. a progress bar)."""
         p = self.run_progress()
@@ -629,12 +645,10 @@ class Dashboard(App):
             queued = f"   ·   {p['queued']} queued" if p["queued"] else ""
             if p["phase"] == "download" and p["dl_total"]:
                 return f"[b]⬇ {p['model']}[/] downloading  {_bar(p['dl_done'], p['dl_total'])}{queued}"
-            rate = f" at {p['tps']:.0f} tok/s" if p.get("tps") else ""
-            gp = {"thinking": "  ·  [magenta]🧠 thinking[/]",
-                  "answering": "  ·  [green]✍ answering[/]"}.get(p.get("gen_phase"), "")
+            # tok/s + thinking/answering now ride on the model line above; here keep just the coverage
             if p["total"]:
-                return f"[b]▶ running{rate}[/]{gp}  {_bar(p['done'], p['total'])} challenges{queued}"
-            return f"[b]▶ {p['phase'] or 'starting'}{rate}…[/]{gp}{queued}"
+                return f"[b]▶ running[/]  {_bar(p['done'], p['total'])} challenges{queued}"
+            return f"[b]▶ {p['phase'] or 'starting'}…[/]{queued}"
         if p["queued"]:
             return f"[dim]{p['queued']} run(s) queued[/]"
         return ""

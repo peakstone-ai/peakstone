@@ -332,9 +332,11 @@ def test_gen_phase_drives_overview_status():
 
     app._track(GEN_PHASE + "thinking")          # a phase line from the stream
     assert app.run_progress()["gen_phase"] == "thinking"
-    assert "thinking" in app.job_status()
+    # the live phase + tok/s ride on the model line (concise), not the coverage line
+    assert "thinking" in app.run_status_inline() and "48 tok/s" in app.run_status_inline()
     app._track(GEN_PHASE + "answering")
-    assert "answering" in app.job_status()
+    assert "answering" in app.run_status_inline()
+    assert "running" in app.job_status() and "tok/s" not in app.job_status()   # coverage only here
     app._track("   m | c1   ok  final=1.00 tests=3/3 50tok/s")   # challenge done -> phase cleared
     assert app.run_progress()["gen_phase"] is None
 
