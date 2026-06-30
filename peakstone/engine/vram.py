@@ -11,6 +11,11 @@ per token is computable from the model's geometry (layers, KV-heads, head dim) a
 That's an instant analytical answer; an optional empirical probe (in the dashboard) can confirm it by
 launching once at the estimate. Everything here is pure + dependency-free (stdlib struct only) so it's
 unit-testable without a GPU.
+
+This is the COLD-START estimate: engine/serving.resolve_ctx uses it to pick a model's default ctx when
+none is configured. It deliberately errs small and warns on a tight fit. Longer term, the default will
+come mostly from OBSERVATION — the ctx that worked on similar hardware in other people's runs (the
+leaderboard) — and this math is the fallback for hardware/models we have no data for yet.
 """
 from __future__ import annotations
 

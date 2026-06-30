@@ -15,6 +15,7 @@ import json
 import os
 import signal
 import subprocess
+import sys
 import threading
 import time
 import tomllib
@@ -22,7 +23,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import paths
+from . import paths, vram
 
 
 def serve_sh() -> Path:
@@ -150,6 +151,73 @@ def load_registry() -> dict[str, ServeModel]:
     return {n: ServeModel(n, m.get("port"), m.get("ctx"), m.get("file"), m.get("flags", ""),
                           m.get("mmproj"))
             for n, m in data.items()}
+
+
+# --- context-window selection ------------------------------------------------------------------
+# Which ctx to serve a model at. Precedence: an explicit ctx in models.toml ("something specified")
+# wins; otherwise ROUGH-estimate the largest window that fits this GPU's VRAM analytically from the
+# GGUF geometry (engine/vram.py). It's a cold-start guess — errs small, snaps down, and warns when
+# the fit is tight or a configured ctx looks too big. The long-term plan is to lean on observed ctx
+# from other runs on similar hardware (the leaderboard) and use this estimate only when no data yet.
+
+DEFAULT_CTX = 32768          # last-resort window when neither configured nor estimable
+
+
+def detect_vram_gib(*, run=subprocess.run) -> float | None:
+    """Total VRAM of the largest GPU in GiB (macOS: unified memory == total RAM). None if unknown."""
+    try:
+        if sys.platform == "darwin":
+            out = run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=5)
+            return int(out.stdout.strip()) / 1024 ** 3
+        out = run(["nvidia-smi", "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+                  capture_output=True, text=True, timeout=10)
+        return max(int(x) for x in out.stdout.split()) / 1024   # MiB -> GiB, largest GPU
+    except Exception:  # noqa: BLE001
+        return None
+
+
+@dataclass(frozen=True)
+class CtxChoice:
+    ctx: int | None          # window to serve at; None => caller falls back to DEFAULT_CTX
+    source: str              # "configured" | "estimated" | "fallback"
+    warning: str | None = None
+
+
+def resolve_ctx(model: ServeModel, *, vram_gib: float | None = None,
+                _read_geometry=vram.read_geometry, _detect=detect_vram_gib) -> CtxChoice:
+    """Pick the serving ctx for `model` (see module note). Pure given the injected GGUF/VRAM readers."""
+    flags = model.flags or ""
+    # --n-cpu-moe puts part of the weights on the host CPU, which this analytical estimate doesn't
+    # model — so don't second-guess an offloaded model; trust its configured ctx. (These are the
+    # don't-fit-on-GPU models; sizing them from observed runs is the follow-up.)
+    offloaded = "--n-cpu-moe" in flags
+    est = None
+    if not offloaded and model.file:
+        path = paths.repo_root() / model.file
+        gib = vram_gib if vram_gib is not None else _detect()
+        if path.exists() and gib:
+            try:
+                geom = _read_geometry(path)
+                mmproj = ((paths.repo_root() / model.mmproj).stat().st_size
+                          if model.mmproj_present else 0)
+                k, v = vram.cache_types_from_flags(flags)
+                est = vram.estimate_max_ctx(geom=geom, weights_bytes=path.stat().st_size,
+                                            vram_gib=gib, k_type=k, v_type=v, mmproj_bytes=mmproj)
+            except Exception:  # noqa: BLE001  -- unreadable/odd GGUF: just fall back
+                est = None
+    if model.ctx:                                   # configured -> respect it, warn if it won't fit
+        warn = None
+        if est and est.max_ctx and model.ctx > est.max_ctx:
+            warn = (f"configured ctx {model.ctx} > ~{est.max_ctx} that fits this GPU's VRAM "
+                    f"— may OOM on load")
+        return CtxChoice(model.ctx, "configured", warn)
+    if est and est.max_ctx:
+        warn = (f"tight VRAM fit — only {est.kv_budget_gib:.1f}GB left for KV; may OOM"
+                if not est.capped_by_native and est.kv_budget_gib < 1.0 else None)
+        return CtxChoice(est.max_ctx, "estimated", warn)
+    reason = ("--n-cpu-moe model: ctx not auto-estimated" if offloaded
+              else "no GGUF geometry / VRAM info; using default ctx")
+    return CtxChoice(None, "fallback", reason)
 
 
 # --- running the benchmark engine as a subprocess ----------------------------------------------

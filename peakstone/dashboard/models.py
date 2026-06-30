@@ -171,10 +171,11 @@ def _next_port(reg: dict[str, ModelEntry]) -> int:
 
 
 def add_model(name: str, repo: str, file: str | None = None, *, port: int | None = None,
-              ctx: int = 32768, flags: str = "", family: str = "") -> ModelEntry:
+              ctx: int | None = None, flags: str = "", family: str = "") -> ModelEntry:
     """Append a model to the registry. `file` defaults to models/<name>/<basename-of-repo-file>;
     pass the HF filename as `file` (just the basename) to set where it downloads. `family` groups
-    quant variants together in the models menu."""
+    quant variants together in the models menu. `ctx=None` omits the key so it's auto-estimated from
+    VRAM at serve time (engine/serving.resolve_ctx); pass an int to pin it."""
     if not name or not name.replace("-", "").replace(".", "").replace("_", "").isalnum():
         raise ValueError("model name must be alphanumeric (with -._)")
     reg = load_registry()
@@ -184,8 +185,9 @@ def add_model(name: str, repo: str, file: str | None = None, *, port: int | None
     rel = f"models/{name}/{basename}"
     port = port or _next_port(reg)
     fam_line = f'family = "{family}"\n' if family else ""
+    ctx_line = f'ctx   = {ctx}\n' if ctx else ""   # omit => serve-time auto-estimate from VRAM
     block = (f'\n["{name}"]\nrepo  = "{repo}"\nfile  = "{rel}"\nport  = {port}\n'
-             f'ctx   = {ctx}\nflags = "{flags}"\n{fam_line}')
+             f'{ctx_line}flags = "{flags}"\n{fam_line}')
     MODELS_TOML.parent.mkdir(parents=True, exist_ok=True)
     with open(MODELS_TOML, "a") as f:
         f.write(block)

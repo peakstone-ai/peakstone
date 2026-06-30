@@ -18,7 +18,7 @@ if [ "${1:-}" = "--list" ] || [ -z "${1:-}" ]; then
   python3 - <<'PY'
 import tomllib
 for n, m in tomllib.load(open("serve/models.toml", "rb")).items():
-    print(f"  {n:<20} port {m['port']}  ctx {m['ctx']}")
+    print(f"  {n:<20} port {m['port']}  ctx {m.get('ctx', 'auto')}")
 PY
   [ -z "${1:-}" ] && exit 1 || exit 0
 fi
@@ -41,7 +41,22 @@ if rb not in (None, ''):
     flags = (flags + f' --reasoning-budget {rb}').strip()
 print(f"FILE={shlex.quote(m['file'])}")
 print(f"PORT={m['port']}")
-print(f"CTX={os.environ.get('PEAKSTONE_CTX') or m['ctx']}")   # PEAKSTONE_CTX overrides the configured ctx
+# ctx precedence: PEAKSTONE_CTX env > configured ctx in models.toml > rough VRAM-fit estimate
+# (engine/vram.py) > DEFAULT_CTX. The estimate errs small and prints a warning when the fit is tight.
+ctx = os.environ.get('PEAKSTONE_CTX') or m.get('ctx')
+if not ctx:
+    try:
+        from peakstone.engine.serving import resolve_ctx, ServeModel, DEFAULT_CTX
+        choice = resolve_ctx(ServeModel(name, m.get('port'), m.get('ctx'), m.get('file'),
+                                        m.get('flags', ''), m.get('mmproj')))
+        ctx = choice.ctx or DEFAULT_CTX
+        if choice.warning:
+            sys.stderr.write(f">>> ctx: {choice.warning}\n")
+        sys.stderr.write(f">>> ctx auto={ctx} ({choice.source})\n")
+    except Exception as e:  # noqa: BLE001
+        ctx = 32768
+        sys.stderr.write(f">>> ctx auto-estimate failed ({e}); using {ctx}\n")
+print(f"CTX={ctx}")
 print(f"FLAGS={shlex.quote(flags)}")
 print(f"MMPROJ={shlex.quote(m.get('mmproj', ''))}")   # vision projector GGUF; empty = text-only
 PY
