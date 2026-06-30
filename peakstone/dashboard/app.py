@@ -334,7 +334,9 @@ class HardwarePanel(Static):
             rows.append(Text.from_markup(f"{' ' * 44}  [b]CPU{i}[/b] {escape(nm)}"))
         job = self.app.job_status()
         if job:
-            rows.append(Text.from_markup(job))
+            t = Text.from_markup(job)
+            t.justify = "right"                          # the run/queue line sits on the right
+            rows.append(t)
         self.border_title = time.strftime("%a %H:%M:%S")   # the clock lives with the live hardware info
         self.update(Group(*rows))
 
@@ -628,27 +630,28 @@ class Dashboard(App):
         return snap
 
     def run_status_inline(self) -> str:
-        """Concise live status shown right after the model name: "🧠 thinking 48 tok/s" /
-        "✍ answering 48 tok/s" / "48 tok/s". "" when no run is being mirrored (or it's downloading)."""
+        """Concise live status shown right after the model name: phase + tok/s + coverage + queue, e.g.
+        "🧠 thinking 48 tok/s  ·  3/200 challenges  ·  2 queued". "" when nothing is being mirrored
+        (or it's downloading — that shows on the bottom row instead)."""
         p = self.run_progress()
         if not p["active"] or p.get("phase") == "download":
             return ""
         phase = {"thinking": "[magenta]🧠 thinking[/]",
                  "answering": "[green]✍ answering[/]"}.get(p.get("gen_phase"), "")
         tps = f"{p['tps']:.0f} tok/s" if p.get("tps") else ""
-        return "  ".join(x for x in (phase, tps) if x) or (p.get("phase") or "starting")
+        live = "  ".join(x for x in (phase, tps) if x) or (p.get("phase") or "starting")
+        cov = f"{min(p['done'], p['total'])}/{p['total']} challenges" if p["total"] else ""
+        q = f"{p['queued']} queued" if p["queued"] else ""
+        return "  ·  ".join(x for x in (live, cov, q) if x)
 
     def job_status(self) -> str:
         """One-line status of the active/queued job for the performance overview (incl. a progress bar)."""
         p = self.run_progress()
         if p["active"]:
-            queued = f"   ·   {p['queued']} queued" if p["queued"] else ""
             if p["phase"] == "download" and p["dl_total"]:
+                queued = f"   ·   {p['queued']} queued" if p["queued"] else ""
                 return f"[b]⬇ {p['model']}[/] downloading  {_bar(p['dl_done'], p['dl_total'])}{queued}"
-            # tok/s + thinking/answering now ride on the model line above; here keep just the coverage
-            if p["total"]:
-                return f"[b]▶ running[/]  {_bar(p['done'], p['total'])} challenges{queued}"
-            return f"[b]▶ {p['phase'] or 'starting'}…[/]{queued}"
+            return ""   # a running benchmark's status (phase·tok/s·coverage·queue) is on the model line
         if p["queued"]:
             return f"[dim]{p['queued']} run(s) queued[/]"
         return ""

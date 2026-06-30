@@ -332,11 +332,12 @@ def test_gen_phase_drives_overview_status():
 
     app._track(GEN_PHASE + "thinking")          # a phase line from the stream
     assert app.run_progress()["gen_phase"] == "thinking"
-    # the live phase + tok/s ride on the model line (concise), not the coverage line
+    # phase + tok/s + coverage all ride on the model line (concise); the bottom row stays empty
     assert "thinking" in app.run_status_inline() and "48 tok/s" in app.run_status_inline()
+    assert "3/200 challenges" in app.run_status_inline()
+    assert app.job_status() == ""                # no separate "running" line — inferred by the phase
     app._track(GEN_PHASE + "answering")
     assert "answering" in app.run_status_inline()
-    assert "running" in app.job_status() and "tok/s" not in app.job_status()   # coverage only here
     app._track("   m | c1   ok  final=1.00 tests=3/3 50tok/s")   # challenge done -> phase cleared
     assert app.run_progress()["gen_phase"] is None
 
@@ -1144,7 +1145,8 @@ def test_job_status_tracks_phase_and_progress():
             app._track("   qc | a   → solving [tests] …")
             app._track("   qc | a   ok  tests 10/10")
             assert app._run_phase == "run" and app._run_done == 1
-            assert "▶" in app.job_status() and "1/5" in app.job_status()  # run phase + coverage bar
+            # coverage rides the model line now; the bottom row is empty for a running benchmark
+            assert "1/5 challenges" in app.run_status_inline() and app.job_status() == ""
 
     asyncio.run(scenario())
 
