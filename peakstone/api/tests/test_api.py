@@ -78,6 +78,39 @@ def _bind(client, priv, pub, code, account):
         "signature": keys.sign(priv, nonce.encode()), "code": code, "redirect_uri": "http://x/cb"})
 
 
+def _heldout_bundle(model, priv, pub, *, release_date, published_at, n=6, ts="ho"):
+    """A signed bundle with enough CLEAN results (published_at > release_date) to qualify for the
+    ranked held-out tier. release_date/published_at are set after build, then re-signed."""
+    b = bundle.produce_bundle(
+        {"models": [model], "judge": None, "timestamp": ts,
+         "gpu": {"name": "RTX 4090", "driver_version": "595"}},
+        [_result(f"{model}-c{i}", "architecture", 1.0) for i in range(n)], sign=False)
+    b["model"]["release_date"] = release_date
+    for r in b["results"]:
+        r["published_at"] = published_at
+    b["environment"]["vram_gb"] = 24
+    bundle.sign_inplace(b, priv, pub)
+    return b
+
+
+def test_held_out_ranked_requires_trust(client, monkeypatch):
+    """Review M2: a self-reported run can't reach the ranked held-out tier on forged dates alone;
+    only an operator (runner-verified) or independently-reproduced run ranks."""
+    from peakstone.api import ingest
+    sp, s = _newkey()
+    r = client.post("/submissions", json=_heldout_bundle("selfHO", sp, s,
+                                                          release_date="2020-01-01", published_at="2026-01-01"))
+    assert r.status_code == 201 and r.json()["trust_tier"] == "self-reported"
+    tp, t = _newkey()
+    monkeypatch.setattr(ingest, "TRUSTED_PUBKEYS", {t})           # operator key
+    r = client.post("/submissions", json=_heldout_bundle("trustHO", tp, t,
+                                                         release_date="2020-01-01", published_at="2026-01-01"))
+    assert r.status_code == 201 and r.json()["trust_tier"] == "runner-verified"
+    byfam = {row["family"]: row for row in client.get("/leaderboard").json()["leaderboard"]}
+    assert byfam["trustHO"]["held_out_status"] == "ranked"        # trusted + clean evidence -> ranks
+    assert byfam["selfHO"]["held_out_status"] == "provisional"    # same forged dates, but can't rank
+
+
 def test_submission_trust_chain(client):
     ap, a = _newkey()
     r = client.post("/submissions", json=_bundle("trustX", [0.5], 24, ap, a, "s"))

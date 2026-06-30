@@ -479,7 +479,13 @@ def leaderboard(db: Session = Depends(get_session), suite: str | None = None,
         # provisional, ranked below by all-corpus code_score (never dropped — the board self-heals).
         for r in rows:
             ho = r.get("held_out") or {}
-            r["held_out_status"] = ("ranked" if r.get("held_out_score") is not None
+            # A self-reported run never enters the RANKED tier: its held_out_score rests on the
+            # submitter-declared release_date/published_at, so a single free keypair could otherwise
+            # forge a #1 (review M2). It still shows as provisional. Operator (runner-verified) and
+            # independently-reproduced (community-verified) runs rank.
+            trusted = r.get("run", {}).get("trust_tier", "self-reported") != "self-reported"
+            r["held_out_status"] = ("ranked" if trusted
+                                    and r.get("held_out_score") is not None
                                     and ho.get("n_clean", 0) >= HELD_OUT_MIN_CLEAN
                                     and ho.get("coverage", 0) >= HELD_OUT_MIN_COVERAGE
                                     else "provisional")

@@ -25,6 +25,11 @@ TRUST_ORDER = {"self-reported": 0, "community-verified": 1, "runner-verified": 2
 # Distinct identities required to promote to community-verified (a bound account counts once even
 # across several of its keys; unbound keys each count once). Calibratable; 2 is the floor.
 COMMUNITY_MIN_IDENTITIES = int(os.environ.get("PEAKSTONE_COMMUNITY_MIN_IDENTITIES", "2"))
+# Operator/runner keys trusted to seed the official board. A bundle signed by one of these is ingested
+# as runner-verified, so the operator's own seed runs qualify for the RANKED held-out tier — while an
+# anonymous self-reported submission cannot. Without this gate a single free keypair + forged
+# release_date/published_at ranks #1 on the headline board (review M2). Comma-separated b64 pubkeys.
+TRUSTED_PUBKEYS = {k.strip() for k in os.environ.get("PEAKSTONE_TRUSTED_PUBKEYS", "").split(",") if k.strip()}
 
 
 class IngestError(ValueError):
@@ -160,6 +165,9 @@ def ingest_bundle(db, b: dict) -> models.Submission:
         serve_flags=m.get("serve_flags"), context=m.get("context"),
         env=env, vram_gb=env.get("vram_gb"), harness_version=b.get("harness", {}).get("version"),
         repro_sig=_repro_sig(b["results"]),
+        # a bundle signed by a trusted operator key is runner-verified (qualifies to rank); everyone
+        # else starts self-reported and is promoted only by independent reproduction.
+        trust_tier=("runner-verified" if pub in TRUSTED_PUBKEYS else "self-reported"),
         raw=b,
     )
     db.add(submission)
