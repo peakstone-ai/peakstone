@@ -50,6 +50,18 @@ def test_a_pass_immunizes_the_category():
     assert abandon_at is None
 
 
+def test_metacog_segment():
+    # no calibration → nothing shown
+    assert runner._metacog(None, None, True) == ""
+    # pre-hoc confidence only
+    assert "can 0.80" in runner._metacog(0.8, None, True)
+    # post-hoc self-verdict vs reality: the three calibration outcomes
+    assert "did:yes (knew)" in runner._metacog(0.9, True, True)          # said correct, passed
+    assert "did:yes (overconfident)" in runner._metacog(0.9, True, False)  # said correct, failed
+    assert "did:no (underrated)" in runner._metacog(0.1, False, True)    # said wrong, passed
+    assert "did:no (knew)" in runner._metacog(0.1, False, False)         # said wrong, failed
+
+
 def test_bundle_records_seed_and_stack():
     """Reproducibility: the fixed seed (config [run].seed) lands in sampling, and the run documents its
     stack (python/os) + a coarse contention snapshot (host_load) for attributing perf shifts."""

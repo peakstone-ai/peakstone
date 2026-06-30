@@ -922,7 +922,8 @@ def main(argv=None):
                   + (f" judge={sc['judge_score']:.2f}" if judge_res else "")
                   + (f" {tps:.0f}tok/s" if tps else "")
                   + retry_note + ("  (repetition loop)" if looped else "")
-                  + (f"  ✂truncated ({first_trunc_phase})" if first_truncated else ""))
+                  + (f"  ✂truncated ({first_trunc_phase})" if first_truncated else "")
+                  + _metacog(pre_conf, self_correct, run.ok))   # metacognition: can-solve / did-solve
 
             # Repetition-loop streak per category → abandon a hopeless category, collect negative data.
             won = run.ok or (sc.get("final_score") or 0) > 0
@@ -1418,6 +1419,24 @@ def _ask_self_verify(client, model, ch, files, run_cfg):
     res = client.chat(model, [{"role": "user", "content": prompt}], temperature=0.0,
                       max_tokens=8, timeout=run_cfg.get("request_timeout", 600))
     return None if res.error else _parse_yesno(res.text)
+
+
+def _metacog(pre_conf, self_correct, solved) -> str:
+    """The metacognition (calibration) segment for the result line — the model's self-knowledge vs
+    reality. pre_conf = pre-hoc P(can solve); self_correct = post-hoc 'did I solve it?'; solved = the
+    real first-try outcome. '' when calibration didn't run. The post-hoc verdict is the headline:
+      knew          — self-assessment matched reality (it knows when it's right/wrong)
+      overconfident — claimed correct, actually failed (can't tell it's wrong)
+      underrated    — claimed wrong, actually passed"""
+    if pre_conf is None and self_correct is None:
+        return ""
+    bits = []
+    if pre_conf is not None:
+        bits.append(f"can {pre_conf:.2f}")
+    if self_correct is not None:
+        verdict = "knew" if self_correct == solved else ("overconfident" if self_correct else "underrated")
+        bits.append(f"did:{'yes' if self_correct else 'no'} ({verdict})")
+    return "  🧠 " + " ".join(bits)
 
 
 def _cap(text, limit: int = 8192):
