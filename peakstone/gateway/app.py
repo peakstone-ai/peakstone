@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -33,6 +34,15 @@ from .swap import Busy, ModelManager, ServeFailed, UnknownModel
 # The single-file browser chat UI, served from the gateway so it shares the /v1 origin (no CORS) and
 # is reachable on the LAN at the gateway's host:port. Its model dropdown is driven by GET /v1/models.
 WEBCHAT_HTML = Path(__file__).resolve().parent / "webchat" / "index.html"
+
+
+def _quant_of(file: str | None) -> str | None:
+    """Pull the quant tag (Q4_K_M, Q6_K_XL, q8_0, IQ3_XS…) out of a GGUF filename for the chat UI's
+    model-info line. Returns None when no recognizable tag is present."""
+    if not file:
+        return None
+    m = re.search(r"I?Q\d+(?:_[A-Za-z0-9]+)*", Path(file).name, re.IGNORECASE)
+    return m.group(0).upper() if m else None
 
 # Per-request headers we forward upstream / drop. Hop-by-hop and length headers must not be copied
 # (we re-stream the body, so the original framing no longer applies).
@@ -113,8 +123,14 @@ def build_app(*, manager: ModelManager | None = None, idle_timeout: float = 0.0,
     @app.get("/v1/models", dependencies=auth_dep)
     def list_models():
         mgr: ModelManager = app.state.manager
+        reg = mgr.registry()
+        # Beyond the OpenAI-required id/object/owned_by, expose per-model serving config the chat UI
+        # shows next to the connection dot (quant from the GGUF name, context window, raw flags, vision).
         data = [{"id": name, "object": "model", "owned_by": "peakstone",
-                 "loaded": name == mgr.current} for name in sorted(mgr.registry())]
+                 "loaded": name == mgr.current,
+                 "ctx": reg[name].ctx, "quant": _quant_of(reg[name].file),
+                 "flags": reg[name].flags, "multimodal": reg[name].multimodal}
+                for name in sorted(reg)]
         return {"object": "list", "data": data}
 
     async def _proxy(path: str, request: Request):
