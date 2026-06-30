@@ -198,6 +198,27 @@ def build_app(*, manager: ModelManager | None = None, idle_timeout: float = 0.0,
             raise HTTPException(status_code=409, detail=f"job {jid!r} is unknown or already finished")
         return {"id": jid, "status": "cancelling"}
 
+    @app.post("/jobs/{jid}/pause", dependencies=auth_dep)
+    async def pause_job(jid: str):
+        if not app.state.jobs.pause(jid):
+            raise HTTPException(status_code=409, detail=f"job {jid!r} is not pausable (unknown/finished)")
+        return {"id": jid, "status": "pausing"}
+
+    @app.post("/jobs/{jid}/resume", dependencies=auth_dep)
+    async def resume_job(jid: str):
+        if not app.state.jobs.resume(jid):
+            raise HTTPException(status_code=409, detail=f"job {jid!r} is not paused")
+        return {"id": jid, "status": "queued"}
+
+    @app.post("/unload", dependencies=auth_dep)
+    async def unload_model():
+        """Free VRAM by tearing down the loaded model. 409 while a benchmark has the GPU pinned."""
+        try:
+            unloaded = await app.state.manager.unload()
+        except Busy as e:
+            raise HTTPException(status_code=409, detail=str(e))
+        return {"unloaded": unloaded}
+
     @app.get("/jobs/{jid}/log", dependencies=auth_dep)
     async def job_log(jid: str, request: Request):
         """Tail a job's log as Server-Sent Events: replay what's written, then follow until the job

@@ -148,6 +148,25 @@ def cancel_job(jid: str, *, base_url: str = GATEWAY_DEFAULT, timeout: float = 10
     return _gw_request("DELETE", base_url, f"/jobs/{jid}", timeout=timeout)[0] == 200
 
 
+def pause_job(jid: str, *, base_url: str = GATEWAY_DEFAULT, timeout: float = 10) -> bool:
+    """Pause a queued or running job (running → stopped + re-runnable). The scheduler skips ahead."""
+    return _gw_request("POST", base_url, f"/jobs/{jid}/pause", {}, timeout=timeout)[0] == 200
+
+
+def resume_job(jid: str, *, base_url: str = GATEWAY_DEFAULT, timeout: float = 10) -> bool:
+    """Resume a paused job → back on the queue (re-runs, reloading its model when picked)."""
+    return _gw_request("POST", base_url, f"/jobs/{jid}/resume", {}, timeout=timeout)[0] == 200
+
+
+def unload_model(*, base_url: str = GATEWAY_DEFAULT, timeout: float = 30) -> tuple[bool, str]:
+    """Free VRAM by unloading the gateway's loaded model. Returns (ok, detail); ok=False if a run holds
+    the GPU (409) or nothing was loaded."""
+    status, body = _gw_request("POST", base_url, "/unload", {}, timeout=timeout)
+    if status == 200:
+        return True, ("unloaded" if body.get("unloaded") else "no model was loaded")
+    return False, str(body.get("detail", body))
+
+
 def stream_job_log(jid: str, *, base_url: str = GATEWAY_DEFAULT, timeout: float = 600):
     """Yield a job's log lines (SSE `data:` payloads) until the run finishes or the connection drops.
     Disconnecting does NOT affect the run — it lives in the daemon."""

@@ -367,6 +367,67 @@ def test_gpu_not_idle_while_downloading(monkeypatch, tmp_path):
     asyncio.run(scenario())
 
 
+def test_pause_skips_then_resume_runs(monkeypatch, tmp_path):
+    """A paused queued job is skipped by the scheduler (the next ready one runs); resume re-queues it."""
+    import peakstone.engine.serving as serving
+    monkeypatch.setattr(serving, "stream_runner", _fake_stream_ok)
+
+    async def scenario():
+        mgr = make_manager()
+        store = JobStore(tmp_path / "jobs.db")
+        jm = JobManager(store, mgr, gateway_url="http://x", submit=None, present=lambda *_: True)
+        a = jm.enqueue({"model": "model-a"})
+        b = jm.enqueue({"model": "model-b"})
+        assert jm.pause(a) and store.get(a)["status"] == "paused"   # pause the (queued) first job
+        jm.start()
+        for _ in range(200):                                        # b runs; a is skipped
+            if store.get(b)["status"] == "done":
+                break
+            await asyncio.sleep(0.02)
+        assert store.get(b)["status"] == "done" and store.get(a)["status"] == "paused"
+        assert jm.resume(a)                                         # resume → re-queued → runs
+        for _ in range(200):
+            if store.get(a)["status"] == "done":
+                break
+            await asyncio.sleep(0.02)
+        assert store.get(a)["status"] == "done"
+        await jm.aclose()
+
+    asyncio.run(scenario())
+
+
+def test_pause_resume_endpoints(tmp_path):
+    mgr = make_manager()
+    with client_for(mgr, mock_client([]), store=JobStore(tmp_path / "jobs.db"),
+                    present=lambda *_: True) as c:
+        jid = c.post("/jobs", json={"model": "model-a"}).json()["id"]
+        assert c.post(f"/jobs/{jid}/pause").status_code == 200
+        assert c.get(f"/jobs/{jid}").json()["status"] == "paused"
+        assert c.post(f"/jobs/{jid}/resume").status_code == 200
+        assert c.get(f"/jobs/{jid}").json()["status"] == "queued"
+        assert c.post("/jobs/ghost/pause").status_code == 409          # not pausable
+        assert c.post(f"/jobs/{jid}/resume").status_code == 409        # not paused (already queued)
+
+
+def test_unload_frees_vram_and_refuses_while_pinned(tmp_path):
+    async def pinned():
+        mgr = make_manager()
+        await mgr.pin("model-a")                                       # a job owns the GPU
+        with pytest.raises(Busy):
+            await mgr.unload()
+        mgr.unpin()
+        await mgr.aclose()
+    asyncio.run(pinned())
+
+    stop_calls = []
+    mgr = make_manager(stop_calls=stop_calls)
+    with client_for(mgr, mock_client([])) as c:
+        assert c.post("/unload").json() == {"unloaded": False}        # nothing loaded yet
+        c.post("/v1/chat/completions", json={"model": "model-a", "messages": []})   # load it
+        assert c.post("/unload").json() == {"unloaded": True}
+        assert len(stop_calls) >= 1                                    # llama-server torn down
+
+
 def test_summarize_bundle():
     s = summarize_bundle({"bundle_hash": "h", "results": [
         {"verification": "deterministic-tests", "score": {"final": 0.5, "passed": 1, "total": 2}, "tok_per_s": 40},

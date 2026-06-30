@@ -27,7 +27,7 @@ from pathlib import Path
 from ..engine import paths, serving
 from .swap import ModelManager
 
-STATUSES = ("queued", "running", "done", "failed", "cancelled", "interrupted")
+STATUSES = ("queued", "running", "paused", "done", "failed", "cancelled", "interrupted")
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
@@ -159,6 +159,7 @@ class JobManager:
         self._tasks: list[asyncio.Task] = []
         self._current: dict | None = None         # {"id", "proc"} of the running BENCHMARK
         self._cancel_requested: set[str] = set()
+        self._pause_requested: set[str] = set()
         self._stop = False
 
     # --- lifecycle ------------------------------------------------------------------------------
@@ -218,6 +219,33 @@ class JobManager:
                 serving.stop(self._current["proc"])   # kill the runner; worker finalizes as cancelled
             return True
         return False
+
+    def pause(self, jid: str) -> bool:
+        """Pause a job. A queued job is set 'paused' (the run scheduler skips it). A running job is
+        STOPPED (its runner killed) and set 'paused' — the worker then advances to the next ready job,
+        swapping the model. resume() re-queues it (it re-runs from scratch, reloading its model when
+        picked). False if unknown/already finished."""
+        job = self.store.get(jid)
+        if job is None:
+            return False
+        if job["status"] == "queued":
+            self.store.update(jid, status="paused")
+            return True
+        if job["status"] == "running":
+            self._pause_requested.add(jid)
+            if self._current and self._current["id"] == jid and self._current.get("proc"):
+                serving.stop(self._current["proc"])   # kill the runner; worker finalizes as paused
+            return True
+        return False
+
+    def resume(self, jid: str) -> bool:
+        """Resume a paused job → back to 'queued' (it runs when its turn comes; its model loads then)."""
+        job = self.store.get(jid)
+        if job is None or job["status"] != "paused":
+            return False
+        self.store.update(jid, status="queued")
+        self._run_wake.set()
+        return True
 
     # --- scheduling -----------------------------------------------------------------------------
 
@@ -315,6 +343,11 @@ class JobManager:
                               summary={"note": f"cannot load {model}: {e}"})
             return
 
+        if jid in self._pause_requested:             # paused while the model was loading
+            self._pause_requested.discard(jid)
+            self.manager.unpin()
+            self.store.update(jid, status="paused")
+            return
         if jid in self._cancel_requested:            # cancelled while the model was loading
             self._cancel_requested.discard(jid)
             self.manager.unpin()
@@ -339,6 +372,10 @@ class JobManager:
             self.manager.unpin()
             self._current = None
 
+        if jid in self._pause_requested:             # paused mid-run → re-runnable, not a failure
+            self._pause_requested.discard(jid)
+            self.store.update(jid, status="paused")
+            return
         if jid in self._cancel_requested:
             self._cancel_requested.discard(jid)
             self.store.update(jid, status="cancelled", finished=self._clock())

@@ -172,6 +172,20 @@ class ModelManager:
         """Release the GPU pin (the model stays loaded for reuse)."""
         self.pinned = None
 
+    async def unload(self) -> bool:
+        """Tear down the loaded model to free VRAM. Returns True if a model was unloaded, False if none
+        was loaded. Refused with Busy while a job has the GPU pinned (pause/cancel the run first)."""
+        async with self._lock:
+            if self.pinned is not None:
+                raise Busy(self.pinned, "(unload)")
+            if not self._alive():
+                self.current, self.proc = None, None
+                return False
+            await self._wait_drained()
+            await asyncio.to_thread(self._stop, self.proc)
+            self.current, self.proc = None, None
+            return True
+
     @asynccontextmanager
     async def lease(self, name: str):
         """Ensure `name` is loaded, then hold a lease on it for the duration of the block. Yields the

@@ -1406,14 +1406,14 @@ class QueueScreen(ModalScreen):
     #q-note { height: auto; padding-top: 1; }
     """
     BINDINGS = [("escape", "dismiss", "Close"), ("enter", "view", "View running"),
-                ("x", "cancel", "Cancel"), ("c", "clear", "Clear queued")]
+                ("p", "pause", "Pause/resume"), ("x", "cancel", "Cancel"), ("c", "clear", "Clear queued")]
 
-    _MARK = {"running": "▶", "queued": "·", "done": "✓", "failed": "✗",
+    _MARK = {"running": "▶", "queued": "·", "paused": "⏸", "done": "✓", "failed": "✗",
              "cancelled": "∅", "interrupted": "⚠"}
 
     def compose(self) -> ComposeResult:
         with Vertical(id="queue"):
-            yield Static("[b]Daemon queues[/b]  ·  ⏎ view running  ·  x cancel  ·  c clear queued  ·  Esc close")
+            yield Static("[b]Daemon queues[/b]  ·  ⏎ view  ·  p pause/resume  ·  x cancel  ·  c clear  ·  Esc close")
             yield DataTable(id="q-tbl", cursor_type="row", zebra_stripes=True)
             yield Static("", id="q-note")
 
@@ -1478,12 +1478,13 @@ class QueueScreen(ModalScreen):
         if app.run_active and app._run_spec and app._run_job_id is None:
             t.add_row("run", "▶", app._run_spec["name"], "running", "")
             self._map.append(("active", None))
-        # Run queue: the running benchmark, then those waiting behind it (GPU, one at a time).
-        for j in sorted((r for r in runs if r.get("status") in ("running", "queued")),
+        # Run queue: the running benchmark, then those waiting behind it (incl. paused, which the
+        # scheduler skips but stays visible/resumable). GPU runs one at a time.
+        for j in sorted((r for r in runs if r.get("status") in ("running", "queued", "paused")),
                         key=lambda j: (j.get("status") != "running", j.get("created") or 0)):
             self._add(t, "run", j)
         # Download queue: separate + concurrent.
-        for j in sorted((d for d in dls if d.get("status") in ("running", "queued")),
+        for j in sorted((d for d in dls if d.get("status") in ("running", "queued", "paused")),
                         key=lambda j: (j.get("status") != "running", j.get("created") or 0)):
             self._add(t, "⬇ dl", j)
         # A few most-recent finished jobs for context (either queue).
@@ -1515,6 +1516,25 @@ class QueueScreen(ModalScreen):
         elif kind == "daemon":
             if self.app.cancel_daemon_job(ref):
                 self.notify("cancelled")
+        self.app._refresh_daemon_jobs()
+        self.refill()
+
+    def action_pause(self) -> None:
+        """Toggle pause/resume on the selected job. A paused queued job is skipped by the scheduler; a
+        paused running job is stopped and re-runs on resume (reloading its model)."""
+        kind, ref = self._selected()
+        if kind != "daemon":
+            self.notify("select a queued/running/paused job")
+            return
+        job = next((j for j in self.app._daemon_jobs if j.get("id") == ref), None)
+        st = job.get("status") if job else None
+        if st == "paused":
+            self.notify("resumed" if client.resume_job(ref) else "couldn't resume")
+        elif st in ("queued", "running"):
+            self.notify("paused" if client.pause_job(ref) else "couldn't pause")
+        else:
+            self.notify("only queued/running/paused jobs can be paused")
+            return
         self.app._refresh_daemon_jobs()
         self.refill()
 
@@ -1823,7 +1843,7 @@ class ModelsScreen(ModalScreen):
     BINDINGS = [("escape", "dismiss", "Close"), ("a", "add", "Add"),
                 ("r", "run", "Run"), ("k", "ctx", "Context"),
                 ("t", "reasoning", "Think"), ("b", "budget", "Budget"), ("v", "quants", "Quants"),
-                ("u", "queue", "Queue"), ("x", "delete", "Delete")]
+                ("u", "queue", "Queue"), ("U", "unload", "Unload VRAM"), ("x", "delete", "Delete")]
 
     def _header(self) -> str:
         ids, lvl = self.app.run_ids(), self.app.selected_level
@@ -2032,6 +2052,13 @@ class ModelsScreen(ModalScreen):
 
     def action_queue(self) -> None:
         self.app.push_screen(QueueScreen())
+
+    @work(thread=True, exclusive=True, group="unload")
+    def action_unload(self) -> None:
+        """Free VRAM by unloading the gateway's currently-loaded model (refused while a run holds it).
+        Off-thread because stopping llama-server can take a moment; the hardware panel updates itself."""
+        ok, detail = client.unload_model()
+        self.app.call_from_thread(self.notify, detail, severity="information" if ok else "warning")
 
     def action_quants(self) -> None:
         d = self._node_data()

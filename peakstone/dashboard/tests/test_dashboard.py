@@ -80,6 +80,9 @@ def _no_hf_network(monkeypatch):
     monkeypatch.setattr(_client, "enqueue_job", lambda spec, **k: "stub-job")
     monkeypatch.setattr(_client, "download_model", lambda m, **k: "stub-dl")
     monkeypatch.setattr(_client, "cancel_job", lambda jid, **k: True)
+    monkeypatch.setattr(_client, "pause_job", lambda jid, **k: True)
+    monkeypatch.setattr(_client, "resume_job", lambda jid, **k: True)
+    monkeypatch.setattr(_client, "unload_model", lambda **k: (True, "unloaded"))
     monkeypatch.setattr(_client, "get_job", lambda jid, **k: None)
     monkeypatch.setattr(_client, "stream_job_log", lambda jid, **k: iter(()))
     from peakstone.gateway import launch as _launch
@@ -1248,6 +1251,35 @@ def test_run_auto_submits(monkeypatch):
             await app.workers.wait_for_complete()
             assert app._run_submitted is True               # daemon-submitted state reflected
             assert len(lb_calls) > before                   # leaderboard refreshed to show the result
+
+    asyncio.run(scenario())
+
+
+def test_queue_pause_resume_toggle(monkeypatch):
+    """p on the QueueScreen toggles pause/resume of the selected job, per its current status."""
+    from peakstone.dashboard.app import Dashboard, QueueScreen
+    from peakstone.dashboard import client
+    from textual.widgets import DataTable
+    calls = []
+    monkeypatch.setattr(client, "pause_job", lambda jid, **k: calls.append(("pause", jid)) or True)
+    monkeypatch.setattr(client, "resume_job", lambda jid, **k: calls.append(("resume", jid)) or True)
+    state = {"status": "queued"}
+    monkeypatch.setattr(client, "list_jobs",
+                        lambda **k: [{"id": "j1", "kind": "run", "status": state["status"],
+                                      "spec": {"model": "A"}, "created": 1}])
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()        # populate _daemon_jobs
+            await app.push_screen(QueueScreen())
+            await pilot.pause()
+            app.screen.query_one("#q-tbl", DataTable).move_cursor(row=0)
+            app.screen.action_pause()                    # queued → pause
+            assert calls == [("pause", "j1")]
+            state["status"] = "paused"; app._daemon_jobs = client.list_jobs()
+            app.screen.action_pause()                    # paused → resume
+            assert calls[-1] == ("resume", "j1")
 
     asyncio.run(scenario())
 
