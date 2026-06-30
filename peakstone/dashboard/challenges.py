@@ -17,7 +17,7 @@ UNDATED = "undated"
 # so the menu can collapse all native families under one collection while each imported suite stays
 # its own top-level group. Keep in sync with peakstone/engine/importers/.
 IMPORTED_SUITES = {"humaneval", "bigcodebench", "livecodebench", "codeforces", "aime", "swebench"}
-NATIVE_LABEL = "Native"
+NATIVE_LABEL = "Peakstone"   # our own (hand-authored) collection; imported public suites stay separate
 
 
 def load_corpus() -> list[Challenge]:

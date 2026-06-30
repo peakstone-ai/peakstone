@@ -321,7 +321,7 @@ class Dashboard(App):
         ("r", "refresh", "Refresh"),
         ("f", "toggle_fit", "Fit filter"),
         ("s", "cycle_sort", "Sort axis"),
-        ("c", "challenges", "Peakstones"),
+        ("c", "challenges", "Challenges"),
         ("v", "quants", "Quants"),
         ("m", "models", "Models"),
         ("u", "queue", "Queue"),
@@ -337,7 +337,7 @@ class Dashboard(App):
         self.fit = True          # filter to models that fit my VRAM
         self.sort_i = 0
         self._board_rows: list[dict] = []
-        # peakstones chosen in the Challenges screen; empty = use the quick default repro set.
+        # challenges chosen in the Challenges screen; empty = use the quick default repro set.
         self.selected_ids: list[str] = []
         # set when the selection came from a level shortcut (1-5) — runs via --level so the level's
         # judge/agent/prebuilt settings apply; None for a hand-picked selection (plain id run).
@@ -608,7 +608,7 @@ class Dashboard(App):
             gp = {"thinking": "  ·  [magenta]🧠 thinking[/]",
                   "answering": "  ·  [green]✍ answering[/]"}.get(p.get("gen_phase"), "")
             if p["total"]:
-                return f"[b]▶ running{rate}[/]{gp}  {_bar(p['done'], p['total'])} peakstones{queued}"
+                return f"[b]▶ running{rate}[/]{gp}  {_bar(p['done'], p['total'])} challenges{queued}"
             return f"[b]▶ {p['phase'] or 'starting'}{rate}…[/]{gp}{queued}"
         if p["queued"]:
             return f"[dim]{p['queued']} run(s) queued[/]"
@@ -693,7 +693,7 @@ class Dashboard(App):
             snap = hardware.snapshot()
             max_vram = snap.max_vram_gb if (self.fit and snap.max_vram_gb) else None
         scope = f"fits ≤{max_vram:g} GB" if max_vram else "all hardware"
-        sel = f"   ·   ▶ {len(self.selected_ids)} peakstones selected" if self.selected_ids else ""
+        sel = f"   ·   ▶ {len(self.selected_ids)} challenges selected" if self.selected_ids else ""
         self.query_one("#sortbar", Static).update(
             f"[b]sort[/] {self.SORTS[self.sort_i]}   ·   [b]hardware[/] {scope}{sel}")
 
@@ -806,7 +806,7 @@ class Dashboard(App):
         if not results:
             node.add_leaf("[dim](no per-challenge results)[/]")
             return
-        # group the run's challenges the same way the peakstones window does: collection -> date ->
+        # group the run's challenges the same way the challenges window does: collection -> date ->
         # family -> challenge. Challenges we have locally drive the grouping; any others go under "other".
         by_id = {r["challenge"]: r for r in results}
         known = [c for c in self.corpus() if c.id in by_id]
@@ -1015,7 +1015,7 @@ class ReproduceScreen(ModalScreen):
         self._seen_n = 0                         # new run → render its streamed lines from the start
         self._gen_buf, self._gen_ch, self._gen_phase = "", "", None
         self._solutions, self._completed, self._viewing = {}, set(), None
-        scope = "download" if spec.get("download_only") else (f"level {level}" if level else f"{len(ids)} peakstones")
+        scope = "download" if spec.get("download_only") else (f"level {level}" if level else f"{len(ids)} challenges")
         ctx = f"  ·  ctx {_ctx_k(spec.get('ctx'))}" if spec.get("ctx") else ""
         budget = f"  ·  budget {_ctx_k(spec.get('budget'))}" if spec.get("budget") else ""
         _nq = self.app.queued_count()
@@ -1345,7 +1345,7 @@ class QueueScreen(ModalScreen):
         if spec.get("level"):
             return f"level {spec['level']}"
         if spec.get("ids"):
-            return f"{len(spec['ids'])} peakstones"
+            return f"{len(spec['ids'])} challenges"
         s = job.get("summary") or {}
         if s.get("total"):
             return f"{s.get('passed', '')}/{s.get('total', '')}"
@@ -1713,9 +1713,9 @@ class BudgetScreen(ModalScreen):
 
 
 class ModelsScreen(ModalScreen):
-    """Pick a model to run the selected peakstones on. Models are grouped as family → quant: the
+    """Pick a model to run the selected challenges on. Models are grouped as family → quant: the
     registry (serve/models.toml) provides the runnable/present quants; expanding a family lists the
-    other quants its HF repo offers (downloadable). The header shows how many peakstones will run."""
+    other quants its HF repo offers (downloadable). The header shows how many challenges will run."""
     CSS = """
     ModelsScreen { align: center middle; }
     #models { width: 92; height: 26; border: thick $accent; background: $surface; padding: 1; }
@@ -1728,7 +1728,7 @@ class ModelsScreen(ModalScreen):
 
     def _header(self) -> str:
         ids, lvl = self.app.run_ids(), self.app.selected_level
-        scope = f"level [b]{lvl}[/]" if lvl else f"[b]{len(ids)}[/] peakstones"
+        scope = f"level [b]{lvl}[/]" if lvl else f"[b]{len(ids)}[/] challenges"
         e = self._target_entry()
         cur = self.app.ctx_for(e.name) if e else self.app.ctx_overrides.get("")
         who = e.name if e else "default"
@@ -2007,7 +2007,7 @@ class HistoryScreen(ModalScreen):
 
 
 class ChallengesScreen(ModalScreen):
-    """Browse peakstones by family → month → challenge and pick a set to run. Selecting everything
+    """Browse challenges by family → month → challenge and pick a set to run. Selecting everything
     (press `a`) then running is the full-suite run; any subset is just as easy."""
     CSS = """
     ChallengesScreen { align: center middle; }
@@ -2032,9 +2032,9 @@ class ChallengesScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="challenges"):
-            yield Static("[b]Peakstones[/b]  ·  [b]1-5[/] level (smoke→max)  ·  space select  ·  ⏎/→ expand  ·  ← collapse  "
+            yield Static("[b]Challenges[/b]  ·  [b]1-5[/] level (smoke→max)  ·  space select  ·  ⏎/→ expand  ·  ← collapse  "
                          "·  a all  ·  c clear  ·  r run  ·  Esc close")
-            yield NavTree("peakstones", id="ch-tree")
+            yield NavTree("challenges", id="ch-tree")
             yield Static("", id="ch-status")
 
     def on_mount(self) -> None:
@@ -2054,11 +2054,11 @@ class ChallengesScreen(ModalScreen):
             self._levels, self._level_names = {}, []
         self._all_ids = [c.id for c in corpus]
         root = tree.root
-        root.data = {"ids": self._all_ids, "base": f"All peakstones ({len(corpus)})", "kind": "root"}
+        root.data = {"ids": self._all_ids, "base": f"All challenges ({len(corpus)})", "kind": "root"}
         for grp in ch_browse.group_by_collection(corpus):
             chs = grp["chs"]
             ids = [c.id for c in chs]
-            if grp["kind"] == "native":   # our peakstones: collection -> date -> language/axis family -> challenges
+            if grp["kind"] == "native":   # our challenges: collection -> date -> language/axis family -> challenges
                 node = root.add("", data={"ids": ids, "base": f"{grp['label']} ({len(chs)})", "kind": "native"})
                 for bucket, dchs in ch_browse.group_by_date(chs).items():
                     dnode = node.add("", data={"ids": [c.id for c in dchs], "base": f"{bucket} ({len(dchs)})"})
@@ -2121,13 +2121,13 @@ class ChallengesScreen(ModalScreen):
         name = self._level_names[idx]
         ids = eng_levels.resolve(self._levels[name], self._corpus)
         if not ids:
-            self.notify(f"{name}: no matching peakstones in the current corpus")
+            self.notify(f"{name}: no matching challenges in the current corpus")
             return
         self.sel.ids = set(ids)
         self._chosen_level = name
         self._refresh()
         tags = self._level_tags(self._levels[name])
-        self.notify(f"{name}: {len(ids)} peakstones" + (f" · {tags}" if tags else "") + " — press r to run")
+        self.notify(f"{name}: {len(ids)} challenges" + (f" · {tags}" if tags else "") + " — press r to run")
 
     def on_tree_node_selected(self, ev: "Tree.NodeSelected") -> None:
         if ev.node.data:                       # ⏎ on any node toggles its whole id-set
@@ -2148,11 +2148,11 @@ class ChallengesScreen(ModalScreen):
     def action_run(self) -> None:
         ids = self.sel.resolve()
         if not ids:
-            self.notify("select at least one peakstone (1-5 for a level, space to pick, or a for all)")
+            self.notify("select at least one challenge (1-5 for a level, space to pick, or a for all)")
             return
         self.app.selected_ids = ids
         self.app.selected_level = self._chosen_level   # level run (settings apply) vs plain id run
-        scope = f"level {self._chosen_level}" if self._chosen_level else f"{len(ids)} peakstones"
+        scope = f"level {self._chosen_level}" if self._chosen_level else f"{len(ids)} challenges"
         self.notify(f"{scope} selected — pick a model to run")
         self.dismiss()
         self.app.push_screen(ModelsScreen())

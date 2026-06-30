@@ -217,8 +217,8 @@ def test_board_quant_groups_results_like_peakstones(monkeypatch):
             quant.expand()                                 # drill into the run's per-challenge results
             await app.workers.wait_for_complete()
             await pilot.pause()
-            # grouped like peakstones: collection -> date -> family -> challenge, with avg scores
-            assert any("Native" in str(c.label) and "0.50" in str(c.label) for c in quant.children)
+            # grouped like the challenges browser: collection -> date -> family -> challenge, with avg scores
+            assert any("Peakstone" in str(c.label) and "0.50" in str(c.label) for c in quant.children)
             allnodes = leaves(quant)
             assert any("2026-06" in n for n in allnodes)
             assert any("python" in n and "1.00" in n for n in allnodes)   # family avg score
@@ -590,8 +590,8 @@ def test_group_by_collection():
     from peakstone.dashboard import challenges as cb
     groups = cb.group_by_collection(_FAKE_CORPUS)
     kinds = [(g["kind"], g["label"], len(g["chs"])) for g in groups]
-    # native first (our authored peakstones collapsed), then imported suites largest-first
-    assert kinds == [("native", "Native", 1), ("suite", "livecodebench", 2), ("suite", "humaneval", 1)]
+    # native first (our authored 'Peakstone' collection collapsed), then imported suites largest-first
+    assert kinds == [("native", "Peakstone", 1), ("suite", "livecodebench", 2), ("suite", "humaneval", 1)]
     native = next(g for g in groups if g["kind"] == "native")
     assert [c.id for c in native["chs"]] == ["py-1"]
     # a single-month native set captions with that month; mixed/undated handled by date_span
