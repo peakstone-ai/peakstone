@@ -347,6 +347,7 @@ class Dashboard(App):
     #sortbar { height: 1; margin: 0 1; padding: 0 1; background: $panel; color: $foreground; }
     DataTable { height: 1fr; margin: 0 1; }
     #board { height: 1fr; margin: 0 1; }
+    #detail { height: auto; border: round $accent; padding: 0 1; margin: 0 1; }
     """
     BINDINGS = [
         ("q", "quit", "Quit"),
@@ -712,6 +713,7 @@ class Dashboard(App):
         yield HardwarePanel()
         yield Static("", id="sortbar")
         yield BoardTree("leaderboard", id="board")
+        yield Static("", id="detail")            # extended stats for the highlighted run (bottom panel)
         yield Footer()
 
     def on_mount(self) -> None:
@@ -906,29 +908,12 @@ class Dashboard(App):
         self.call_from_thread(self._render, data, max_vram)
 
     def _quant_label(self, r: dict) -> str:
+        """Key numbers only — the full per-run stats live in the bottom detail panel (highlight to see)."""
         run = r.get("run", {})
-        n_total = r.get("n_total")
-        cov = f"{n_total}/{self.corpus_total()}" if n_total else "—"
-        mem = _mem(run.get("vram_used_gb") or run.get("vram_gb"), run.get("ram_used_gb") or run.get("ram_gb"))
-        hw = _hw(run)
-        ctx = f"  {_ctx_k(run.get('context'))} ctx" if run.get("context") else ""
-        eff = _fmt(r.get("score_per_1k_tokens"), "{:.2f}")
-        limited = r.get("n_ctx_limited") or 0
-        warn = f" [yellow]⚠{limited}[/]" if limited else ""
-        lc = f" lc {_fmt(r.get('long_ctx_score'))}" if r.get("long_ctx_score") is not None else ""
-        mth = f" m {_fmt(r.get('math_score'))}" if r.get("math_score") is not None else ""
-        cal = f" cal {_fmt(r.get('self_verify_accuracy'))}" if r.get("self_verify_accuracy") is not None else ""
-        rep = f" rep {_fmt(r.get('recovery_rate'))}" if r.get("recovery_rate") is not None else ""
-        # truncation: only shown when nonzero (clean runs stay uncluttered); a budget-fit warning
-        trunc = f" [magenta]✂{_fmt(r.get('truncation_rate'))}[/]" if r.get("truncation_rate") else ""
-        return (f"{run.get('artifact', '—'):14} h {_fmt(r.get('held_out_score'))} c {_fmt(r.get('code_score'))}"
-                f"{mth} a {_fmt(r.get('agent_score'))} "
-                f"p {_fmt(r.get('planner_score'))}{lc}{cal}{rep}{trunc}  {_fmt(r.get('tok_per_s'), '{:.0f}')} tps  "
-                f"{_fmt(r.get('sol_per_s'), '{:.2f}')} sol/s  {_fmt_dur(r.get('total_time_s'))}  "
-                f"{eff}/1k tok{warn}  {mem} used{ctx}  "
-                + (f"think:{run.get('reasoning')}  " if run.get("reasoning") else "")
-                + f"{(run.get('trust_tier') or '').replace('-', ' ')}  cov {cov}"
-                + (f"   [dim]{hw}[/]" if hw else ""))
+        cov = f"{r['n_total']}/{self.corpus_total()}" if r.get("n_total") else "—"
+        return (f"{run.get('artifact', '—'):16} "
+                f"held-out {_fmt(r.get('held_out_score'))}  code {_fmt(r.get('code_score'))}  "
+                f"{_fmt(r.get('tok_per_s'), '{:.0f}')} tps  cov {cov}")
 
     def _render(self, data: dict, max_vram: float | None) -> None:
         tree = self.query_one("#board", BoardTree)
@@ -942,10 +927,9 @@ class Dashboard(App):
         for rank, (fam, frows) in enumerate(fams.items(), 1):
             best = frows[0]
             repo = best.get("run", {}).get("hf_repo")
-            hw = _hw(best.get("run", {}))
             node = tree.root.add(
-                f"[b]{rank}. {fam}[/]   code {_fmt(best.get('code_score'))}   {len(frows)} quant(s)"
-                + (f"   [dim]{hw}[/]" if hw else ""),
+                f"[b]{rank}. {fam}[/]   held-out {_fmt(best.get('held_out_score'))}   "
+                f"code {_fmt(best.get('code_score'))}   {len(frows)} quant(s)",
                 data={"kind": "family", "family": fam, "repo": repo, "row": best})
             for r in frows:   # expandable: drill in to see the per-challenge results of that run
                 node.add(self._quant_label(r),
@@ -955,6 +939,43 @@ class Dashboard(App):
             tree.root.add_leaf("(no runs fit this filter)")
         if tree.root.children:
             tree.cursor_line = 0
+        self._update_detail(tree.cursor_node)            # populate the bottom panel for the first row
+
+    def _update_detail(self, node) -> None:
+        self.query_one("#detail", Static).update(self._detail_text((node.data if node else None) or {}))
+
+    def _detail_text(self, d: dict) -> str:
+        """The bottom panel: the full stats for the highlighted run (family/quant) — everything the
+        board rows no longer show — or a one-line summary for a per-challenge result leaf."""
+        r = d.get("row")
+        if d.get("kind") == "result" and r:
+            cat = r.get("category") or r.get("verification") or ""
+            pt = f"  {r['passed']}/{r['total']} tests" if r.get("total") else ""
+            return f"[b]{r.get('challenge', '?')}[/]  final {r.get('final', 0):.2f}{pt}  [dim]{cat}[/]"
+        if not r or "run" not in r:
+            return "[dim]highlight a model for its full stats[/]"
+        run = r.get("run", {})
+        cov = f"{r['n_total']}/{self.corpus_total()}" if r.get("n_total") else "—"
+        ctxw = f" [yellow]⚠{r['n_ctx_limited']}[/]" if r.get("n_ctx_limited") else ""   # runs that hit the ctx limit
+        mem = _mem(run.get("vram_used_gb") or run.get("vram_gb"), run.get("ram_used_gb") or run.get("ram_gb"))
+        hw = _hw(run)
+        head = (f"[b]{r.get('family')}[/] · {run.get('artifact', '—')} · {_ctx_k(run.get('context'))} ctx"
+                + (f" · think {run['reasoning']}" if run.get("reasoning") else "")
+                + (f" · {(run.get('trust_tier') or '').replace('-', ' ')}" if run.get("trust_tier") else ""))
+        scores = (f"held-out [b]{_fmt(r.get('held_out_score'))}[/]  code {_fmt(r.get('code_score'))}  "
+                  f"math {_fmt(r.get('math_score'))}  agentic {_fmt(r.get('agent_score'))}  "
+                  f"planner {_fmt(r.get('planner_score'))}  long-ctx {_fmt(r.get('long_ctx_score'))}  "
+                  f"safety {_fmt(r.get('safety_score'))}")
+        meta = (f"calibration {_fmt(r.get('self_verify_accuracy'))} (conf {_fmt(r.get('confidence_score'))})  ·  "
+                f"self-repair {_fmt(r.get('recovery_rate'))}  ·  truncation {_fmt(r.get('truncation_rate'))}")
+        perf = (f"{_fmt(r.get('tok_per_s'), '{:.0f}')} tok/s · {_fmt(r.get('sol_per_s'), '{:.2f}')} sol/s · "
+                f"{_fmt_dur(r.get('total_time_s'))} · {_fmt(r.get('score_per_1k_tokens'), '{:.2f}')}/1k tok · "
+                f"{mem} used · cov {cov}{ctxw}" + (f" · [dim]{hw}[/]" if hw else ""))
+        return "\n".join([head, scores, meta, perf])
+
+    def on_tree_node_highlighted(self, event) -> None:
+        if getattr(event, "control", None) is not None and event.control.id == "board":
+            self._update_detail(event.node)
 
     def _render_error(self, msg: str) -> None:
         tree = self.query_one("#board", BoardTree)

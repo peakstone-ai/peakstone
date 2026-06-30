@@ -167,10 +167,14 @@ def test_app_renders_filtered_leaderboard(monkeypatch):
             fam_labels = [str(n.label) for n in tree.root.children]
             assert len(fam_labels) == 2                        # one node per model family
             assert any("qwen3-coder" in lbl for lbl in fam_labels)
-            # the model's quant run is nested under it with its metrics + hardware
-            leaf = str(tree.root.children[0].children[0].label)
-            assert "24/26 GB" in leaf and "50/1965" in leaf and "32K ctx" in leaf
-            assert "RTX 4090 24G" in leaf and "Ryzen 9 7950X 64G" in leaf   # hardware it ran on
+            # the quant run is nested under its family; the row shows only key numbers
+            qnode = tree.root.children[0].children[0]
+            leaf = str(qnode.label)
+            assert "50/1965" in leaf and "code 0.93" in leaf   # coverage + headline score
+            # memory / ctx / hardware moved to the bottom detail panel (highlight to see)
+            detail = app._detail_text(qnode.data)
+            assert "24/26 GB" in detail and "32K ctx" in detail
+            assert "RTX 4090 24G" in detail and "Ryzen 9 7950X 64G" in detail   # hardware it ran on
             # the board defaults to the held-out lens; cycling sort moves to the next axis
             assert captured["sort"] == "held_out_score"        # default lens
             await pilot.press("s")
@@ -969,15 +973,29 @@ def test_ctx_is_per_model():
     assert app.ctx_for("other-model") is None   # no default -> native ctx
 
 
-def test_quant_label_shows_efficiency():
+def test_quant_label_is_key_numbers_only():
+    """The board row shows only key numbers; the full stats live in the detail panel."""
     from peakstone.dashboard.app import Dashboard
     app = Dashboard("http://x")
-    label = app._quant_label({"code_score": 0.7, "score_per_1k_tokens": 0.42, "n_ctx_limited": 3,
+    label = app._quant_label({"held_out_score": 0.55, "code_score": 0.7, "tok_per_s": 80,
                               "n_total": 2, "run": {"artifact": "Q6_K", "context": 32768}})
-    assert "0.42/1k tok" in label and "⚠3" in label          # efficiency + ctx-limited warning
-    clean = app._quant_label({"code_score": 0.7, "score_per_1k_tokens": 0.42, "n_ctx_limited": 0,
-                              "run": {"artifact": "Q6_K"}})
-    assert "0.42/1k tok" in clean and "⚠" not in clean       # no warning when nothing was truncated
+    assert "Q6_K" in label and "held-out 0.55" in label and "code 0.70" in label and "80 tps" in label
+    assert "0.42/1k tok" not in label                         # efficiency moved to the detail panel
+
+
+def test_detail_panel_shows_extended_stats():
+    """Highlighting a run fills the bottom panel with the full numbers, incl. ctx-limited warning."""
+    from peakstone.dashboard.app import Dashboard
+    app = Dashboard("http://x")
+    text = app._detail_text({"kind": "quant", "family": "phi-4-mini",
+                             "row": {"code_score": 0.7, "score_per_1k_tokens": 0.42, "n_ctx_limited": 3,
+                                     "n_total": 2, "run": {"artifact": "Q6_K", "context": 32768}}})
+    assert "0.42/1k tok" in text and "⚠3" in text             # efficiency + ctx-limited warning
+    clean = app._detail_text({"kind": "quant", "family": "phi-4-mini",
+                              "row": {"code_score": 0.7, "score_per_1k_tokens": 0.42, "n_ctx_limited": 0,
+                                      "run": {"artifact": "Q6_K"}}})
+    assert "0.42/1k tok" in clean and "⚠" not in clean        # no warning when nothing was truncated
+    assert "highlight a model" in app._detail_text({"kind": "family"})   # placeholder for non-run nodes
 
 
 def test_pretty_progress():
