@@ -1399,3 +1399,114 @@ def test_app_handles_api_down(monkeypatch):
             assert labels and "API unreachable" in labels[0]   # graceful, not a crash
 
     asyncio.run(scenario())
+
+
+def test_model_says_label():
+    from peakstone.dashboard.app import _model_says
+    s = _model_says("qwen3-coder", "Q4_K_XL", 32768, "full")
+    assert "qwen3-coder" in s and "Q4_K_XL" in s and "32K" in s and "think full" in s and "says:" in s
+    assert _model_says("m").startswith("[b]<m>")          # minimal: just the name, no quant/ctx
+    assert "?" not in _model_says("m", "?", None)          # unknown quant is dropped, not shown
+
+
+def test_solution_screen_shows_prompt_thinking_and_label(monkeypatch):
+    """The solution explorer now puts the system prompt in the top pane, the model's thinking before
+    its answer in the bottom pane, and the <model · quant · ctx> says: line between them."""
+    from peakstone.dashboard.app import Dashboard, SolutionScreen
+    from textual.widgets import Static
+    monkeypatch.setattr(client, "get_run_challenge", lambda url, bh, cid, **k: {
+        "challenge": cid, "final": 1.0, "passed": 3, "total": 3,
+        "transcript": {"system_prompt": "You are an expert coder.", "reasoning": "consider edge cases",
+                       "raw_output": "def f(): pass", "stdout": "ok"}})
+
+    async def scenario():
+        app = Dashboard("http://x")
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            app.open_solution({"row": {"challenge": "py-05-calc"}, "bundle_hash": "bh1"},
+                              {"family": "qz", "run": {"artifact": "Q6_K", "context": 32768}})
+            await pilot.pause()
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            assert isinstance(app.screen, SolutionScreen)
+            spec = str(app.screen.query_one("#sol-spec", Static).render())
+            out = str(app.screen.query_one("#sol-out", Static).render())
+            says = str(app.screen.query_one("#sol-says", Static).render())
+            assert "system prompt" in spec and "You are an expert coder." in spec
+            assert "thinking" in out and "consider edge cases" in out and "def f(): pass" in out
+            assert "qz" in says and "Q6_K" in says and "32K" in says and "says:" in says
+
+    asyncio.run(scenario())
+
+
+def test_reproduce_says_label_and_phase_sections(monkeypatch):
+    """The live run viewer shows the identity line above the output, and retains the per-challenge
+    output sectioned into thinking / answer (from the streamed phase markers)."""
+    from peakstone.dashboard.app import Dashboard, ReproduceScreen, GEN_MARK, GEN_PHASE
+    from textual.widgets import Static
+    monkeypatch.setattr(_models, "load_registry", lambda: {})   # 'm' not registered -> no quant, fine
+
+    async def scenario():
+        app = Dashboard("http://x")
+        app._run_spec = {"name": "qwen3-coder", "ctx": 32768}
+        app._daemon_jobs = []
+        async with app.run_test() as pilot:
+            scr = ReproduceScreen()
+            await app.push_screen(scr)
+            await pilot.pause()
+            scr.reset_view()
+            await pilot.pause()
+            says = str(scr.query_one("#repro-says", Static).render())
+            assert "qwen3-coder" in says and "32K" in says and "says:" in says
+            # stream a challenge: solving -> thinking deltas -> answering deltas
+            scr._on_line("   qwen3-coder | c1   → solving [tests] …")
+            scr._on_line(GEN_PHASE + "thinking")
+            scr._on_line(GEN_MARK + "let me think")
+            scr._on_line(GEN_PHASE + "answering")
+            scr._on_line(GEN_MARK + "def f(): pass")
+            sol = scr._solutions["c1"]
+            assert "── thinking ──" in sol and "let me think" in sol
+            assert "── answer ──" in sol and "def f(): pass" in sol
+            assert sol.index("── thinking ──") < sol.index("── answer ──")
+
+    asyncio.run(scenario())
+
+
+def test_solution_body_sections_retry_attempts():
+    """When the transcript carries a self-repair sequence, the solution body shows each attempt's
+    thinking + answer and the error fed back, in order."""
+    from peakstone.dashboard.app import _solution_body
+    body = _solution_body({"challenge": "c", "final": 1.0, "passed": 2, "total": 2, "transcript": {
+        "attempts": [
+            {"answer": "v1", "reasoning": "first idea", "passed": 1, "total": 2,
+             "test_error": "AssertionError: nope"},
+            {"answer": "v2", "reasoning": "fix it", "passed": 2, "total": 2, "test_error": ""},
+        ]}})
+    assert "attempt 1/2" in body and "attempt 2/2" in body
+    assert "first idea" in body and "v1" in body and "AssertionError: nope" in body
+    assert "error fed back" in body and "fix it" in body and "v2" in body
+    assert body.index("attempt 1/2") < body.index("attempt 2/2")   # in order
+
+
+def test_reproduce_attempt_boundary_in_review(monkeypatch):
+    from peakstone.dashboard.app import Dashboard, ReproduceScreen, GEN_MARK, GEN_ATTEMPT
+    monkeypatch.setattr(_models, "load_registry", lambda: {})
+
+    async def scenario():
+        app = Dashboard("http://x")
+        app._run_spec = {"name": "m"}
+        app._daemon_jobs = []
+        async with app.run_test() as pilot:
+            scr = ReproduceScreen()
+            await app.push_screen(scr)
+            await pilot.pause()
+            scr.reset_view()
+            scr._on_line("   m | c1   → solving [tests] …")
+            scr._on_line(GEN_MARK + "first answer")
+            scr._on_line(GEN_ATTEMPT + "2")               # a self-repair retry began
+            scr._on_line(GEN_MARK + "second answer")
+            sol = scr._solutions["c1"]
+            assert "first answer" in sol and "attempt 2" in sol and "second answer" in sol
+            assert sol.index("first answer") < sol.index("attempt 2") < sol.index("second answer")
+
+    asyncio.run(scenario())

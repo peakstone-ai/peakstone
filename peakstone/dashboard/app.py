@@ -131,9 +131,20 @@ class BoardTree(NavTree):
         node = self.cursor_node
         d = (node.data if node else None) or {}
         if d.get("kind") == "result":
-            self.app.open_solution(d)
+            self.app.open_solution(d, self._quant_row(node))
         elif node is not None:
             node.collapse() if node.is_expanded else node.expand()
+
+    @staticmethod
+    def _quant_row(node) -> dict | None:
+        """Walk up from a result leaf to its quant-run ancestor, whose row carries the run's model
+        identity (family/quant/ctx) — used to label whose response this is."""
+        p = getattr(node, "parent", None)
+        while p is not None:
+            if (p.data or {}).get("kind") == "quant":
+                return p.data.get("row")
+            p = getattr(p, "parent", None)
+        return None
 
 
 def _mem(vram, ram) -> str:
@@ -162,6 +173,19 @@ def _think_label(v) -> str | None:
     if isinstance(v, int):
         return f"{_ctx_k(v)} cap"
     return None
+
+
+def _model_says(name, quant=None, ctx=None, reasoning=None) -> str:
+    """The `<model · quant · ctx> says:` identity line shown between the challenge and the model's
+    response, in both the live run viewer and the solution explorer. Reasoning appended when known."""
+    bits = [str(name or "model")]
+    if quant and quant != "?":
+        bits.append(str(quant))
+    if ctx:
+        bits.append(_ctx_k(ctx))
+    if reasoning:
+        bits.append(f"think {reasoning}")
+    return f"[b]<{' · '.join(bits)}>[/] [dim]says:[/]"
 
 
 # sensible context choices offered when launching a run; None = the model's configured default.
@@ -196,6 +220,7 @@ def _hw(run: dict) -> str:
 GEN_MARK = "\x01"
 GEN_NL = "\x02"
 GEN_PHASE = "\x03"         # a line GEN_PHASE+"thinking"|"answering": the model's current channel
+GEN_ATTEMPT = "\x04"       # a line GEN_ATTEMPT+"N": a self-repair retry began
 _RUN_LOG_MAX = 8000        # bounded ring of streamed run lines (caps memory under a token flood)
 
 # Render the runner's per-challenge progress markers as checkmarks in the live run log.
@@ -561,7 +586,7 @@ class Dashboard(App):
     def _track(self, line: str) -> None:
         """Single source of truth for the active run's phase + coverage (read by the global overview AND
         the run view), parsed from the stream under the lock."""
-        if line.startswith(GEN_MARK):
+        if line.startswith(GEN_MARK) or line.startswith(GEN_ATTEMPT):
             return
         if line.startswith(GEN_PHASE):
             with self._run_lock:
@@ -846,9 +871,14 @@ class Dashboard(App):
             parent.add_leaf(self._result_leaf(r),
                             data={"kind": "result", "row": r, "bundle_hash": bundle_hash})
 
-    def open_solution(self, d: dict) -> None:
+    def open_solution(self, d: dict, quant_row: dict | None = None) -> None:
         cid = (d.get("row") or {}).get("challenge", "?")
-        self.push_screen(SolutionScreen(cid, self.challenge_spec(cid), self.base_url, d.get("bundle_hash")))
+        qr = quant_row or {}
+        run = qr.get("run", {})
+        label = _model_says(qr.get("family"), run.get("artifact"), run.get("context"),
+                            run.get("reasoning")) if qr else None
+        self.push_screen(SolutionScreen(cid, self.challenge_spec(cid), self.base_url,
+                                        d.get("bundle_hash"), model_label=label))
 
     @work(thread=True, exclusive=True)
     def load_board(self) -> None:
@@ -930,6 +960,7 @@ class ReproduceScreen(ModalScreen):
     /* dim gray = inactive (recedes); bright blue = the active scroll pane (pops forward) */
     #repro-completed { height: 1fr; border: round dimgray; }
     #repro-completed:focus { border: round dodgerblue; }
+    #repro-says { height: auto; padding: 0 1; color: $accent; }  /* identity line above the output */
     #repro-gen-wrap { height: 45%; border: round dimgray; margin-top: 1; }
     #repro-gen-wrap:focus { border: round dodgerblue; }
     #repro-gen { width: 1fr; }
@@ -958,6 +989,7 @@ class ReproduceScreen(ModalScreen):
             yield Static("", id="repro-title")
             yield Static("", id="repro-stat")
             yield DataTable(id="repro-completed", cursor_type="row", zebra_stripes=True)
+            yield Static("", id="repro-says")     # "<model · quant · ctx> says:" — between the panes
             with VerticalScroll(id="repro-gen-wrap"):
                 yield Static("[dim]model output appears here as it solves each task[/]", id="repro-gen")
             yield Static("running…  ·  ↑↓ pick a finished test to review", id="repro-result")
@@ -1023,6 +1055,10 @@ class ReproduceScreen(ModalScreen):
         self.query_one("#repro-title", Static).update(
             f"[b]Run[/b] {model}  ·  {scope}{ctx}{budget}  ·  published "
             f"{_fmt(spec.get('published_tps'), '{:.0f}')} tok/s{queued}")
+        entry = models.load_registry().get(model)   # the model identity line shown above the output
+        says = _model_says(model, entry.quant if entry else None, spec.get("ctx"),
+                           _think_label(spec.get("reasoning")))
+        self.query_one("#repro-says", Static).update("" if spec.get("download_only") else says)
         tbl = self.query_one("#repro-completed", DataTable)
         tbl.clear()                              # keep columns, drop rows
         tbl.add_row(Text.from_markup("[cyan]●[/]"), Text("(running)"), Text(""),
@@ -1045,6 +1081,18 @@ class ReproduceScreen(ModalScreen):
             return
         if s.startswith(GEN_PHASE):
             self._gen_phase = s[len(GEN_PHASE):]   # "thinking" | "answering" — shown in the panel header
+            # mark the boundary in the retained copy so the review reads as sectioned thinking / answer
+            hdr = {"thinking": "\n── thinking ──\n", "answering": "\n── answer ──\n"}.get(self._gen_phase)
+            if hdr and self._gen_ch:
+                self._solutions[self._gen_ch] = (self._solutions.get(self._gen_ch, "") + hdr)[-24000:]
+            self._render_gen()
+            return
+        if s.startswith(GEN_ATTEMPT):
+            n = s[len(GEN_ATTEMPT):]               # a self-repair retry began → section it in the review
+            if self._gen_ch:
+                mark = f"\n━━━━━ attempt {n} ━━━━━\n"
+                self._solutions[self._gen_ch] = (self._solutions.get(self._gen_ch, "") + mark)[-24000:]
+            self._gen_phase = None
             self._render_gen()
             return
         if "→ solving" in s:
@@ -1205,14 +1253,28 @@ class ReproduceScreen(ModalScreen):
 
 
 def _solution_body(r: dict) -> str:
-    """Bottom-pane text for a test result: the model's solution, then the execution output and the
-    test's reaction (pass/fail). For iterative runs (agentic/repo-patch) raw_output is the full
-    turn-by-turn transcript, so each attempt and its result already appear in order."""
+    """Bottom-pane text for a test result: the model's thinking, its solution, then the execution
+    output and the test's reaction (pass/fail). For iterative runs (agentic/repo-patch) raw_output is
+    the full turn-by-turn transcript, so each attempt and its result already appear in order."""
     tr = r.get("transcript") or {}
     parts = []
-    if tr.get("plan"):
-        parts.append("── plan ──\n" + tr["plan"])
-    parts.append("── proposed solution ──\n" + (tr.get("raw_output") or "(no solution recorded for this run)"))
+    attempts = tr.get("attempts")
+    if attempts:   # a self-repair loop ran → the whole story: each try's thinking, answer, and the
+        n = len(attempts)   # error fed back before the next, in order
+        for i, a in enumerate(attempts, 1):
+            parts.append(f"━━━━━ attempt {i}/{n} ━━━━━")
+            if a.get("reasoning"):
+                parts.append("── thinking ──\n" + a["reasoning"])
+            parts.append("── answer ──\n" + (a.get("answer") or "(no answer)"))
+            parts.append(f"── tests ──\n{a.get('passed', 0)}/{a.get('total', 0)} passed")
+            if a.get("test_error"):
+                parts.append("── error fed back to the model ──\n" + a["test_error"])
+    else:
+        if tr.get("reasoning"):
+            parts.append("── thinking ──\n" + tr["reasoning"])
+        if tr.get("plan"):
+            parts.append("── plan ──\n" + tr["plan"])
+        parts.append("── proposed solution ──\n" + (tr.get("raw_output") or "(no solution recorded for this run)"))
     if tr.get("stdout"):
         parts.append("── output ──\n" + tr["stdout"])
     if tr.get("stderr"):
@@ -1240,25 +1302,30 @@ class SolutionScreen(ModalScreen):
     #sol-spec-wrap:focus { border: round dodgerblue; }
     #sol-out-wrap { height: 1fr; border: round dimgray; margin-top: 1; }
     #sol-out-wrap:focus { border: round dodgerblue; }
+    #sol-says { height: auto; padding: 0 1; color: $accent; }   /* identity line between the panes */
     #sol-spec, #sol-out { width: 1fr; }
     """
     BINDINGS = [("escape", "dismiss", "Close"), ("tab", "toggle_pane", "Switch pane")]
 
-    def __init__(self, challenge_id: str, spec: str | None, base_url: str, bundle_hash: str | None):
+    def __init__(self, challenge_id: str, spec: str | None, base_url: str, bundle_hash: str | None,
+                 model_label: str | None = None):
         super().__init__()
         self.challenge_id = challenge_id
         self.spec = spec
         self.base_url = base_url
         self.bundle_hash = bundle_hash
+        self.model_label = model_label        # "<model · quant · ctx> says:" — whose response this is
 
     def compose(self) -> ComposeResult:
         # top status = live hardware (with the clock); then this challenge's context bar; bottom = Footer
         yield HardwarePanel()
         with Vertical(id="sol"):
-            yield Static(f"[b]{self.challenge_id}[/]  ·  challenge (top) · solution + result (bottom)  ·  ↑↓ scroll")
+            yield Static(f"[b]{self.challenge_id}[/]  ·  system prompt + challenge (top) · thinking + solution (bottom)  ·  ↑↓ scroll")
             with VerticalScroll(id="sol-spec-wrap"):
                 # markup off: specs/solutions contain [ ] that Rich would try to parse
                 yield Static(self.spec or "(challenge spec not in the local corpus)", id="sol-spec", markup=False)
+            # the identity line sits BETWEEN the two panes, in both this view and the live run viewer
+            yield Static(self.model_label or "", id="sol-says")
             with VerticalScroll(id="sol-out-wrap"):
                 yield Static("loading…", id="sol-out", markup=False)
         yield Footer()                          # … and on the bottom (matches the run viewer)
@@ -1275,14 +1342,21 @@ class SolutionScreen(ModalScreen):
 
     @work(thread=True, exclusive=True)
     def load_solution(self) -> None:
+        spec_text = None
         if not self.bundle_hash:
             body = "(no run reference — solution unavailable)"
         else:
             try:
                 r = client.get_run_challenge(self.base_url, self.bundle_hash, self.challenge_id)
                 body = _solution_body(r)
+                sysp = (r.get("transcript") or {}).get("system_prompt")
+                if sysp:   # show the exact instructions the model was given, before the challenge
+                    base = self.spec or "(challenge spec not in the local corpus)"
+                    spec_text = f"── system prompt ──\n{sysp}\n\n── challenge ──\n{base}"
             except client.APIError as e:
                 body = f"(could not load solution: {e})"
+        if spec_text is not None:
+            self.app.call_from_thread(self.query_one("#sol-spec", Static).update, spec_text)
         self.app.call_from_thread(self.query_one("#sol-out", Static).update, body)
 
 

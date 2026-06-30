@@ -40,6 +40,7 @@ ROOT = paths.repo_root()   # results land here; data files resolve via engine.pa
 GEN_MARK = "\x01"
 GEN_NL = "\x02"
 GEN_PHASE = "\x03"   # a line GEN_PHASE+"thinking"|"answering": the model's current generation channel
+GEN_ATTEMPT = "\x04" # a line GEN_ATTEMPT+"N": a self-repair retry began (so the viewer can section it)
 
 # Generation token budget. Generous by default so a reasoning model isn't truncated mid-thought —
 # truncation makes a "fail" mean "ran out of room", not "couldn't solve it" (and unfairly penalizes
@@ -86,6 +87,10 @@ def _emit_gen(chunk: str) -> None:
 
 def _emit_phase(phase: str) -> None:
     print(GEN_PHASE + phase, flush=True)   # dashboard shows "thinking"/"answering" live
+
+
+def _emit_attempt(n: int) -> None:
+    print(GEN_ATTEMPT + str(n), flush=True)   # dashboard marks a self-repair retry boundary live
 
 
 class _PipeSafe:
@@ -791,6 +796,8 @@ def main(argv=None):
 
             attempts, passed_on = 0, None
             looped, rtoks = False, None   # set per-attempt in the generate path; defaulted for --reference
+            first_reasoning = None        # the scored (first) attempt's chain-of-thought, for the bundle
+            attempt_log: list = []        # per-attempt record (answer/reasoning/test_error) for --retries
             pre_conf = self_correct = None   # calibration probes (only with --calibration)
             recovered = False                # self-repair: first try failed but a retry fixed it
             if args.reference:
@@ -818,6 +825,8 @@ def main(argv=None):
                 if args.calibration and _calibratable(ch):
                     pre_conf = _ask_confidence(client, model, ch, run_cfg)
                 for attempt in range(1, max_attempts + 1):
+                    if attempt > 1 and args.stream_output:
+                        _emit_attempt(attempt)   # let the live viewer draw a retry boundary
                     res = client.chat(
                         model, msgs,
                         temperature=run_cfg.get("temperature", 0.2),
@@ -836,8 +845,11 @@ def main(argv=None):
                     ptoks, ctoks, rtoks = res.prompt_tokens, res.completion_tokens, res.reasoning_tokens
                     files = extract_files(res.text, ch.solution_file, ch.language)
                     run = run_tests(ch, files, run_cfg)
+                    attempt_log.append({"answer": res.text, "reasoning": _cap(res.reasoning),
+                                        "passed": run.passed, "total": run.total, "test_error": ""})
                     if first_run is None:
                         first_run, first_response, first_files = run, response, files
+                        first_reasoning = res.reasoning   # the scored attempt's CoT (capped into the bundle)
                         first_truncated = res.truncated   # headline scores attempt 1, so judge IT
                         first_trunc_phase = res.truncated_phase   # mid-thinking vs mid-answer
                         # calibration (post-hoc): ask about the FIRST solution NOW — before the model
@@ -849,6 +861,7 @@ def main(argv=None):
                         break
                     if attempt < max_attempts and run.total > 0:
                         fail = ((run.stdout or "") + "\n" + (run.stderr or "")).strip()[-2500:]
+                        attempt_log[-1]["test_error"] = fail   # the error fed back before the next try
                         msgs.append({"role": "assistant", "content": res.text})
                         msgs.append({"role": "user", "content":
                                      f"Only {run.passed}/{run.total} tests passed. The test run "
@@ -889,6 +902,12 @@ def main(argv=None):
                     cal["cal_self_correct"] = 1.0 if self_correct else 0.0
                 if cal:
                     extra["metrics"] = {**(extra.get("metrics") or {}), **cal}
+            if not args.reference:   # record the exact system prompt + the scored attempt's reasoning
+                extra["system_prompt"] = tests_system
+                if first_reasoning:
+                    extra["reasoning"] = _cap(first_reasoning)
+                if len(attempt_log) > 1:   # a self-repair loop ran → keep the per-attempt story
+                    extra["attempts_log"] = attempt_log   # distinct from the int `attempts` count
             extra = extra or None
             results.append(_row(model, ch, run, sc, judge_res,
                                 response=response, tps=tps, lat=lat, ptoks=ptoks, ctoks=ctoks,
@@ -1399,6 +1418,17 @@ def _ask_self_verify(client, model, ch, files, run_cfg):
     res = client.chat(model, [{"role": "user", "content": prompt}], temperature=0.0,
                       max_tokens=8, timeout=run_cfg.get("request_timeout", 600))
     return None if res.error else _parse_yesno(res.text)
+
+
+def _cap(text, limit: int = 8192):
+    """Cap long captured text (e.g. reasoning/CoT) for the bundle: keep head + tail with an elision
+    marker so a runaway chain-of-thought doesn't bloat the signed bundle. None/empty passes through."""
+    if not text:
+        return text or None
+    if len(text) <= limit:
+        return text
+    head = limit * 3 // 4
+    return text[:head] + f"\n…[{len(text) - limit} chars elided]…\n" + text[-(limit - head):]
 
 
 def _row(model, ch, run, sc, judge_res, response="", tps=None, lat=None, ptoks=0, ctoks=0,

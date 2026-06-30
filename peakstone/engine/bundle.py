@@ -397,8 +397,14 @@ def _result(row: dict, chash: dict, judge_model: str | None, cpub: dict | None =
         r["mode"] = "planner"
         r["coder_model"] = row.get("coder_model")
     tr: dict = {}
+    if row.get("system_prompt"):
+        tr["system_prompt"] = row["system_prompt"]   # exact instructions sent to the model (signed)
     if row.get("planner_response"):
         tr["plan"] = row["planner_response"]
+    if row.get("reasoning"):
+        tr["reasoning"] = row["reasoning"]            # chain-of-thought of the scored attempt (capped)
+    if row.get("attempts_log"):
+        tr["attempts"] = row["attempts_log"]          # per-attempt self-repair record (answer/error/…)
     if row.get("response"):
         tr["raw_output"] = row["response"]
     if row.get("stdout"):

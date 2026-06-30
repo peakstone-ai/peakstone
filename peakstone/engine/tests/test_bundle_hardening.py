@@ -47,6 +47,47 @@ def test_bundle_carries_error_type():
     assert b["results"][0]["transcript"]["error"] == "repetition-loop"
 
 
+def test_cap_keeps_head_and_tail():
+    from peakstone.engine.runner import _cap
+    assert _cap(None) is None and _cap("") is None
+    assert _cap("short", 1000) == "short"             # under the limit -> untouched
+    big = "A" * 5000 + "B" * 5000
+    out = _cap(big, limit=1000)
+    assert len(out) < len(big) and "chars elided" in out
+    assert out.startswith("A") and out.endswith("B")  # head + tail both preserved
+
+
+def test_bundle_carries_system_prompt_and_reasoning():
+    """The signed bundle now records the exact system prompt + the scored attempt's reasoning, so a
+    submitted run can show what was sent and what the model thought."""
+    b = bundle.produce_bundle(
+        {"models": ["m"], "judge": None, "timestamp": "t", "gpu": {"name": "x"}},
+        [{"challenge": "c", "type": "architecture", "final_score": 1.0, "response": "def f(): pass",
+          "system_prompt": "You are an expert coder.", "reasoning": "first I consider edge cases"}],
+        sign=False)
+    tr = b["results"][0]["transcript"]
+    assert tr["system_prompt"] == "You are an expert coder."
+    assert tr["reasoning"] == "first I consider edge cases"
+    assert tr["raw_output"] == "def f(): pass"         # existing field still present
+
+
+def test_bundle_carries_retry_attempts():
+    """With --retries, the per-attempt story (each answer + the test error fed back) reaches the
+    signed bundle so a submitted run can show the whole self-repair sequence."""
+    attempts = [
+        {"answer": "v1", "reasoning": "try 1", "passed": 1, "total": 2, "test_error": "AssertionError: x"},
+        {"answer": "v2", "reasoning": "try 2", "passed": 2, "total": 2, "test_error": ""},
+    ]
+    b = bundle.produce_bundle(
+        {"models": ["m"], "judge": None, "timestamp": "t", "gpu": {"name": "x"}},
+        [{"challenge": "c", "type": "architecture", "final_score": 0.5, "response": "v1",
+          "attempts_log": attempts}], sign=False)
+    tr = b["results"][0]["transcript"]
+    assert len(tr["attempts"]) == 2
+    assert tr["attempts"][0]["test_error"] == "AssertionError: x"
+    assert tr["attempts"][1]["answer"] == "v2"
+
+
 def test_capture_env_records_model_footprint():
     env = bundle.capture_env({"name": "RTX 4090"}, {"vram_mib": 24576, "ram_mib": 26624})
     assert env["vram_used_gb"] == 24.0 and env["ram_used_gb"] == 26.0   # measured model footprint

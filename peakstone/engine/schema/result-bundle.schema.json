@@ -177,11 +177,28 @@
           "additionalProperties": true,
           "properties": {
             "prompt": { "type": "string" },
+            "system_prompt": { "type": "string", "description": "The exact system prompt sent to the model for this challenge (signed, so the test conditions are reproducible)." },
             "raw_output": { "type": "string" },
+            "reasoning": { "type": "string", "description": "The scored attempt's chain-of-thought, if the model exposed a reasoning channel. Size-capped (head+tail) to bound bundle growth." },
             "extracted_files": { "type": "object", "additionalProperties": { "type": "string" } },
             "plan": { "type": "string", "description": "For planner runs: the spec/plan the coder executed." },
             "stdout": { "type": "string" },
-            "stderr": { "type": "string" }
+            "stderr": { "type": "string" },
+            "attempts": {
+              "type": "array",
+              "description": "Per-attempt self-repair record (with --retries): each generation and the test error fed back before the next. Present only when more than one attempt ran.",
+              "items": {
+                "type": "object",
+                "additionalProperties": true,
+                "properties": {
+                  "answer": { "type": "string" },
+                  "reasoning": { "type": "string" },
+                  "test_error": { "type": "string", "description": "The failing test output fed back to the model before the next attempt (empty on the final/passing attempt)." },
+                  "passed": { "type": "integer" },
+                  "total": { "type": "integer" }
+                }
+              }
+            }
           }
         },
         "transcript_ref": { "type": "string", "description": "Content-addressed blob id, if the transcript is stored out-of-band." },
