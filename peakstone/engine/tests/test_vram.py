@@ -73,6 +73,21 @@ def test_resolve_ctx_falls_back_without_weights(tmp_path):
     assert choice.source == "fallback" and choice.ctx is None
 
 
+def test_resolve_ctx_when_nothing_fits_warns_not_silently_defaults(tmp_path):
+    # weights/overhead exceed the VRAM budget -> max_ctx==0. Must NOT fall back to DEFAULT_CTX (the
+    # over-budget window that OOMs); surface it and try MIN_CTX instead. Review should-fix.
+    choice = serving.resolve_ctx(_model(tmp_path), vram_gib=1.0, _read_geometry=lambda p: _geom())
+    assert choice.source == "estimated" and choice.ctx == serving.MIN_CTX and "OOM" in choice.warning
+
+
+def test_weights_bytes_sums_split_shards(tmp_path):
+    for i in (1, 2, 3):
+        (tmp_path / f"m-0000{i}-of-00003.gguf").write_bytes(b"\0" * 1000)
+    assert serving._weights_bytes(tmp_path / "m-00001-of-00003.gguf") == 3000   # all shards, not just 1
+    (tmp_path / "solo.gguf").write_bytes(b"\0" * 500)
+    assert serving._weights_bytes(tmp_path / "solo.gguf") == 500
+
+
 def test_detect_vram_gib_parses_nvidia_smi():
     class _Out:
         stdout = "24564\n"

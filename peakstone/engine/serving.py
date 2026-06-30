@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -161,6 +162,16 @@ def load_registry() -> dict[str, ServeModel]:
 # from other runs on similar hardware (the leaderboard) and use this estimate only when no data yet.
 
 DEFAULT_CTX = 32768          # last-resort window when neither configured nor estimable
+MIN_CTX = 4096               # smallest window worth attempting when a model barely/doesn't fit
+
+
+def _weights_bytes(path: Path) -> int:
+    """Total on-disk weight bytes. For a split GGUF (…-00001-of-000NN.gguf) sum ALL shards — llama.cpp
+    loads every shard, so sizing on shard 1 alone underestimates VRAM and over-estimates the ctx."""
+    if not re.search(r"-(\d{5})-of-(\d{5})\.gguf$", path.name):
+        return path.stat().st_size
+    parts = sorted(path.parent.glob(re.sub(r"-\d{5}-of-\d{5}\.gguf$", "-*-of-*.gguf", path.name)))
+    return sum(p.stat().st_size for p in parts) or path.stat().st_size
 
 
 def detect_vram_gib(*, run=subprocess.run) -> float | None:
@@ -201,20 +212,27 @@ def resolve_ctx(model: ServeModel, *, vram_gib: float | None = None,
                 mmproj = ((paths.repo_root() / model.mmproj).stat().st_size
                           if model.mmproj_present else 0)
                 k, v = vram.cache_types_from_flags(flags)
-                est = vram.estimate_max_ctx(geom=geom, weights_bytes=path.stat().st_size,
+                est = vram.estimate_max_ctx(geom=geom, weights_bytes=_weights_bytes(path),
                                             vram_gib=gib, k_type=k, v_type=v, mmproj_bytes=mmproj)
             except Exception:  # noqa: BLE001  -- unreadable/odd GGUF: just fall back
                 est = None
     if model.ctx:                                   # configured -> respect it, warn if it won't fit
         warn = None
-        if est and est.max_ctx and model.ctx > est.max_ctx:
-            warn = (f"configured ctx {model.ctx} > ~{est.max_ctx} that fits this GPU's VRAM "
-                    f"— may OOM on load")
+        if est is not None and model.ctx > max(est.max_ctx, 0):
+            warn = (f"weights (~{est.weights_gib:.0f}GB) leave no VRAM for KV on this GPU — will likely OOM; "
+                    f"use --n-cpu-moe or a smaller quant" if est.max_ctx == 0 else
+                    f"configured ctx {model.ctx} > ~{est.max_ctx} that fits this GPU's VRAM — may OOM on load")
         return CtxChoice(model.ctx, "configured", warn)
-    if est and est.max_ctx:
+    if est is not None and est.max_ctx > 0:
         warn = (f"tight VRAM fit — only {est.kv_budget_gib:.1f}GB left for KV; may OOM"
                 if not est.capped_by_native and est.kv_budget_gib < 1.0 else None)
         return CtxChoice(est.max_ctx, "estimated", warn)
+    if est is not None:                             # est computed but nothing fits (max_ctx == 0)
+        # Don't silently fall through to DEFAULT_CTX — that's the exact over-budget window that OOMs.
+        # Surface it (candidate negative data when the load actually crashes) and try the minimum.
+        return CtxChoice(MIN_CTX, "estimated",
+                         f"weights (~{est.weights_gib:.0f}GB) exceed this GPU's VRAM — will likely OOM at any "
+                         f"ctx; use --n-cpu-moe or a smaller quant")
     reason = ("--n-cpu-moe model: ctx not auto-estimated" if offloaded
               else "no GGUF geometry / VRAM info; using default ctx")
     return CtxChoice(None, "fallback", reason)
