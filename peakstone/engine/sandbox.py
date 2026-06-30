@@ -8,7 +8,18 @@ Convention (so challenge authors and the harness agree):
   * Rust: cargo layout — solution at `src/lib.rs`, tests under `tests/` using `challenge::`.
 
 Each run is offline (no network), uses temp caches, and is killed after `timeout` seconds.
-Default isolation is plain subprocess; pass sandbox="docker" to wrap in a per-language image.
+
+SECURITY — this RUNS UNTRUSTED model-generated code. The shipped mechanism is a plain subprocess
+(SANDBOX_MECHANISM below; the config `sandbox="docker"` is NOT yet wired into the test runner). What
+that subprocess does and does NOT contain:
+  * Network egress is blocked (_NET_ISOLATE: a user+network namespace, loopback only).
+  * Memory/file-size/fork-bomb caps via RLIMIT (_apply_limits); credential-shaped env vars stripped.
+  * Solution paths are contained to the workdir (_write_solution), so it can't write outside it.
+  * Captured output is scrubbed of the operator's signing key + secret env values (_redact_secrets)
+    so a read-and-print can't exfiltrate them via the public bundle transcript.
+It still runs as YOUR uid with full filesystem READ access (real fs/uid isolation — bubblewrap/
+dedicated user/cgroup+mount-ns — is the P2 follow-up). Until then: only benchmark models you trust,
+and prefer a dedicated/throwaway user or machine. See PEAKSTONE_HOME to relocate the signing key.
 """
 from __future__ import annotations
 
@@ -147,6 +158,35 @@ def _sanitized_environ() -> dict:
     return {k: v for k, v in os.environ.items() if not _SECRET_RE.search(k)}
 
 
+def _secret_values() -> list[str]:
+    """Operator secrets that must NEVER appear in a published transcript — chiefly the ed25519 signing
+    key (whoever reads it can forge bundles under the operator's identity), plus credential-shaped env
+    values. Generated test code shares our uid and CAN read these files; the proper fix is real fs/uid
+    isolation (P2), but until then we scrub them out of the captured output before it's stored/shipped
+    (network egress is already blocked by _NET_ISOLATE, so the transcript is the remaining channel)."""
+    vals = []
+    try:
+        from . import keys
+        if keys.KEY_PATH.exists():
+            t = keys.KEY_PATH.read_text().strip()
+            if len(t) >= 16:
+                vals.append(t)
+    except Exception:  # noqa: BLE001
+        pass
+    vals += [v for k, v in os.environ.items() if v and len(v) >= 12 and _SECRET_RE.search(k)]
+    return vals
+
+
+def _redact_secrets(text: str) -> str:
+    """Replace any known operator secret occurring in untrusted-process output with a placeholder."""
+    if not text:
+        return text
+    for s in _secret_values():
+        if s in text:
+            text = text.replace(s, "[REDACTED-SECRET]")
+    return text
+
+
 def _apply_limits():  # runs in the forked child before exec; inherited by its children
     import resource
     for res, soft_hard in (
@@ -189,8 +229,10 @@ def _run(cmd: list[str], cwd: Path, timeout: int, env: dict) -> tuple[int, str, 
             out, err = "", ""
         err = (err or "") + "\n[TIMEOUT]"
     # Keep enough output that per-test pass/fail counts stay accurate (a large `go test -json` / TAP
-    # stream; stored stdout is re-truncated to ~4KB at the row level).
-    return rc, (out or "")[-200_000:], (err or "")[-200_000:], round(time.time() - t0, 2), timed_out
+    # stream; stored stdout is re-truncated to ~4KB at the row level). Redact operator secrets the
+    # generated code may have read + printed, so they can't ride the transcript into a public bundle.
+    return (rc, _redact_secrets((out or "")[-200_000:]), _redact_secrets((err or "")[-200_000:]),
+            round(time.time() - t0, 2), timed_out)
 
 
 def _run_measured(cmd: list[str], cwd: Path, timeout: int, env: dict):

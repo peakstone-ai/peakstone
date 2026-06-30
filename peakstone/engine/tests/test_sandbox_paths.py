@@ -47,3 +47,19 @@ def test_agentic_write_file_rejects_embedded_traversal(tmp_path):
     ws = Workspace(SimpleNamespace(dir=tmp_path), {})
     assert "error" in ws.write_file("foo/../../escape", "x")    # embedded traversal survives lstrip
     assert ws.write_file("sol.py", "ok").get("ok")              # a normal path still works
+
+
+def test_redact_secrets_scrubs_signing_key(monkeypatch, tmp_path):
+    """Generated code that reads + prints the signing key must not leak it into the transcript (M1)."""
+    from peakstone.engine import keys, sandbox
+    keyfile = tmp_path / "key.ed25519"
+    keyfile.write_text("c2VjcmV0LXNpZ25pbmcta2V5LWJhc2U2NA==")     # stand-in b64 private key
+    monkeypatch.setattr(keys, "KEY_PATH", keyfile)
+    out = sandbox._redact_secrets("test ok\nleaked=c2VjcmV0LXNpZ25pbmcta2V5LWJhc2U2NA==\n")
+    assert "c2VjcmV0" not in out and "[REDACTED-SECRET]" in out
+
+
+def test_redact_secrets_scrubs_credential_env(monkeypatch):
+    from peakstone.engine import sandbox
+    monkeypatch.setenv("HF_TOKEN", "hf_supersecrettoken12345")
+    assert "hf_supersecret" not in sandbox._redact_secrets("got HF_TOKEN=hf_supersecrettoken12345 here")
