@@ -1218,6 +1218,10 @@ def run_judge_only(args, judge_model, judge_client) -> int:
         jr = judge_solution(judge_client, judge_model, ch, sol_text, summary)
         r["judge_detail"] = jr
         r["judge_score"] = jr.get("normalized", 0.0)
+        if jr.get("error") or not jr.get("scores"):
+            # judge flaked (timeout / unparseable) — don't fold a spurious 0.0 into final_score;
+            # leave the test-based score from the run untouched (see scoring._judge_ran)
+            continue
         # fold judge into final only for judge/both; tests-scored challenges keep their score
         if ch.scoring == "judge":
             r["final_score"] = round(jr.get("normalized", 0.0), 3)

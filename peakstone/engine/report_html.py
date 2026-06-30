@@ -61,7 +61,14 @@ def main(argv=None):
     by_model = defaultdict(list)
     for r in rows:
         by_model[r["model"]].append(r)
-    models = sorted(by_model, key=lambda m: -_avg([r["final_score"] for r in by_model[m]]))
+    # The headline "Code score" / ranking must exclude non-coding axes (safety/honesty, math answer-match,
+    # agentic repo-patch/goal-state) — exactly like the markdown leaderboard (report._leaderboard_md) — so
+    # the two published artifacts agree and a confabulation/injection score can't drag the coding number up
+    # or down. Those axes have their own sections below. Review finding M4.
+    NONCODE = {"injection", "refusal", "hallucination", "secure-code",
+               "answer-match", "repo-patch", "goal-state"}
+    code_rows = lambda rs: [r for r in rs if r.get("scoring") not in NONCODE]
+    models = sorted(by_model, key=lambda m: -_avg([r["final_score"] for r in code_rows(by_model[m])]))
     types = sorted({r.get("type", "other") for r in rows})
 
     H = []
@@ -112,13 +119,14 @@ ul{margin:6px 0}li{margin:3px 0}
              "<th class='num'>Solved</th><th class='num'>tok/s</th><th class='num'>VRAM</th></tr>")
     for i, m in enumerate(models, 1):
         rs = by_model[m]
-        sc = _avg([r["final_score"] for r in rs])
-        solved = sum(1 for r in rs if r["final_score"] >= 0.999)
+        cr = code_rows(rs)                       # headline score/solved are code-only (match markdown)
+        sc = _avg([r["final_score"] for r in cr])
+        solved = sum(1 for r in cr if r["final_score"] >= 0.999)
         tps = _avg([r.get("tok_per_s") for r in rs])
         vram = max((r.get("vram_mib") or 0) for r in rs)
         cls = ' class="rank1"' if i == 1 else ""
         H.append(f"<tr{cls}><td class='num'>{i}</td><td><b>{m}</b></td><td>{_bar(sc)}</td>"
-                 f"<td class='num'>{solved}/{len(rs)}</td><td class='num'>{tps:.0f}</td>"
+                 f"<td class='num'>{solved}/{len(cr)}</td><td class='num'>{tps:.0f}</td>"
                  f"<td class='num'>{vram/1024:.1f} GB</td></tr>")
     H.append("</table>")
 
