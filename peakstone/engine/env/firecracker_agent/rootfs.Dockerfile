@@ -19,7 +19,7 @@ ARG TARGETARCH=amd64
 
 # --- base: python3.12 + pytest, native build deps, scm/utils ---------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl git xz-utils software-properties-common tzdata time \
+        ca-certificates curl git xz-utils software-properties-common tzdata \
         python3 python3-venv python3-pip \
         build-essential pkg-config libssl-dev \
     && pip3 install --no-cache-dir --break-system-packages pytest \
@@ -55,6 +55,11 @@ RUN python3.10 -m venv /opt/peakstone/bcb-venv \
               /opt/peakstone/bcb-venv/bin/pip install --no-cache-dir --prefer-binary "$l" || echo "bcb SKIP: $l"; \
             done < /tmp/bcb.txt ) \
     && rm -f /tmp/bcb.txt
+
+# the python runner invokes bare `python` (Ubuntu ships only python3); `time` backs guest peak-RSS.
+# Kept as a late layer so the heavy toolchain layers above stay cached on rebuild.
+RUN apt-get update && apt-get install -y --no-install-recommends python-is-python3 time \
+    && rm -rf /var/lib/apt/lists/*
 
 # --- declare the toolchain environment for the guest agent -----------------------------------
 # docker export drops image ENV/PATH, and the agent boots as PID 1 with no PATH. The agent seeds its

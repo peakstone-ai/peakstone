@@ -42,8 +42,11 @@ FC_BIN = os.environ.get("PEAKSTONE_FC_BIN") or (str(FC_HOME / "firecracker")
                                                 if (FC_HOME / "firecracker").exists() else "firecracker")
 FC_KERNEL = os.environ.get("PEAKSTONE_FC_KERNEL") or str(FC_HOME / "vmlinux")
 FC_ROOTFS = os.environ.get("PEAKSTONE_FC_ROOTFS") or str(FC_HOME / "rootfs.ext4")
-GUEST_MEM_MIB = int(os.environ.get("PEAKSTONE_FC_MEM_MIB", "256"))
-GUEST_VCPUS = int(os.environ.get("PEAKSTONE_FC_VCPUS", "1"))
+# Default sized for the TEST sandbox: real compilers (go/rust/cgo) and the scientific Python stack
+# OOM at the old 256 MiB. 4 GiB / 2 vCPUs runs them comfortably; override down for lightweight
+# agentic-env nodes (PEAKSTONE_FC_MEM_MIB) or up for a memory-hungry crate.
+GUEST_MEM_MIB = int(os.environ.get("PEAKSTONE_FC_MEM_MIB", "4096"))
+GUEST_VCPUS = int(os.environ.get("PEAKSTONE_FC_VCPUS", "2"))
 GUEST_CID = 3
 AGENT_PORT = 1024   # must match engine/env/firecracker_agent (the guest agent)
 
