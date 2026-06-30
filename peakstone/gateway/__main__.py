@@ -23,15 +23,19 @@ def main(argv: list[str] | None = None) -> int:
                     help=f"front port (default {cfg['port']})")
     ap.add_argument("--idle-timeout", type=float, default=cfg["idle_timeout_s"], metavar="SECONDS",
                     help="unload the model after this many idle seconds to free VRAM (0 = never)")
+    ap.add_argument("--open", dest="open_access", action="store_true",
+                    help="disable bearer auth so any LAN device can use the gateway/chat UI without a "
+                         "token (trusted networks only)")
     ap.add_argument("--detach", action="store_true",
                     help="start the daemon in the background and return to the shell")
     args = ap.parse_args(argv)
     if args.detach:
         from .launch import base_url, spawn_detached
-        proc = spawn_detached(args.host, args.port, args.idle_timeout)
+        proc = spawn_detached(args.host, args.port, args.idle_timeout, open_access=args.open_access)
         print(f">>> peakstone gateway started (pid {proc.pid}) on {base_url(args.host, args.port)}/v1")
+        print(f">>>   browser chat UI: {base_url(args.host, args.port)}/chat")
         return 0
-    run(host=args.host, port=args.port, idle_timeout=args.idle_timeout)
+    run(host=args.host, port=args.port, idle_timeout=args.idle_timeout, open_access=args.open_access)
     return 0
 
 

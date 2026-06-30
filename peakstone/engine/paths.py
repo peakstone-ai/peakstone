@@ -50,6 +50,14 @@ def config_path() -> Path:
     return Path(os.environ.get("PEAKSTONE_CONFIG") or _PKG / "config.toml")
 
 
+def user_config_path() -> Path:
+    """Per-machine config override at ``$PEAKSTONE_HOME/config.toml`` (default ~/.peakstone/config.toml).
+    Untracked; its sections overlay the committed engine/config.toml so a machine can opt into local
+    settings (e.g. [gateway] host/open for LAN exposure) without editing the repo."""
+    home = Path(os.environ.get("PEAKSTONE_HOME", str(Path.home() / ".peakstone")))
+    return home / "config.toml"
+
+
 # --- repo data (the benchmark workspace; needs a checkout) --------------------------------------
 
 def repo_root() -> Path:

@@ -1,0 +1,728 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Peakstone Local Chat</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --panel2:#1c2430; --border:#2a313c;
+    --text:#e6edf3; --muted:#8b949e; --accent:#3b82f6; --accent2:#2563eb;
+    --user:#1f6feb22; --danger:#f85149;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0}
+  body{display:flex;font:14px/1.5 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+       background:var(--bg);color:var(--text)}
+  button{cursor:pointer;font:inherit}
+  /* Sidebar */
+  #sidebar{width:270px;min-width:270px;background:var(--panel);border-right:1px solid var(--border);
+           display:flex;flex-direction:column;height:100vh}
+  #sidebar h1{font-size:14px;margin:0;padding:14px 16px;border-bottom:1px solid var(--border);
+              display:flex;align-items:center;gap:8px}
+  #sidebar h1 .dot{width:8px;height:8px;border-radius:50%;background:var(--danger)}
+  #sidebar h1 .dot.ok{background:#3fb950}
+  #newChat{margin:10px;padding:9px;border:1px solid var(--border);border-radius:8px;
+           background:var(--panel2);color:var(--text)}
+  #newChat:hover{border-color:var(--accent)}
+  #chatList{flex:1;overflow:auto;padding:0 8px}
+  .chatItem{display:flex;align-items:center;gap:6px;padding:9px 10px;border-radius:8px;
+            margin-bottom:3px;color:var(--muted);position:relative}
+  .chatItem:hover{background:var(--panel2)}
+  .chatItem.active{background:var(--panel2);color:var(--text)}
+  .chatItem .title{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .chatItem .del{opacity:0;border:none;background:none;color:var(--muted);padding:2px 6px;border-radius:4px}
+  .chatItem:hover .del{opacity:1}
+  .chatItem .del:hover{color:var(--danger);background:#0008}
+  #sidebar .foot{padding:10px;border-top:1px solid var(--border)}
+  #sidebar .foot button{width:100%;padding:8px;background:none;border:1px solid var(--border);
+                        border-radius:8px;color:var(--muted)}
+  /* Main */
+  #main{flex:1;display:flex;flex-direction:column;height:100vh;min-width:0}
+  #sysbar{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--border);
+          background:var(--panel)}
+  #sysbar label{color:var(--muted);font-size:12px;white-space:nowrap}
+  #modelSelect{background:var(--panel2);color:var(--text);border:1px solid var(--border);border-radius:8px;
+               padding:7px 10px;font:inherit;max-width:260px}
+  #modelSelect:focus{outline:none;border-color:var(--accent)}
+  #sysPrompt{flex:1;resize:none;height:34px;background:var(--panel2);color:var(--text);
+             border:1px solid var(--border);border-radius:8px;padding:7px 10px;font:inherit;overflow:hidden}
+  #sysPrompt:focus{outline:none;border-color:var(--accent);height:90px}
+  #messages{flex:1;overflow:auto;padding:24px 0}
+  .msg{max-width:820px;margin:0 auto 18px;padding:0 24px;display:flex;gap:14px}
+  .msg .avatar{width:30px;height:30px;border-radius:7px;flex-shrink:0;display:flex;align-items:center;
+               justify-content:center;font-size:13px;font-weight:600}
+  .msg.user .avatar{background:#1f6feb}
+  .msg.assistant .avatar{background:#6e40c9}
+  .msg .body{flex:1;min-width:0}
+  .msg .role{font-size:12px;color:var(--muted);margin-bottom:3px}
+  .msg .content{white-space:pre-wrap;word-wrap:break-word}
+  .msg .content pre{background:var(--panel2);border:1px solid var(--border);border-radius:8px;
+                    padding:12px;overflow:auto;white-space:pre}
+  .msg .content code{background:var(--panel2);padding:2px 5px;border-radius:4px;font-size:13px}
+  .msg .content pre code{background:none;padding:0}
+  .msg .content .loadingNote{color:var(--muted);font-style:italic}
+  .msg .imgs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}
+  .msg .imgs img{max-height:160px;max-width:240px;border-radius:8px;border:1px solid var(--border)}
+  .msg .files{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px}
+  .msg .files .fc{display:flex;align-items:center;gap:6px;background:var(--panel2);border:1px solid var(--border);
+                  border-radius:8px;padding:5px 9px;font-size:12px;color:var(--text);max-width:260px}
+  .msg .files .fc .fn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .msg .files .fc .fm{color:var(--muted);font-size:11px;flex-shrink:0}
+  .msg .think{margin-bottom:8px;border:1px solid var(--border);border-radius:8px;background:var(--panel2)}
+  .msg .think summary{cursor:pointer;padding:6px 10px;color:var(--muted);font-size:12px;user-select:none}
+  .msg .think .thinkbody{padding:8px 12px 10px;color:var(--muted);font-size:13px;white-space:pre-wrap;
+                         max-height:260px;overflow:auto;border-top:1px solid var(--border)}
+  .msg.assistant .content .cursor{display:inline-block;width:7px;height:15px;background:var(--accent);
+                                  animation:blink 1s steps(2) infinite;vertical-align:text-bottom}
+  @keyframes blink{50%{opacity:0}}
+  .msg .actions{display:flex;gap:6px;margin-top:8px;opacity:0;transition:opacity .12s}
+  .msg:hover .actions{opacity:1}
+  .msg .actions button{background:var(--panel2);border:1px solid var(--border);color:var(--muted);
+                       border-radius:6px;padding:3px 9px;font-size:12px}
+  .msg .actions button:hover{color:var(--text);border-color:var(--accent)}
+  .msg .editor{margin-top:6px}
+  .msg .editbox{width:100%;background:var(--panel2);border:1px solid var(--accent);border-radius:8px;
+                color:var(--text);font:inherit;padding:8px 10px;resize:none;min-height:60px;overflow:hidden}
+  .msg .editactions{display:flex;gap:8px;margin-top:8px}
+  .msg .editactions button{border-radius:6px;padding:5px 12px;border:1px solid var(--border);font-size:13px}
+  .msg .editactions .save{background:var(--accent);border-color:var(--accent);color:#fff}
+  .msg .editactions .cancel{background:var(--panel2);color:var(--muted)}
+  .msg .trunc{margin-top:8px;font-size:12px;color:#e3b341;background:#3a2d0b;border:1px solid #6b4d12;
+              border-radius:8px;padding:7px 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .msg .trunc button{background:var(--accent);color:#fff;border:none;border-radius:6px;padding:3px 11px;font-size:12px}
+  .msg .trunc button:hover{background:var(--accent2)}
+  .msg .trunc .tnote{color:var(--muted)}
+  .empty{max-width:820px;margin:60px auto;text-align:center;color:var(--muted);padding:0 24px}
+  /* Composer */
+  #composer{border-top:1px solid var(--border);background:var(--panel);padding:12px 0}
+  #composerInner{max-width:820px;margin:0 auto;padding:0 24px}
+  #thumbs{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:8px}
+  #thumbs .thumb{position:relative}
+  #thumbs img{height:64px;border-radius:8px;border:1px solid var(--border)}
+  #thumbs .x{position:absolute;top:-7px;right:-7px;background:var(--danger);color:#fff;border:none;
+             border-radius:50%;width:20px;height:20px;line-height:1;font-size:13px}
+  #thumbs .filechip{display:flex;align-items:center;gap:7px;background:var(--panel);border:1px solid var(--border);
+                    border-radius:8px;padding:7px 9px;font-size:12px;color:var(--text);max-width:240px}
+  #thumbs .filechip .fn{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  #thumbs .filechip .fm{color:var(--muted);font-size:11px;flex-shrink:0}
+  #thumbs .filechip .rm{border:none;background:none;color:var(--muted);font-size:14px;padding:0 2px;line-height:1;flex-shrink:0}
+  #thumbs .filechip .rm:hover{color:var(--danger)}
+  #inputRow{display:flex;gap:10px;align-items:flex-end;background:var(--panel2);
+            border:1px solid var(--border);border-radius:12px;padding:8px 8px 8px 12px}
+  #inputRow.drag{border-color:var(--accent);background:#1f6feb22}
+  #prompt{flex:1;resize:none;background:none;border:none;color:var(--text);font:inherit;
+          max-height:200px;outline:none;padding:6px 0}
+  #inputRow button{border:none;border-radius:8px;width:38px;height:38px;flex-shrink:0;
+                   display:flex;align-items:center;justify-content:center;font-size:17px}
+  #attachBtn{background:var(--panel);color:var(--muted)}
+  #attachBtn:hover{color:var(--text)}
+  #sendBtn{background:var(--accent);color:#fff}
+  #sendBtn:hover{background:var(--accent2)}
+  #sendBtn:disabled{opacity:.4;cursor:default}
+  #sendBtn.stop{background:var(--danger)}
+  .hint{text-align:center;color:var(--muted);font-size:11px;margin-top:7px}
+  /* Settings modal */
+  #settingsBtn{background:none;border:none;color:var(--muted);font-size:18px;padding:4px 8px}
+  #settingsBtn:hover{color:var(--text)}
+  .modal{position:fixed;inset:0;background:#000a;display:none;align-items:center;justify-content:center;z-index:10}
+  .modal.show{display:flex}
+  .modal .box{background:var(--panel);border:1px solid var(--border);border-radius:12px;
+              padding:22px;width:420px;max-width:90vw}
+  .modal h2{margin:0 0 16px;font-size:16px}
+  .modal .field{margin-bottom:14px}
+  .modal label{display:block;color:var(--muted);font-size:12px;margin-bottom:5px}
+  .modal input{width:100%;background:var(--panel2);border:1px solid var(--border);border-radius:8px;
+               padding:8px 10px;color:var(--text);font:inherit}
+  .modal .row{display:flex;gap:12px}
+  .modal .actions{display:flex;justify-content:flex-end;gap:10px;margin-top:18px}
+  .modal .actions button{padding:8px 16px;border-radius:8px;border:1px solid var(--border);
+                         background:var(--panel2);color:var(--text)}
+  .modal .actions .primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .status{font-size:11px;color:var(--muted);margin-top:6px}
+</style>
+</head>
+<body>
+  <aside id="sidebar">
+    <h1><span class="dot" id="connDot"></span>Peakstone Local</h1>
+    <button id="newChat">+ New chat</button>
+    <div id="chatList"></div>
+    <div class="foot">
+      <button id="settingsBtn2">⚙ Settings &amp; server</button>
+    </div>
+  </aside>
+
+  <main id="main">
+    <div id="sysbar">
+      <label>Model</label>
+      <select id="modelSelect" title="Pick the model — the gateway loads/swaps it into VRAM on demand"></select>
+      <label>System prompt</label>
+      <textarea id="sysPrompt" placeholder="You are a helpful assistant." rows="1"></textarea>
+    </div>
+    <div id="messages"></div>
+    <div id="composer">
+      <div id="composerInner">
+        <div id="thumbs"></div>
+        <div id="inputRow">
+          <textarea id="prompt" rows="1" placeholder="Message… (paste, drag, or attach images & text files)"></textarea>
+          <input type="file" id="fileInput" multiple hidden />
+          <button id="attachBtn" title="Attach images or text files (select several at once)">📎</button>
+          <button id="sendBtn" title="Send">➤</button>
+        </div>
+        <div class="hint">Enter to send · Shift+Enter for newline · attach 📎 or drag images &amp; text files (select several) · runs locally on the gateway's GPU</div>
+      </div>
+    </div>
+  </main>
+
+  <div class="modal" id="settingsModal">
+    <div class="box">
+      <h2>Settings &amp; server connection</h2>
+      <div class="field">
+        <label>Server base URL — leave blank to use the host that served this page (recommended)</label>
+        <input id="setBaseUrl" placeholder="(blank = same host) or e.g. http://192.168.1.50:12434/v1" />
+        <div class="status" id="connStatus"></div>
+      </div>
+      <div class="field">
+        <label>Gateway token — only needed when the server enforces auth over the LAN (loopback is exempt; blank otherwise)</label>
+        <input id="setToken" placeholder="pk-… (paste the token the gateway printed, or leave blank)" />
+      </div>
+      <div class="row">
+        <div class="field" style="flex:1">
+          <label>Temperature</label>
+          <input id="setTemp" type="number" step="0.1" min="0" max="2" />
+        </div>
+        <div class="field" style="flex:1">
+          <label>Max tokens per reply (0 = unlimited)</label>
+          <input id="setMaxTokens" type="number" step="64" min="0" />
+        </div>
+      </div>
+      <div class="actions">
+        <button id="testConn">Test connection</button>
+        <button class="primary" id="saveSettings">Save</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+const LS_KEY = "peakstone_local_chat_v1";
+const DEFAULT_SETTINGS = {
+  baseUrl: "",   // empty = same host/origin that served this page (recommended)
+  token: "",     // gateway bearer token; only required for non-loopback (LAN) clients when auth is on
+  model: "",     // selected model id; resolved from /v1/models on first load
+  temperature: 0.7,
+  maxTokens: 0,   // 0 = no per-reply cap: let the model finish on its own (bounded by context).
+                  // Reasoning models "think" first, so a fixed cap often truncates the actual answer.
+};
+const DEFAULT_SYSTEM = "You are a helpful assistant.";
+
+let state = load();
+let pendingImages = [];   // data URIs staged in composer
+let pendingFiles = [];    // text files staged in composer: {name, text, size}
+let abortCtrl = null;
+let loadedModel = null;   // id the gateway reports as currently loaded (for the swap hint)
+
+function load(){
+  try{
+    const s = JSON.parse(localStorage.getItem(LS_KEY));
+    if(s && s.chats){ s.settings = {...DEFAULT_SETTINGS, ...(s.settings||{})}; return s; }
+  }catch(e){}
+  return { chats: [], activeId: null, settings: {...DEFAULT_SETTINGS} };
+}
+function save(){ localStorage.setItem(LS_KEY, JSON.stringify(state)); }
+function uid(){ return Math.random().toString(36).slice(2,10)+Date.now().toString(36); }
+function activeChat(){ return state.chats.find(c=>c.id===state.activeId); }
+// Resolve the API base. Empty/blank => same origin that served the page (works across the LAN).
+// A leading "/" => relative to this origin. Otherwise an absolute URL the user typed.
+function apiBase(override){
+  let b = (override!==undefined ? override : state.settings.baseUrl) || "";
+  b = b.trim().replace(/\/$/,"");
+  if(!b) return location.origin + "/v1";
+  if(b.startsWith("/")) return location.origin + b;
+  return b;
+}
+// Bearer header for the gateway, when a token is set. Loopback never needs it; LAN does if auth is on.
+function authHeaders(){
+  const t = (state.settings.token||"").trim();
+  return t ? {"Authorization":"Bearer "+t} : {};
+}
+
+function newChat(){
+  const c = { id: uid(), title: "New chat", system: DEFAULT_SYSTEM, messages: [], created: Date.now() };
+  state.chats.unshift(c);
+  state.activeId = c.id;
+  save(); renderAll();
+  document.getElementById("prompt").focus();
+}
+function deleteChat(id, ev){
+  ev.stopPropagation();
+  state.chats = state.chats.filter(c=>c.id!==id);
+  if(state.activeId===id) state.activeId = state.chats[0]?.id || null;
+  if(!state.chats.length) newChat(); else { save(); renderAll(); }
+}
+function selectChat(id){ state.activeId=id; save(); renderAll(); }
+
+/* ---------- rendering ---------- */
+function renderSidebar(){
+  const list = document.getElementById("chatList");
+  list.innerHTML="";
+  for(const c of state.chats){
+    const el = document.createElement("div");
+    el.className = "chatItem"+(c.id===state.activeId?" active":"");
+    el.onclick = ()=>selectChat(c.id);
+    el.innerHTML = `<span class="title"></span><button class="del" title="Delete">✕</button>`;
+    el.querySelector(".title").textContent = c.title;
+    el.querySelector(".del").onclick = (e)=>deleteChat(c.id, e);
+    list.appendChild(el);
+  }
+}
+
+function escapeHtml(s){ return s.replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+// minimal, safe markdown: fenced code, inline code, bold, italic
+function mdToHtml(text){
+  const blocks = text.split(/(```[\s\S]*?```)/g);
+  return blocks.map(b=>{
+    if(b.startsWith("```")){
+      const inner = b.replace(/^```[^\n]*\n?/,"").replace(/```$/,"");
+      return `<pre><code>${escapeHtml(inner)}</code></pre>`;
+    }
+    let h = escapeHtml(b);
+    h = h.replace(/`([^`]+)`/g, "<code>$1</code>");
+    h = h.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    h = h.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+    return h;
+  }).join("");
+}
+
+function renderMessages(streamingEl){
+  const wrap = document.getElementById("messages");
+  const chat = activeChat();
+  wrap.innerHTML="";
+  if(!chat || !chat.messages.length){
+    wrap.innerHTML = `<div class="empty"><h3>New conversation</h3>
+      <p>Pick a model above, edit the system prompt, and start chatting.<br>
+      Everything runs locally on the gateway's GPU; switching models loads/swaps on demand.</p></div>`;
+    return;
+  }
+  chat.messages.forEach((m,i)=>{
+    const el = messageEl(m, false, i);
+    const act = el.querySelector(".actions");
+    if(act){
+      act.querySelector('[data-act="del"]')?.addEventListener("click", ()=>deleteMsg(i));
+      act.querySelector('[data-act="edit"]')?.addEventListener("click", ()=>editUser(i, el));
+      act.querySelector('[data-act="regen"]')?.addEventListener("click", ()=>regenerate(i));
+    }
+    el.querySelector('[data-act="continue"]')?.addEventListener("click", ()=>continueReply(i));
+    wrap.appendChild(el);
+  });
+  if(streamingEl) wrap.appendChild(streamingEl);
+  wrap.scrollTop = wrap.scrollHeight;
+}
+function messageEl(m, streaming, index){
+  const el = document.createElement("div");
+  el.className = "msg "+m.role;
+  const imgs = (m.images&&m.images.length)
+    ? `<div class="imgs">${m.images.map(s=>`<img src="${s}">`).join("")}</div>` : "";
+  const files = (m.files&&m.files.length)
+    ? `<div class="files">${m.files.map(f=>
+        `<span class="fc">📄<span class="fn">${escapeHtml(f.name)}</span><span class="fm">${fmtSize(f.size)}</span></span>`).join("")}</div>` : "";
+  const hasThink = m.role==="assistant" && (streaming || (m.reasoning&&m.reasoning.trim()));
+  const think = hasThink
+    ? `<details class="think"${streaming?" open":""}${(m.reasoning&&m.reasoning.trim())||streaming?"":' style="display:none"'}>
+         <summary>💭 Thinking</summary><div class="thinkbody">${escapeHtml(m.reasoning||"")}</div></details>` : "";
+  const actions = (!streaming && index!=null)
+    ? (m.role==="user"
+        ? `<div class="actions"><button data-act="edit" title="Edit & resubmit">✏️ Edit</button><button data-act="del" title="Delete this message">🗑</button></div>`
+        : `<div class="actions"><button data-act="regen" title="Regenerate with a new seed">🔄 Regenerate</button><button data-act="del" title="Delete this message">🗑</button></div>`)
+    : "";
+  const trunc = (!streaming && m.role==="assistant" && m.finish==="length")
+    ? `<div class="trunc">⚠️ Reply hit the length/context limit.
+         <button data-act="continue">Continue ▸</button>
+         <span class="tnote">If this keeps happening, set <b>Max tokens = 0</b> in ⚙ Settings.</span></div>` : "";
+  const label = m.role==="user" ? "You" : (m.model || "Assistant");
+  el.innerHTML = `<div class="avatar">${m.role==="user"?"U":"AI"}</div>
+    <div class="body"><div class="role">${escapeHtml(label)}</div>
+    ${imgs}${files}${think}<div class="content">${mdToHtml(m.content||"")}${streaming?'<span class="cursor"></span>':""}</div>${trunc}${actions}</div>`;
+  return el;
+}
+
+function renderSysPrompt(){
+  const chat = activeChat();
+  document.getElementById("sysPrompt").value = chat ? chat.system : DEFAULT_SYSTEM;
+}
+function renderAll(){ renderSidebar(); renderMessages(); renderSysPrompt(); renderThumbs(); }
+
+/* ---------- model selector ---------- */
+// Populate the dropdown from GET /v1/models. Marks the loaded model, and resolves a sensible default
+// selection (the loaded model, else the first) when none is chosen yet or the saved one vanished.
+function renderModelOptions(models){
+  const sel = document.getElementById("modelSelect");
+  sel.innerHTML = "";
+  if(!models.length){
+    sel.innerHTML = `<option value="">(no models — is the gateway up?)</option>`;
+    return;
+  }
+  const ids = models.map(m=>m.id);
+  if(!state.settings.model || !ids.includes(state.settings.model))
+    state.settings.model = loadedModel && ids.includes(loadedModel) ? loadedModel : ids[0];
+  for(const m of models){
+    const o = document.createElement("option");
+    o.value = m.id;
+    o.textContent = m.loaded ? `● ${m.id}  (loaded)` : m.id;
+    if(m.id===state.settings.model) o.selected = true;
+    sel.appendChild(o);
+  }
+}
+
+/* ---------- attachments (images + text files) ---------- */
+const TEXT_FILE_MAX = 2*1024*1024;   // 2MB per file — guards against pasting a binary/huge file into ctx
+// Known-texty extensions (covers code + config + prose). Files with an empty MIME type (most code
+// files report none) are also treated as text; truly binary types (pdf, zip, audio…) are rejected.
+const TEXT_EXT = /\.(txt|text|md|markdown|rst|json|jsonl|ya?ml|toml|ini|cfg|conf|csv|tsv|log|py|pyi|js|mjs|cjs|jsx|ts|tsx|html?|css|scss|sass|less|c|h|cpp|cc|cxx|hpp|cs|java|go|rs|rb|php|swift|kt|kts|scala|sh|bash|zsh|fish|ps1|sql|r|jl|lua|pl|pm|tex|bib|xml|svg|env|diff|patch|gradle|properties|dockerfile|makefile|cmake|gitignore|gitattributes|editorconfig|vue|svelte|astro|proto|graphql|gql)$/i;
+function isTextFile(f){
+  if(f.type.startsWith("text/")) return true;
+  if(/(json|xml|javascript|ecmascript|x-sh|x-python|yaml|toml|csv|x-www-form)/.test(f.type)) return true;
+  if(/(^image\/|^audio\/|^video\/|pdf|zip|gzip|octet-stream|msword|officedocument|font|wasm)/.test(f.type)) return false;
+  if(!f.type) return true;          // most code files report no MIME type — allow (size-guarded)
+  return TEXT_EXT.test(f.name);
+}
+function fileToDataURL(file){
+  return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); });
+}
+function fileToText(file){
+  return new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsText(file); });
+}
+async function addFiles(files){
+  const skipped = [];
+  for(const f of files){
+    if(f.type.startsWith("image/")){ pendingImages.push(await fileToDataURL(f)); continue; }
+    if(isTextFile(f)){
+      if(f.size > TEXT_FILE_MAX){ skipped.push(`${f.name} (too large, ${(f.size/1048576).toFixed(1)}MB > 2MB)`); continue; }
+      pendingFiles.push({ name:f.name||"file.txt", text:await fileToText(f), size:f.size });
+    } else {
+      skipped.push(`${f.name||"file"} (unsupported type)`);
+    }
+  }
+  renderThumbs();
+  if(skipped.length) alert("Skipped:\n• "+skipped.join("\n• "));
+}
+function fmtSize(n){ return n<1024 ? n+" B" : n<1048576 ? (n/1024).toFixed(1)+" KB" : (n/1048576).toFixed(1)+" MB"; }
+function renderThumbs(){
+  const t = document.getElementById("thumbs"); t.innerHTML="";
+  pendingImages.forEach((src,i)=>{
+    const d=document.createElement("div"); d.className="thumb";
+    d.innerHTML=`<img src="${src}"><button class="x">✕</button>`;
+    d.querySelector(".x").onclick=()=>{ pendingImages.splice(i,1); renderThumbs(); };
+    t.appendChild(d);
+  });
+  pendingFiles.forEach((f,i)=>{
+    const d=document.createElement("div"); d.className="filechip";
+    d.innerHTML=`<span>📄</span><span class="fn"></span><span class="fm"></span><button class="rm" title="Remove">✕</button>`;
+    d.querySelector(".fn").textContent=f.name;
+    d.querySelector(".fm").textContent=fmtSize(f.size);
+    d.querySelector(".rm").onclick=()=>{ pendingFiles.splice(i,1); renderThumbs(); };
+    t.appendChild(d);
+  });
+}
+
+/* ---------- API ---------- */
+// Inline any attached text files ahead of the typed message so the model sees their contents
+// (works on text-only models too — images still go through as multimodal image_url parts).
+function userText(m){
+  const files = m.files || [];
+  if(!files.length) return m.content || "";
+  const blocks = files.map(f =>
+    `===== attached file: ${f.name} =====\n${f.text}\n===== end of ${f.name} =====`).join("\n\n");
+  return m.content ? blocks + "\n\n" + m.content : blocks;
+}
+function buildApiMessages(chat){
+  const msgs = [];
+  if(chat.system && chat.system.trim()) msgs.push({role:"system", content:chat.system});
+  for(const m of chat.messages){
+    if(m.role==="user"){
+      const text = userText(m);
+      if(m.images && m.images.length){
+        const parts = [];
+        if(text) parts.push({type:"text", text});
+        for(const url of m.images) parts.push({type:"image_url", image_url:{url}});
+        msgs.push({role:"user", content:parts});
+      } else {
+        msgs.push({role:"user", content:text});
+      }
+    } else {
+      msgs.push({role:m.role, content:m.content});
+    }
+  }
+  return msgs;
+}
+
+function busy(){
+  if(abortCtrl){ alert("A response is still generating — stop it (■) or wait, then try again."); return true; }
+  return false;
+}
+
+// Delete a single message.
+function deleteMsg(index){
+  if(busy()) return;
+  const chat = activeChat();
+  chat.messages.splice(index, 1);
+  save(); renderMessages();
+}
+
+// Regenerate an assistant reply with a fresh random seed.
+// Removes this reply (and anything after it) and re-runs the preceding prompt.
+async function regenerate(index){
+  if(busy()) return;
+  const chat = activeChat();
+  if(index < chat.messages.length-1 &&
+     !confirm("Regenerating will remove the messages after this reply. Continue?")) return;
+  chat.messages = chat.messages.slice(0, index);   // drop this reply onward; last item is now the user prompt
+  save(); renderMessages();
+  await generate(Math.floor(Math.random()*1e9));   // new seed → different sample
+}
+
+// Inline-edit a user message, then truncate the conversation here and resubmit.
+function editUser(index, el){
+  if(busy()) return;
+  const chat = activeChat();
+  const body = el.querySelector(".body");
+  const contentEl = body.querySelector(".content");
+  const actionsEl = body.querySelector(".actions");
+  const editor = document.createElement("div"); editor.className="editor";
+  editor.innerHTML = `<textarea class="editbox"></textarea>
+    <div class="editactions"><button class="save">Save &amp; resubmit</button><button class="cancel">Cancel</button></div>`;
+  const ta = editor.querySelector(".editbox"); ta.value = chat.messages[index].content||"";
+  contentEl.style.display="none"; if(actionsEl) actionsEl.style.display="none";
+  body.appendChild(editor);
+  const grow=()=>{ ta.style.height="auto"; ta.style.height=ta.scrollHeight+"px"; };
+  ta.addEventListener("input", grow); ta.focus(); grow();
+  editor.querySelector(".cancel").onclick = ()=>renderMessages();
+  editor.querySelector(".save").onclick = async ()=>{
+    const newText = ta.value.trim();
+    if(!newText) return;
+    if(index < chat.messages.length-1 &&
+       !confirm("Editing will remove the messages after this one and regenerate. Continue?")) return;
+    chat.messages[index].content = newText;
+    chat.messages = chat.messages.slice(0, index+1);   // keep edited prompt, drop the rest
+    if(chat.title==="New chat") chat.title = newText.slice(0,40);
+    save(); renderSidebar(); renderMessages();
+    await generate();
+  };
+}
+
+async function send(){
+  if(abortCtrl){ abortCtrl.abort(); return; } // acts as stop
+  const chat = activeChat();
+  const promptEl = document.getElementById("prompt");
+  const text = promptEl.value.trim();
+  if(!text && !pendingImages.length && !pendingFiles.length) return;
+
+  const userMsg = { role:"user", content:text, images:[...pendingImages], files:[...pendingFiles] };
+  chat.messages.push(userMsg);
+  if(chat.title==="New chat"){
+    const t = text || (pendingFiles[0] && pendingFiles[0].name) || "";
+    if(t) chat.title = t.slice(0,40);
+  }
+  promptEl.value=""; promptEl.style.height="auto";
+  pendingImages=[]; pendingFiles=[]; renderThumbs();
+  save(); renderSidebar();
+  await generate();
+}
+
+// Shared streaming core: streams a completion for `apiMessages`, appending deltas into
+// `assistantMsg` (so it also works for continuing a partial reply) and live-updating `streamEl`.
+// Records the server's finish_reason on assistantMsg.finish ("length" => truncated).
+async function runStream({apiMessages, seed, assistantMsg, streamEl}){
+  const contentDiv = streamEl.querySelector(".content");
+  const thinkEl = streamEl.querySelector(".think");
+  const thinkBody = thinkEl ? thinkEl.querySelector(".thinkbody") : null;
+  const scroll = ()=>{ document.getElementById("messages").scrollTop = 1e9; };
+
+  const sendBtn = document.getElementById("sendBtn");
+  sendBtn.textContent="■"; sendBtn.classList.add("stop");
+  abortCtrl = new AbortController();
+  assistantMsg.finish = null;
+
+  const model = state.settings.model || "local";
+  assistantMsg.model = model;
+  streamEl.querySelector(".role").textContent = model;
+  // First request after picking a different model triggers a VRAM swap on the gateway — can take a
+  // while before the first token. Show a note until any content/reasoning arrives, then clear it.
+  let gotChunk = false;
+  const clearNote = ()=>{ if(!gotChunk){ gotChunk=true; contentDiv.innerHTML=""; } };
+  const swapping = loadedModel && loadedModel!==model;
+  contentDiv.innerHTML = `<span class="loadingNote">${swapping
+      ? "⏳ loading "+escapeHtml(model)+" into VRAM (swapping models — first reply can take a while)…"
+      : "⏳ waiting for "+escapeHtml(model)+"…"}</span>`;
+
+  try{
+    const s = state.settings;
+    const body = {
+      model,
+      messages:apiMessages,
+      temperature:Number(s.temperature),
+      max_tokens:Number(s.maxTokens)||undefined,
+      stream:true,
+    };
+    if(seed!==undefined && seed!==null) body.seed = seed;
+    const resp = await fetch(apiBase()+"/chat/completions", {
+      method:"POST",
+      headers:{"Content-Type":"application/json", ...authHeaders()},
+      body:JSON.stringify(body),
+      signal:abortCtrl.signal,
+    });
+    if(!resp.ok){ throw new Error("HTTP "+resp.status+" — "+(await resp.text()).slice(0,300)); }
+    loadedModel = model;   // the gateway loaded it to answer this request
+
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf="";
+    while(true){
+      const {value,done} = await reader.read();
+      if(done) break;
+      buf += dec.decode(value,{stream:true});
+      const lines = buf.split("\n");
+      buf = lines.pop();
+      for(const line of lines){
+        const t = line.trim();
+        if(!t.startsWith("data:")) continue;
+        const data = t.slice(5).trim();
+        if(data==="[DONE]") continue;
+        try{
+          const j = JSON.parse(data);
+          const d = j.choices?.[0]?.delta || {};
+          const fr = j.choices?.[0]?.finish_reason;
+          if(fr) assistantMsg.finish = fr;
+          const rdelta = d.reasoning_content || "";
+          const delta = d.content || "";
+          if(rdelta){
+            clearNote();
+            assistantMsg.reasoning = (assistantMsg.reasoning||"") + rdelta;
+            if(thinkBody){ thinkEl.style.display=""; thinkBody.textContent = assistantMsg.reasoning; }
+            scroll();
+          }
+          if(delta){
+            clearNote();
+            if(thinkEl && thinkEl.open && assistantMsg.reasoning) thinkEl.open=false; // collapse once answering
+            assistantMsg.content = (assistantMsg.content||"") + delta;
+            contentDiv.innerHTML = mdToHtml(assistantMsg.content)+'<span class="cursor"></span>';
+            scroll();
+          }
+        }catch(e){}
+      }
+    }
+  }catch(err){
+    clearNote();
+    if(err.name!=="AbortError")
+      assistantMsg.content = (assistantMsg.content||"") + (assistantMsg.content?"\n\n":"") + "⚠️ "+err.message;
+  }finally{
+    abortCtrl=null;
+    sendBtn.textContent="➤"; sendBtn.classList.remove("stop");
+  }
+}
+
+// Generate one fresh assistant reply for the current chat (last message must be a user turn).
+// Pass a numeric seed to force a specific/fresh sample; omit to let the server randomize.
+async function generate(seed){
+  const chat = activeChat();
+  const assistantMsg = { role:"assistant", content:"", reasoning:"" };
+  const streamEl = messageEl(assistantMsg, true);
+  renderMessages(streamEl);
+  await runStream({apiMessages:buildApiMessages(chat), seed, assistantMsg, streamEl});
+  if(assistantMsg.content.trim() || assistantMsg.reasoning.trim()) chat.messages.push(assistantMsg);
+  save(); renderMessages();
+  checkConn(false);   // refresh the loaded-model marker in the dropdown
+}
+
+// Continue a reply that was cut off at the length limit — appends into the same message bubble.
+async function continueReply(index){
+  if(busy()) return;
+  const chat = activeChat();
+  const assistantMsg = chat.messages[index];
+  if(!assistantMsg || assistantMsg.role!=="assistant") return;
+  assistantMsg.finish = null;
+  renderMessages();                                   // drop the truncation badge, then re-grab the element
+  const streamEl = document.querySelectorAll("#messages .msg")[index];
+  if(!streamEl) return;
+  const apiMessages = buildApiMessages({system:chat.system, messages:chat.messages.slice(0, index+1)});
+  apiMessages.push({role:"user", content:"Continue your previous answer from exactly where it stopped. Do not repeat any earlier text or restart."});
+  await runStream({apiMessages, assistantMsg, streamEl});
+  save(); renderMessages();
+}
+
+/* ---------- connection check ---------- */
+// Probes /v1/models: updates the connection dot, refreshes the model dropdown, and records which
+// model the gateway currently has loaded (for the swap hint).
+async function checkConn(showStatus){
+  const statusEl = document.getElementById("connStatus");
+  const dot = document.getElementById("connDot");
+  const url = apiBase(showStatus ? document.getElementById("setBaseUrl").value : undefined);
+  if(showStatus) statusEl.textContent="Checking "+url+" …";
+  try{
+    const r = await fetch(url+"/models",{method:"GET", headers:authHeaders()});
+    if(!r.ok) throw new Error("HTTP "+r.status+" — "+(await r.text()).slice(0,200));
+    const j = await r.json();
+    const models = j.data || [];
+    loadedModel = (models.find(m=>m.loaded)||{}).id || loadedModel;
+    renderModelOptions(models);
+    save();
+    dot.classList.add("ok");
+    if(showStatus) statusEl.textContent=`✅ Connected · ${models.length} model(s)`
+      + (loadedModel ? ` · loaded: ${loadedModel}` : "");
+    return true;
+  }catch(e){
+    dot.classList.remove("ok");
+    if(showStatus) statusEl.textContent="❌ Cannot reach gateway. Is `peakstone serve` running? "+e.message;
+    return false;
+  }
+}
+
+/* ---------- settings modal ---------- */
+function openSettings(){
+  const s=state.settings;
+  setBaseUrl.value=s.baseUrl; setToken.value=s.token||"";
+  setTemp.value=s.temperature; setMaxTokens.value=s.maxTokens;
+  document.getElementById("connStatus").textContent="";
+  settingsModal.classList.add("show");
+}
+function saveSettingsFn(){
+  state.settings={ ...state.settings,
+    baseUrl:setBaseUrl.value.trim()||DEFAULT_SETTINGS.baseUrl,
+    token:setToken.value.trim(),
+    temperature:setTemp.value, maxTokens:setMaxTokens.value };
+  save(); settingsModal.classList.remove("show"); checkConn(false);
+}
+
+/* ---------- wiring ---------- */
+const promptEl = document.getElementById("prompt");
+promptEl.addEventListener("input", ()=>{ promptEl.style.height="auto"; promptEl.style.height=Math.min(promptEl.scrollHeight,200)+"px"; });
+promptEl.addEventListener("keydown", e=>{ if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); send(); } });
+promptEl.addEventListener("paste", async e=>{
+  const items=[...(e.clipboardData?.items||[])].filter(i=>i.type.startsWith("image/"));
+  if(items.length){ e.preventDefault(); await addFiles(items.map(i=>i.getAsFile()).filter(Boolean)); }
+});
+document.getElementById("sendBtn").onclick=send;
+document.getElementById("attachBtn").onclick=()=>fileInput.click();
+document.getElementById("fileInput").onchange=e=>{ addFiles([...e.target.files]); e.target.value=""; };
+document.getElementById("newChat").onclick=newChat;
+document.getElementById("settingsBtn2").onclick=openSettings;
+document.getElementById("saveSettings").onclick=saveSettingsFn;
+document.getElementById("testConn").onclick=()=>checkConn(true);
+document.getElementById("modelSelect").onchange=e=>{ state.settings.model=e.target.value; save(); };
+settingsModal.onclick=e=>{ if(e.target===settingsModal) settingsModal.classList.remove("show"); };
+
+const sysEl=document.getElementById("sysPrompt");
+sysEl.addEventListener("input", ()=>{ const c=activeChat(); if(c){ c.system=sysEl.value; save(); } });
+
+// drag & drop
+const inputRow=document.getElementById("inputRow");
+["dragenter","dragover"].forEach(ev=>inputRow.addEventListener(ev,e=>{e.preventDefault();inputRow.classList.add("drag");}));
+["dragleave","drop"].forEach(ev=>inputRow.addEventListener(ev,e=>{e.preventDefault();inputRow.classList.remove("drag");}));
+inputRow.addEventListener("drop",e=>{ if(e.dataTransfer?.files?.length) addFiles([...e.dataTransfer.files]); });
+
+// boot
+if(!state.chats.length) newChat(); else renderAll();
+checkConn(false);
+setInterval(()=>checkConn(false), 15000);
+</script>
+</body>
+</html>

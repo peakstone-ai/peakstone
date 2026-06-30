@@ -43,6 +43,7 @@ print(f"FILE={shlex.quote(m['file'])}")
 print(f"PORT={m['port']}")
 print(f"CTX={os.environ.get('PEAKSTONE_CTX') or m['ctx']}")   # PEAKSTONE_CTX overrides the configured ctx
 print(f"FLAGS={shlex.quote(flags)}")
+print(f"MMPROJ={shlex.quote(m.get('mmproj', ''))}")   # vision projector GGUF; empty = text-only
 PY
 )"
 
@@ -51,6 +52,18 @@ if [ ! -f "$LLAMA_SERVER" ]; then
 fi
 if [ ! -f "$FILE" ]; then
   echo "model file not found: $FILE  (run serve/download_models.sh $NAME)"; exit 1
+fi
+
+# Vision projector (multimodal). Present => pass --mmproj so the model accepts image input; absent in
+# the registry => text-only (no flag). A declared-but-missing projector is a hard error (same as the
+# model file) so vision doesn't silently degrade to text.
+MMPROJ_ARG=()
+if [ -n "${MMPROJ:-}" ]; then
+  if [ ! -f "$MMPROJ" ]; then
+    echo "vision projector not found: $MMPROJ  (run serve/download_models.sh $NAME)"; exit 1
+  fi
+  MMPROJ_ARG=(--mmproj "$MMPROJ")
+  echo ">>> multimodal: --mmproj $MMPROJ"
 fi
 
 # LAN IP: `hostname -I` is Linux-only; macOS falls back to the primary interface address.
@@ -63,6 +76,7 @@ echo ">>> ctx=$CTX  file=$FILE"
 # (enables correct tool-calling / formatting). Extra per-model sampling from FLAGS.
 exec "$LLAMA_SERVER" \
   -m "$FILE" \
+  "${MMPROJ_ARG[@]}" \
   --host 0.0.0.0 --port "$PORT" \
   -ngl 99 -c "$CTX" --jinja \
   $FLAGS "$@"

@@ -18,16 +18,21 @@ import asyncio
 import json
 import secrets
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 
 from ..engine import paths
 from . import auth as gw_auth
 from .jobs import JobManager, JobStore
 from .launch import load_gateway_config  # re-exported: config lives in launch (single source of truth)
 from .swap import Busy, ModelManager, ServeFailed, UnknownModel
+
+# The single-file browser chat UI, served from the gateway so it shares the /v1 origin (no CORS) and
+# is reachable on the LAN at the gateway's host:port. Its model dropdown is driven by GET /v1/models.
+WEBCHAT_HTML = Path(__file__).resolve().parent / "webchat" / "index.html"
 
 # Per-request headers we forward upstream / drop. Hop-by-hop and length headers must not be copied
 # (we re-stream the body, so the original framing no longer applies).
@@ -90,6 +95,16 @@ def build_app(*, manager: ModelManager | None = None, idle_timeout: float = 0.0,
     def health():
         mgr: ModelManager = app.state.manager
         return {"status": "ok", "model": mgr.current, "alive": mgr._alive()}
+
+    @app.get("/")                                # open: the chat page itself carries no secrets;
+    def root():                                  #       its /v1 calls still go through require_auth
+        return RedirectResponse("/chat")
+
+    @app.get("/chat")
+    def chat_ui():
+        if not WEBCHAT_HTML.exists():            # defensive: the UI ships in-package, but don't 500
+            raise HTTPException(status_code=404, detail="chat UI not installed")
+        return FileResponse(WEBCHAT_HTML, media_type="text/html")
 
     @app.get("/status", dependencies=auth_dep)
     def status():
@@ -251,21 +266,27 @@ def build_app(*, manager: ModelManager | None = None, idle_timeout: float = 0.0,
     return app
 
 
-def run(host: str | None = None, port: int | None = None, idle_timeout: float | None = None) -> None:
-    """Launch the gateway with uvicorn. Unset args fall back to the [gateway] config / defaults."""
+def run(host: str | None = None, port: int | None = None, idle_timeout: float | None = None,
+        open_access: bool = False) -> None:
+    """Launch the gateway with uvicorn. Unset args fall back to the [gateway] config / defaults.
+    `open_access=True` disables bearer auth entirely (no token required from anyone) — only do this on
+    a trusted LAN, since any reachable device can then drive the GPU."""
     import uvicorn
 
     cfg = load_gateway_config()
     host = host if host is not None else cfg["host"]
     port = port if port is not None else cfg["port"]
     idle_timeout = idle_timeout if idle_timeout is not None else cfg["idle_timeout_s"]
-    token = gw_auth.load_or_create_token()
+    token = "" if open_access else gw_auth.load_or_create_token()
     app = build_app(idle_timeout=idle_timeout, token=token,
                     self_url=f"http://127.0.0.1:{port}")
     print(f">>> peakstone gateway on http://{host}:{port}/v1  (OpenAI-compatible; model-swapping)")
+    print(f">>> browser chat UI:  http://{host}:{port}/chat")
     print(f">>> idle-unload: {f'{idle_timeout:g}s' if idle_timeout > 0 else 'off'}")
-    if host not in ("127.0.0.1", "localhost"):
-        # exposed beyond loopback → LAN clients (editors, etc.) must present this token
-        print(f">>> auth token (paste into your editor's API-key field): {token}")
+    if open_access:
+        print(">>> auth: DISABLED (--open) — any device that can reach this host may use the GPU")
+    elif host not in ("127.0.0.1", "localhost"):
+        # exposed beyond loopback → LAN clients (editors, the chat UI, etc.) must present this token
+        print(f">>> auth token (paste into the chat Settings or your editor's API-key field): {token}")
         print(f">>>   stored at {gw_auth.TOKEN_PATH}  ·  loopback is exempt")
     uvicorn.run(app, host=host, port=port)

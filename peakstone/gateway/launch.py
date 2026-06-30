@@ -19,18 +19,28 @@ from pathlib import Path
 from ..engine import paths
 
 
+def _gateway_block() -> dict:
+    """The committed [gateway] block, overlaid by the per-machine ~/.peakstone/config.toml override
+    (its keys win) so a machine can opt into LAN/open settings without editing the tracked config."""
+    g: dict = {}
+    for p in (paths.config_path(), paths.user_config_path()):
+        try:
+            g.update(tomllib.loads(p.read_text()).get("gateway", {}))
+        except (OSError, tomllib.TOMLDecodeError):
+            pass
+    return g
+
+
 def load_gateway_config() -> dict:
-    """Read the [gateway] block from the engine config.toml (host/port/idle_timeout_s). This is the
-    single source of truth for where the gateway binds; launch + client defaults all derive from it."""
-    try:
-        cfg = tomllib.loads(paths.config_path().read_text())
-    except (OSError, tomllib.TOMLDecodeError):
-        cfg = {}
-    g = cfg.get("gateway", {})
+    """Read the [gateway] block (host/port/idle_timeout_s/open). This is the single source of truth
+    for where the gateway binds; launch + client defaults all derive from it. The committed defaults
+    in engine/config.toml are overridden per-machine by ~/.peakstone/config.toml (see _gateway_block)."""
+    g = _gateway_block()
     return {
         "host": g.get("host", "127.0.0.1"),
         "port": int(g.get("port", 12434)),
         "idle_timeout_s": float(g.get("idle_timeout_s", 0)),
+        "open": bool(g.get("open", False)),   # TUI auto-spawn disables auth when true (trusted LAN)
     }
 
 
@@ -66,27 +76,32 @@ def gateway_log_path() -> Path:
 
 
 def spawn_detached(host: str | None = None, port: int | None = None, idle_timeout: float = 0.0,
-                   *, popen=subprocess.Popen) -> subprocess.Popen:
+                   *, open_access: bool = False, popen=subprocess.Popen) -> subprocess.Popen:
     """Start `python -m peakstone.gateway` in its own session (survives the parent), logging to
-    results/gateway.log."""
+    results/gateway.log. `open_access` forwards --open (auth disabled)."""
     host, port = _resolve(host, port)
     log = gateway_log_path()
     log.parent.mkdir(parents=True, exist_ok=True)
     cmd = [sys.executable, "-m", "peakstone.gateway", "--host", host, "--port", str(port),
            "--idle-timeout", str(idle_timeout)]
+    if open_access:
+        cmd.append("--open")
     with open(log, "ab") as logf:
         return popen(cmd, cwd=str(paths.repo_root()), stdout=logf, stderr=subprocess.STDOUT,
                      start_new_session=True, env={**os.environ})
 
 
 def ensure_running(host: str | None = None, port: int | None = None, idle_timeout: float = 0.0,
-                   *, wait: float = 15.0) -> bool:
+                   *, wait: float = 15.0, open_access: bool | None = None) -> bool:
     """Ensure a gateway is up at host:port, spawning one detached if not. Returns True once it answers
-    /health (or was already running); False if it didn't come up in `wait` seconds."""
+    /health (or was already running); False if it didn't come up in `wait` seconds. `open_access`
+    forwards --open (auth off) to a spawned daemon; None => take it from config ([gateway].open)."""
     host, port = _resolve(host, port)
+    if open_access is None:
+        open_access = load_gateway_config()["open"]
     if is_running(host, port):
         return True
-    spawn_detached(host, port, idle_timeout)
+    spawn_detached(host, port, idle_timeout, open_access=open_access)
     deadline = time.monotonic() + wait
     while time.monotonic() < deadline:
         if is_running(host, port):

@@ -8,9 +8,19 @@ host = "127.0.0.1"
 # `peakstone serve` — the standing llama-swap-style OpenAI gateway. One front port; the request's
 # `model` field selects which registry model is loaded (the backend llama-server is swapped on
 # demand). Use host "0.0.0.0" to expose it on the LAN (like serve.sh); 127.0.0.1 keeps it local.
-host = "127.0.0.1"
+host = "127.0.0.1"   # local-only by default; set "0.0.0.0" to expose on the LAN (see override note below)
 port = 12434   # default front port (11434 is Ollama's; keep them distinct so both can run)
 idle_timeout_s = 0   # unload the model after this many idle seconds to free VRAM; 0 = never
+# When the TUI auto-spawns the gateway, `open = true` starts it with auth disabled (like
+# `serve --open`) so LAN devices reach /chat + /v1 without a bearer token. Off here by default.
+open = false
+#
+# These are the committed defaults — local-only and auth-on. To expose the gateway on YOUR machine
+# WITHOUT editing this tracked file, drop a per-machine override at ~/.peakstone/config.toml (path:
+# $PEAKSTONE_HOME/config.toml). Its [gateway] keys win over the ones here. e.g.:
+#     [gateway]
+#     host = "0.0.0.0"
+#     open = true
 
 [models]
 # model name -> port (must match serve/models.toml)

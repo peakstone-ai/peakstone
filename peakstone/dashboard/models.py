@@ -49,6 +49,7 @@ class ModelEntry:
     ctx: int | None
     flags: str = ""
     family: str = ""
+    mmproj: str | None = None   # vision projector GGUF (repo-relative); set => multimodal
 
     @property
     def fam(self) -> str:
@@ -66,9 +67,25 @@ class ModelEntry:
         return (REPO / self.file) if self.file else None
 
     @property
+    def multimodal(self) -> bool:
+        """True if a vision projector is declared (so the model can take images)."""
+        return bool(self.mmproj)
+
+    @property
+    def mmproj_path(self) -> Path | None:
+        return (REPO / self.mmproj) if self.mmproj else None
+
+    @property
+    def mmproj_present(self) -> bool:
+        p = self.mmproj_path
+        return bool(p and p.exists())
+
+    @property
     def present(self) -> bool:
         p = self.path
-        return bool(p and p.exists())
+        if not (p and p.exists()):
+            return False
+        return self.mmproj_present if self.mmproj else True   # multimodal needs the projector too
 
     @property
     def size_gb(self) -> float | None:
@@ -97,7 +114,8 @@ def load_registry() -> dict[str, ModelEntry]:
         return {}
     data = tomllib.loads(MODELS_TOML.read_text())
     return {n: ModelEntry(n, m.get("repo"), m.get("file"), m.get("port"), m.get("ctx"),
-                          m.get("flags", ""), m.get("family", "")) for n, m in data.items()}
+                          m.get("flags", ""), m.get("family", ""), m.get("mmproj"))
+            for n, m in data.items()}
 
 
 def group_by_family(registry: dict[str, ModelEntry]) -> dict[str, list[ModelEntry]]:
@@ -246,21 +264,41 @@ def download(entry: ModelEntry, log=lambda s: None, *, progress=None, cancel=Non
         return True
     local_dir = REPO / "models" / entry.name
     local_dir.mkdir(parents=True, exist_ok=True)
-    filename = Path(entry.file).name
-    log(f"downloading {entry.repo} / {filename} → {local_dir} …")
-    if progress is not None:                          # show the right size immediately — the xet backend
-        progress(0, remote_size(entry.repo, filename))   # has a quiet startup before the first byte
-    t0 = time.monotonic()
-    try:
-        _fetch(entry.repo, filename, str(local_dir), progress=progress, cancel=cancel, log=log)
-    except _Cancelled:
-        log("download cancelled")
-        return False
-    except Exception as e:  # noqa: BLE001  (network/auth/missing file)
-        log(f"download failed: {e}")
-        return False
-    elapsed = time.monotonic() - t0
-    if elapsed > 0 and entry.present and entry.path:
-        bandwidth.record(entry.path.stat().st_size, elapsed, "hf")   # calibrate run estimates
-    log(f"downloaded {entry.name} ({entry.size_gb} GB)")
+
+    # The GGUF weights. Skipped if already on disk (e.g. only the projector is missing).
+    if not (entry.path and entry.path.exists()):
+        filename = Path(entry.file).name
+        log(f"downloading {entry.repo} / {filename} → {local_dir} …")
+        if progress is not None:                          # show the right size immediately — the xet backend
+            progress(0, remote_size(entry.repo, filename))   # has a quiet startup before the first byte
+        t0 = time.monotonic()
+        try:
+            _fetch(entry.repo, filename, str(local_dir), progress=progress, cancel=cancel, log=log)
+        except _Cancelled:
+            log("download cancelled")
+            return False
+        except Exception as e:  # noqa: BLE001  (network/auth/missing file)
+            log(f"download failed: {e}")
+            return False
+        elapsed = time.monotonic() - t0
+        if elapsed > 0 and entry.path.exists():
+            bandwidth.record(entry.path.stat().st_size, elapsed, "hf")   # calibrate run estimates
+        log(f"downloaded {entry.name} ({entry.size_gb} GB)")
+
+    # The vision projector for a multimodal model (same repo, into the same models/<name>/ dir).
+    if entry.mmproj and not entry.mmproj_present:
+        mmname = Path(entry.mmproj).name
+        log(f"downloading projector {entry.repo} / {mmname} …")
+        if progress is not None:
+            progress(0, remote_size(entry.repo, mmname))
+        try:
+            _fetch(entry.repo, mmname, str(local_dir), progress=progress, cancel=cancel, log=log)
+        except _Cancelled:
+            log("projector download cancelled")
+            return False
+        except Exception as e:  # noqa: BLE001
+            log(f"projector download failed: {e}")
+            return False
+        log(f"downloaded projector for {entry.name}")
+
     return entry.present

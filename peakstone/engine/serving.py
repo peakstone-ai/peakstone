@@ -119,11 +119,25 @@ class ServeModel:
     ctx: int | None
     file: str | None = None
     flags: str = ""
+    mmproj: str | None = None   # vision projector GGUF (repo-relative); when set, serve.sh passes
+                                # --mmproj so the model accepts image input (multimodal).
+
+    @property
+    def multimodal(self) -> bool:
+        """True if a vision projector is declared (so the model can take images)."""
+        return bool(self.mmproj)
+
+    @property
+    def mmproj_present(self) -> bool:
+        return bool(self.mmproj and (paths.repo_root() / self.mmproj).exists())
 
     @property
     def present(self) -> bool:
-        """Whether the GGUF is on disk (so a request can actually load it without a download)."""
-        return bool(self.file and (paths.repo_root() / self.file).exists())
+        """Whether everything needed to load is on disk so a request can load it without a download:
+        the GGUF, plus the vision projector when the model is multimodal."""
+        if not (self.file and (paths.repo_root() / self.file).exists()):
+            return False
+        return self.mmproj_present if self.mmproj else True
 
 
 def load_registry() -> dict[str, ServeModel]:
@@ -133,7 +147,8 @@ def load_registry() -> dict[str, ServeModel]:
     if not mt.exists():
         return {}
     data = tomllib.loads(mt.read_text())
-    return {n: ServeModel(n, m.get("port"), m.get("ctx"), m.get("file"), m.get("flags", ""))
+    return {n: ServeModel(n, m.get("port"), m.get("ctx"), m.get("file"), m.get("flags", ""),
+                          m.get("mmproj"))
             for n, m in data.items()}
 
 

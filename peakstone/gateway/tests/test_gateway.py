@@ -139,6 +139,28 @@ def test_health_and_status():
     assert st["current"] == "model-a" and st["inflight"] == 0 and st["models"] == ["model-a", "model-b"]
 
 
+# --- browser chat UI ---------------------------------------------------------------------------
+
+def test_chat_ui_served_and_root_redirects():
+    with client_for(make_manager(), mock_client([])) as c:
+        page = c.get("/chat")
+        assert page.status_code == 200
+        assert page.headers["content-type"].startswith("text/html")
+        assert "modelSelect" in page.text          # the model-selector dropdown is present
+        red = c.get("/", follow_redirects=False)
+        assert red.status_code in (307, 308) and red.headers["location"] == "/chat"
+
+
+def test_chat_ui_is_open_even_when_auth_is_on():
+    """The page itself carries no secret, so it loads without a token even from a LAN host; its /v1
+    calls still hit require_auth (covered by test_http_auth_lan_path)."""
+    app = build_app(manager=make_manager(), client=mock_client([]), token="sekret",
+                    start_worker=False, submit=None)
+    with TestClient(app, base_url="http://testserver") as c:
+        assert c.get("/chat").status_code == 200       # no Authorization header, still served
+        assert c.get("/v1/models").status_code == 401   # but the API stays guarded
+
+
 # --- auth --------------------------------------------------------------------------------------
 
 class FakeReq:

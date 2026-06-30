@@ -134,6 +134,14 @@ curl http://localhost:12434/v1/chat/completions \
   -d '{"model": "<model-name>", "messages": [{"role":"user","content":"hi"}]}'
 ```
 
+**Browser chat UI.** The gateway also serves a single-file chat app at **`http://localhost:12434/chat`**
+(root `/` redirects there). It's a multi-conversation UI with editable system prompts, image input,
+streaming + reasoning, and a **model selector** populated live from `GET /v1/models` — picking a model
+just puts its name in the request body, so the gateway loads/swaps it into VRAM on demand. Because it's
+served from the gateway origin it shares `/v1` (no CORS) and is reachable on the LAN at the gateway's
+host:port. On a trusted network, `peakstone serve --host 0.0.0.0 --open` drops auth so any device can
+use it tokenlessly; otherwise paste the token into the chat's ⚙ Settings (see auth below).
+
 The gateway also owns the **benchmark job queue** (persisted to `results/jobs.db`), so the TUI/CLI are
 thin clients over it — **runs keep going after you quit the dashboard**, and reconnecting shows their
 state. Drive it headless with the `jobs` CLI:
@@ -162,7 +170,9 @@ curl http://<gpu-box>:12434/v1/chat/completions \
   -d '{"model": "<model-name>", "messages": [{"role":"user","content":"hi"}]}'
 ```
 
-The token is generated on first run; override it with `PEAKSTONE_GATEWAY_TOKEN`.
+The token is generated on first run; override it with `PEAKSTONE_GATEWAY_TOKEN`. On a trusted LAN you
+can skip tokens entirely with `peakstone serve --host 0.0.0.0 --open` (auth disabled — any reachable
+device can drive the GPU, so use it only at home).
 
 **Sharing one GPU.** Only one model is resident at a time. While a benchmark job runs it *pins* the GPU
 to that model: chat requests for the same model are served, but a request for a *different* model gets

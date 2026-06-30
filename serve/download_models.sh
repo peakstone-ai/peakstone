@@ -12,6 +12,7 @@ ENTRIES=(
   "glm-4.7-flash|unsloth/GLM-4.7-Flash-GGUF|GLM-4.7-Flash-UD-Q4_K_XL.gguf"
   "qwen3-coder|unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF|Qwen3-Coder-30B-A3B-Instruct-UD-Q4_K_XL.gguf"
   "devstral|unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF|Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf"
+  "dolphin3.0-mistral-24b|bartowski/cognitivecomputations_Dolphin3.0-Mistral-24B-GGUF|cognitivecomputations_Dolphin3.0-Mistral-24B-Q4_K_M.gguf"
   "phi-4-mini|unsloth/Phi-4-mini-instruct-GGUF|Phi-4-mini-instruct-Q6_K.gguf"
   "qwen3.6-27b|unsloth/Qwen3.6-27B-GGUF|Qwen3.6-27B-UD-Q4_K_XL.gguf"
   "qwen3.6-35b-a3b|unsloth/Qwen3.6-35B-A3B-GGUF|Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"

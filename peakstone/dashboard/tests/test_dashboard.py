@@ -275,6 +275,46 @@ def test_download_streams_with_progress(monkeypatch, tmp_path):
     assert progress[1] == (400, 1000) and progress[-1] == (1000, 1000)  # byte-accurate updates
 
 
+def test_download_fetches_vision_projector(monkeypatch, tmp_path):
+    """A multimodal entry whose GGUF is already on disk but whose projector is missing fetches ONLY the
+    projector (and `present`/multimodal reflect the projector, not just the weights)."""
+    from pathlib import Path
+    from peakstone.dashboard import models
+    monkeypatch.setattr(models, "REPO", tmp_path)
+    monkeypatch.setattr(models, "remote_size", lambda r, f: 1000)
+    e = models.ModelEntry("m", "org/repo", "models/m/x.gguf", 8081, 32768, "", "",
+                          "models/m/mmproj-BF16.gguf")
+    (tmp_path / "models" / "m").mkdir(parents=True)
+    (tmp_path / "models" / "m" / "x.gguf").write_bytes(b"x" * 10)   # weights already present
+    assert not e.present and e.multimodal and not e.mmproj_present   # projector still missing
+
+    fetched = []
+
+    def fake_fetch(repo, filename, local_dir, *, progress, cancel, log):
+        fetched.append(filename)
+        (Path(local_dir) / filename).write_bytes(b"p" * 50)
+
+    ok = models.download(e, _fetch=fake_fetch)
+    assert ok is True and e.present and e.mmproj_present
+    assert fetched == ["mmproj-BF16.gguf"]                           # only the projector, weights untouched
+
+
+def test_registry_parses_mmproj(monkeypatch, tmp_path):
+    """The `mmproj` key flows from serve/models.toml into ModelEntry / ServeModel as the vision flag."""
+    from peakstone.dashboard import models
+    from peakstone.engine import serving
+    toml = tmp_path / "serve" / "models.toml"
+    toml.parent.mkdir(parents=True)
+    toml.write_text('["vis"]\nrepo="o/r"\nfile="models/vis/m.gguf"\nmmproj="models/vis/mm.gguf"\n'
+                    'port=8081\nctx=4096\n\n["txt"]\nrepo="o/r"\nfile="models/txt/m.gguf"\nport=8082\nctx=4096\n')
+    monkeypatch.setattr(models, "MODELS_TOML", toml)
+    monkeypatch.setattr(serving.paths, "models_toml", lambda: toml)
+    assert models.load_registry()["vis"].mmproj == "models/vis/mm.gguf"
+    assert models.load_registry()["txt"].mmproj is None
+    sreg = serving.load_registry()
+    assert sreg["vis"].multimodal and not sreg["txt"].multimodal
+
+
 def test_submit_bundle(monkeypatch):
     from peakstone.dashboard import client
 
