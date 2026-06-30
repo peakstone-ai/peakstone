@@ -85,17 +85,37 @@ _NET_ISOLATE = _net_isolate_prefix()
 # into the test runner (only the env providers use real docker), so bundles must record the truth.
 SANDBOX_MECHANISM = "subprocess"
 _sandbox_warned = False
+_fc_active: bool | None = None
+
+
+def _use_fc() -> bool:
+    """True when PEAKSTONE_SANDBOX=firecracker AND a usable microVM stack is present. Tests execute
+    inside a warm guest (real fs/uid/kernel isolation) instead of a host subprocess. Cached; falls
+    back to subprocess (with a warning) if requested but unavailable."""
+    global _fc_active
+    if _fc_active is None:
+        _fc_active = False
+        if os.environ.get("PEAKSTONE_SANDBOX") == "firecracker":
+            from .env import fc_sandbox
+            if fc_sandbox.available():
+                _fc_active = True
+            else:
+                import sys
+                print("[sandbox] PEAKSTONE_SANDBOX=firecracker but no KVM/rootfs; using subprocess",
+                      file=sys.stderr)
+    return _fc_active
 
 
 def effective_sandbox(requested: str | None = None) -> str:
     """The sandbox mechanism that actually ran — never a value the runner only *claims*."""
     global _sandbox_warned
-    if requested and requested != SANDBOX_MECHANISM and not _sandbox_warned:
+    actual = "firecracker" if _use_fc() else SANDBOX_MECHANISM
+    if requested and requested != actual and not _sandbox_warned:
         import sys
-        print(f"[sandbox] config requested {requested!r} but only {SANDBOX_MECHANISM!r} is "
-              f"implemented; recording the actual mechanism in the bundle", file=sys.stderr)
+        print(f"[sandbox] config requested {requested!r} but {actual!r} is what ran; "
+              f"recording the actual mechanism in the bundle", file=sys.stderr)
         _sandbox_warned = True
-    return SANDBOX_MECHANISM
+    return actual
 
 
 @dataclass
@@ -204,6 +224,10 @@ def _apply_limits():  # runs in the forked child before exec; inherited by its c
 def _run(cmd: list[str], cwd: Path, timeout: int, env: dict) -> tuple[int, str, str, float, bool]:
     import signal
     import time
+    if _use_fc():   # execute inside a warm microVM (real isolation) instead of a host subprocess
+        from .env import fc_sandbox
+        rc, out, err, dur, timed_out = fc_sandbox.run(cmd, Path(cwd), timeout, env)
+        return rc, _redact_secrets(out[-200_000:]), _redact_secrets(err[-200_000:]), dur, timed_out
     t0 = time.time()
     timed_out = False
     cmd = [*_NET_ISOLATE, *cmd]   # offline: real network I/O fails fast instead of hanging to timeout
@@ -239,7 +263,9 @@ def _run_measured(cmd: list[str], cwd: Path, timeout: int, env: dict):
     """Like _run, but also returns peak RSS (KiB) of the process tree via GNU `/usr/bin/time -v`.
     The report goes to a dot-file so the child's own stdout/stderr (which the runners parse for
     pass/fail) stay clean. Returns (rc, out, err, dur, timed_out, peak_rss_kb|None)."""
-    if not _TIME_BIN:
+    if _use_fc() or not _TIME_BIN:
+        # guest RSS-via-time isn't wired through the agent yet; the FC path reports no peak_rss (the
+        # ctx-efficiency axis just skips it for those runs). Follow-up: read the guest .timev back.
         return (*_run(cmd, cwd, timeout, env), None)
     report = cwd / ".timev"
     rc, out, err, dur, timed_out = _run([_TIME_BIN, "-v", "-o", str(report), *cmd], cwd, timeout, env)

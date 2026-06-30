@@ -19,7 +19,7 @@ ARG TARGETARCH=amd64
 
 # --- base: python3.12 + pytest, native build deps, scm/utils ---------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        ca-certificates curl git xz-utils software-properties-common tzdata \
+        ca-certificates curl git xz-utils software-properties-common tzdata time \
         python3 python3-venv python3-pip \
         build-essential pkg-config libssl-dev \
     && pip3 install --no-cache-dir --break-system-packages pytest \
