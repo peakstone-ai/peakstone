@@ -1477,6 +1477,17 @@ def test_dashboard_v_opens_quants(monkeypatch):
     asyncio.run(scenario())
 
 
+def test_queue_pause_resume_survive_daemon_down(monkeypatch):
+    """Review M9: a momentarily-unreachable daemon must not crash the TUI on a pause/resume keypress."""
+    def boom(*a, **k):
+        raise client.APIError("connection refused")
+    monkeypatch.setattr(client, "pause_job", boom)
+    monkeypatch.setattr(client, "resume_job", boom)
+    app = Dashboard("http://down")
+    assert app.pause_daemon_job("j1") is False      # swallowed, returns False (no exception)
+    assert app.resume_daemon_job("j1") is False
+
+
 def test_app_handles_api_down(monkeypatch):
     def boom(*a, **k):
         raise client.APIError("connection refused")

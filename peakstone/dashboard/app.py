@@ -694,6 +694,18 @@ class Dashboard(App):
         except client.APIError:
             return False
 
+    def pause_daemon_job(self, jid: str) -> bool:
+        try:
+            return client.pause_job(jid)
+        except client.APIError:   # daemon momentarily unreachable (restart/timeout) — don't crash the TUI
+            return False
+
+    def resume_daemon_job(self, jid: str) -> bool:
+        try:
+            return client.resume_job(jid)
+        except client.APIError:
+            return False
+
     def clear_queued(self) -> int:
         """Cancel every queued (not-yet-running) job on the daemon — runs and downloads alike."""
         n = 0
@@ -1550,9 +1562,9 @@ class QueueScreen(ModalScreen):
         job = next((j for j in self.app._daemon_jobs if j.get("id") == ref), None)
         st = job.get("status") if job else None
         if st == "paused":
-            self.notify("resumed" if client.resume_job(ref) else "couldn't resume")
+            self.notify("resumed" if self.app.resume_daemon_job(ref) else "couldn't resume")
         elif st in ("queued", "running"):
-            self.notify("paused" if client.pause_job(ref) else "couldn't pause")
+            self.notify("paused" if self.app.pause_daemon_job(ref) else "couldn't pause")
         else:
             self.notify("only queued/running/paused jobs can be paused")
             return
@@ -2078,7 +2090,10 @@ class ModelsScreen(ModalScreen):
     def action_unload(self) -> None:
         """Free VRAM by unloading the gateway's currently-loaded model (refused while a run holds it).
         Off-thread because stopping llama-server can take a moment; the hardware panel updates itself."""
-        ok, detail = client.unload_model()
+        try:
+            ok, detail = client.unload_model()
+        except client.APIError as e:   # daemon unreachable — notify, don't let the worker crash the app
+            ok, detail = False, f"unload failed: {e}"
         self.app.call_from_thread(self.notify, detail, severity="information" if ok else "warning")
 
     def action_quants(self) -> None:
