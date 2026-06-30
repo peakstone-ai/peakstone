@@ -240,6 +240,27 @@ def test_pin_surfaces_in_http_503():
     assert "busy" in busy.json()["detail"]
 
 
+def test_idle_unload_never_reaps_a_pinned_model():
+    """Review M8: with idle_timeout>0, the idle watcher must not stop a PINNED (running-benchmark)
+    model just because _inflight hit 0 between requests; only an unpinned idle model is reaped."""
+    now = [1000.0]
+    stops = []
+
+    async def scenario():
+        mgr = make_manager(idle_timeout=10.0, stop_calls=stops, _clock=lambda: now[0])
+        await mgr.pin("model-a")                      # a benchmark owns the GPU
+        now[0] += 100                                 # long past the idle timeout, _inflight == 0
+        await mgr._idle_check()
+        assert mgr.current == "model-a" and not stops  # pinned model survives
+        mgr.unpin()
+        now[0] += 100
+        await mgr._idle_check()                        # now it's fair game
+        assert mgr.current is None and stops
+        await mgr.aclose()
+
+    asyncio.run(scenario())
+
+
 # --- jobs: REST surface (worker off) ----------------------------------------------------------
 
 def test_jobs_rest_lifecycle(tmp_path):

@@ -163,7 +163,9 @@ class ModelManager:
         async with self._lock:
             self.pinned = name
             try:
-                return await self._ensure_locked(name)
+                m = await self._ensure_locked(name)
+                self._last_activity = self._clock()   # the pin is activity; don't start idle-stale
+                return m
             except BaseException:
                 self.pinned = None
                 raise
@@ -207,13 +209,18 @@ class ModelManager:
     # --- idle unload ----------------------------------------------------------------------------
 
     async def _idle_check(self) -> None:
-        if self.current is None or self._inflight > 0:
+        # Never reap a PINNED model: a running benchmark holds the pin, and _inflight legitimately
+        # drops to 0 between proxied requests (local scoring / sandbox execution). Without this the
+        # watcher stops llama-server mid-run, forcing a 30s-2min in-request reload that blows the
+        # per-request timeout and zero-scores challenges — silent corruption of the headline numbers.
+        # Mirrors the Busy guard in unload(); review finding M8.
+        if self.pinned is not None or self.current is None or self._inflight > 0:
             return
         if self._clock() - self._last_activity <= self._idle_timeout:
             return
         async with self._lock:
-            # re-check under the lock: a request may have arrived while we waited for it
-            if self.current and self._inflight == 0 and \
+            # re-check under the lock: a request may have arrived (or a pin landed) while we waited
+            if self.pinned is None and self.current and self._inflight == 0 and \
                     self._clock() - self._last_activity > self._idle_timeout:
                 await asyncio.to_thread(self._stop, self.proc)
                 self.last_swap = {"from": self.current, "to": None}
