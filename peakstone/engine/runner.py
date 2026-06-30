@@ -412,6 +412,14 @@ def main(argv=None):
     if args.judge_only:
         return run_judge_only(args, judge_model, make_judge_client())
 
+    # A bundle is signed + content-addressed to ONE model's identity (file_sha256, sampling, serve_flags)
+    # and carries a single run verdict; a multi-model run would mis-attribute the other models' results.
+    # Run each model separately (the daemon already queues one model per job).
+    if args.bundle and len(_csv(args.models) or []) > 1:
+        print("--bundle runs one model at a time (a bundle is signed + attributed to a single model). "
+              "Run each model in its own invocation.", file=sys.stderr)
+        return 2
+
     if args.env:
         return run_env_agent(args, host, ports, run_cfg)
 
@@ -800,6 +808,8 @@ def main(argv=None):
             attempt_log: list = []        # per-attempt record (answer/reasoning/test_error) for --retries
             pre_conf = self_correct = None   # calibration probes (only with --calibration)
             recovered = False                # self-repair: first try failed but a retry fixed it
+            first_truncated = False          # did the FIRST attempt hit the token budget? (defaulted for --reference)
+            first_trunc_phase = None         # …and was it cut mid-thinking or mid-answer? (read at _row, all paths)
             if args.reference:
                 files = ch.reference_files()
                 response, tps, lat, ptoks, ctoks = "(reference)", None, None, 0, 0
@@ -817,8 +827,6 @@ def main(argv=None):
                 max_attempts = 1 + max(0, args.retries)
                 run = None
                 first_run = first_response = first_files = None
-                first_truncated = False           # did the FIRST attempt hit the token budget?
-                first_trunc_phase = None          # …and was it cut mid-thinking or mid-answer?
                 response, tps, lat, ptoks, ctoks = None, None, None, 0, 0
                 files, looped = {}, False
                 # calibration (pre-hoc): how confident is the model BEFORE it attempts the task?
@@ -954,6 +962,9 @@ def main(argv=None):
     # not worth testing. Recorded in the bundle and faceted on the leaderboard.
     if run_abandoned:
         meta["abandoned_categories"] = run_abandoned
+        # A pass in ANY scoring branch (math/tools/safety/agentic — not just the tests path that sets
+        # run_passed_any inline) means this config is worth testing; don't brand it not_capable.
+        run_passed_any = run_passed_any or any((r.get("final_score") or 0) > 0 for r in results)
         if not run_passed_any and not args.reference:
             meta["run_status"] = "not_capable"
             meta["run_verdict"] = {"reason": "repetition_loops",

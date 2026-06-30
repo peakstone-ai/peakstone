@@ -103,3 +103,10 @@ def test_not_capable_bundle_validates():
                 "passed": 0, "total": 3, "response": "x", "error": "repetition-loop"}]
     b = B.produce_bundle(meta, results, sign=False)
     assert b["run_status"] == "not_capable" and b["abandoned_categories"] == ["python", "go"]
+
+
+def test_multi_model_bundle_refused():
+    """A bundle is signed + attributed to ONE model; --bundle with >1 model must refuse up front
+    (else the other models' results get mis-attributed to models[0]). Review finding M7."""
+    assert runner.main(["--models", "a,b", "--bundle", "--no-judge"]) == 2
+    # single-model --bundle is the normal path and is NOT blocked by this guard
