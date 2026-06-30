@@ -382,6 +382,45 @@ fully-deterministic axis.
 Pick two runs of the same challenge, see prompts/outputs/test results side by side. Makes the data
 visceral and shareable; trivial given transcripts are already stored.
 
+### ★ Idea 9 — Challenge-authoring & peer-evaluation — **the meta-capability axis (post-release flagship)**
+> Status: designed, **not built**. Big + research-grade; build *after* launch (it needs seed runs and
+> careful verification). It is the natural fusion of the Private Test Crafter (Idea 2 + commit-and-
+> reveal), calibration, and the unsolved board (Idea 5). No other benchmark asks *"can the model author
+> and calibrate novel challenges?"* — a strong differentiator.
+
+A challenge family `challenge-authoring`, ridden as a modifier in `standard`, with **two assignments**
+per language/category (math / coding / agentic / multimodal-later):
+
+1. **Author.** Write a *new* challenge (spec + tests + reference solution) into the private dir,
+   targeted at ~the difficulty of the **hardest challenge this model passed** in that category. Anchor
+   it with 3 few-shot examples from its own run — **2 it solved + 1 it didn't** — so it has a concrete
+   difficulty band + inspiration. Output goes to the private dir keyed by `model-quant-ctx-temp`.
+   - *Variant — bulk "challenge factory" for fast gen:* instead of the tight 3-example anchor, load
+     *many* challenges into context and run the author repeatedly across a `{difficulty × language/
+     category}` matrix ("write an easy Python one", "a hard Go one", …). Parameterized, batched
+     generation — fast bulk authoring; the validity + novelty + empirical-difficulty gates below still
+     decide what's kept.
+2. **Evaluate (peer review).** Given other local models' previously-authored private challenges (same
+   key scheme), rate each (valid? novel? well-specified?) **and estimate its difficulty tier**.
+
+Scoring has an **objective anchor**, not just LLM-judge vibes:
+- *Validity* — the authored challenge must pass the existing **reference-must-pass gate** (`propose.py`):
+  reference solution passes its own tests, deterministic, sandboxed, no network. Plus a **novelty/near-
+  duplicate check** vs the corpus. Binary, automatic.
+- *True difficulty* — run each valid authored challenge against the **local roster** → empirical
+  pass-rate = its real tier. That's the ground truth for both the author's difficulty-targeting score
+  *and* the evaluator's difficulty-estimate score (scored like calibration). This is the expensive
+  step → run on a small probe roster or as a batch realization pass.
+- *Authoring score* = valid × on-target-difficulty × novel. *Evaluation score* = difficulty-estimate
+  accuracy + agreement with peer/ground-truth ratings.
+
+Pairs with commit-and-reveal: a good authored challenge can be committed, then revealed into the public
+corpus (contamination lifecycle — gold held-out for the author, normal test for newer models). **Honest
+risks:** verifying *quality* (vs mere validity) hinges on the empirical-difficulty run (compute-heavy);
+circularity/self-preference in model-judges-model (mitigate with multiple evaluators + ground-truth
+anchoring); gaming via trivial/broken/duplicate challenges (mitigate with the validity + novelty gates).
+A different, heavier cost profile than a normal run — another reason it's a deliberate post-release build.
+
 ---
 
 ## 8. Could it become the standard for local-LLM testing?
