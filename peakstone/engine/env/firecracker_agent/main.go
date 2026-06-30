@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -147,12 +148,46 @@ func rooted(p string) string {
 	return filepath.Join("/work", p)
 }
 
+// baseEnv is the environment for executed commands. As PID 1 we inherit almost nothing from the
+// kernel (notably no PATH), so a bare `sh -c "go test"` couldn't find the toolchains. Seed from
+// /etc/environment — where the image declares its PATH/GOROOT/CARGO_HOME/etc — and guarantee a PATH.
+// Loaded once; per-request env (r.Env) overlays it.
+var baseEnv = loadBaseEnv()
+
+func loadBaseEnv() []string {
+	m := map[string]string{}
+	for _, kv := range os.Environ() {
+		if i := strings.IndexByte(kv, '='); i > 0 {
+			m[kv[:i]] = kv[i+1:]
+		}
+	}
+	if data, err := os.ReadFile("/etc/environment"); err == nil { // KEY=VALUE / KEY="VALUE" lines
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			if i := strings.IndexByte(line, '='); i > 0 {
+				m[strings.TrimSpace(line[:i])] = strings.Trim(strings.TrimSpace(line[i+1:]), "\"'")
+			}
+		}
+	}
+	if m["PATH"] == "" {
+		m["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+	}
+	out := make([]string, 0, len(m))
+	for k, v := range m {
+		out = append(out, k+"="+v)
+	}
+	return out
+}
+
 func run(r req) map[string]any {
 	cwd := r.Cwd
 	if cwd == "" {
 		cwd = "/work"
 	}
-	env := os.Environ()
+	env := append([]string(nil), baseEnv...)
 	for k, v := range r.Env {
 		env = append(env, k+"="+v)
 	}
