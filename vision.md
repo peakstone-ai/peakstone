@@ -452,6 +452,18 @@ machinery already mostly implements — make it the *default*, not a flag):
    model+config re-runs identically and two submitters can verify each other (this is what feeds
    the trust tier).
 
+> **A "Peakstone" = a frozen release of a level (post-release idea).** `(level, version,
+> content_hash)` already *defines* the collection — e.g. `standard@2026-06-30`. The natural artifact
+> is to **freeze** it as a small versioned **manifest**: the ordered challenge ids + each one's
+> `content_hash` + the suite `content_hash`. That makes a Peakstone a portable, immutable,
+> reproducible release anyone can reconstruct and verify (regenerate the imported challenges, checkout
+> the native ones, re-check the hashes). Prefer this over materializing the collection as a folder of
+> filesystem **symlinks**: the imported corpora are gitignored/regenerated, so symlink targets aren't
+> versioned or portable, and the manifest+hash is already the single source of truth the bundle
+> records. The dynamic `levels.resolve()` stays "the current standard"; a frozen manifest snapshots a
+> dated release. (Vocabulary: individual items are *challenges*; a *Peakstone* is our curated
+> collection — see the renamed TUI.)
+
 If launch nails this — *the right, defensible, reproducible test set chosen automatically per
 model* — Peakstone ships with its core promise intact. If it ships uniform-or-everything, the first
 impression is "another saturated leaderboard," and the contamination thesis is undercut by
