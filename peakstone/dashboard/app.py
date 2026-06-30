@@ -357,7 +357,6 @@ class Dashboard(App):
         ("v", "quants", "Quants"),
         ("m", "models", "Models"),
         ("u", "queue", "Queue"),
-        ("h", "history", "History"),
     ]
     SORTS = ["held_out_score", "code_score", "math_score", "self_verify_accuracy", "recovery_rate",
              "agent_score", "planner_score", "tok_per_s", "total_time_s", "score_per_1k_tokens",
@@ -763,9 +762,6 @@ class Dashboard(App):
         re-adopted next launch. Just stop mirroring and exit."""
         self.shutdown_runs()
         self.exit()
-
-    def action_history(self) -> None:
-        self.push_screen(HistoryScreen())
 
     def action_challenges(self) -> None:
         self.push_screen(ChallengesScreen())
@@ -1422,7 +1418,7 @@ class QueueScreen(ModalScreen):
             yield Static("", id="q-note")
 
     def on_mount(self) -> None:
-        self.query_one("#q-tbl", DataTable).add_columns("Queue", "Status", "Model", "Scope")
+        self.query_one("#q-tbl", DataTable).add_columns("Queue", "Status", "Model", "Scope", "Time")
         self._sig = None
         self._map: list = []     # row -> ("active", None) | ("daemon", job_id)
         self.refill()
@@ -1447,13 +1443,25 @@ class QueueScreen(ModalScreen):
         dmn = tuple((j.get("id"), j.get("status"), j.get("kind", "run")) for j in app._daemon_jobs)
         return (app.run_active, app._run_spec and app._run_spec["name"], app._run_job_id, dmn)
 
+    @staticmethod
+    def _job_time(job: dict) -> str:
+        """Elapsed for a running job (live), or total duration for a finished one; '' while queued."""
+        st, fin = job.get("started"), job.get("finished")
+        if job.get("status") == "running" and st:
+            return _fmt_dur(time.time() - st)
+        if st and fin:
+            return _fmt_dur(fin - st)
+        return ""
+
     def _tick(self) -> None:
-        if self._signature() != self._sig:   # only rebuild when something changed (keeps the cursor)
+        # rebuild on any change, AND every tick while a job runs so its elapsed time ticks up live
+        running = any(j.get("status") == "running" for j in self.app._daemon_jobs)
+        if running or self._signature() != self._sig:
             self.refill()
 
     def _add(self, t, label: str, job: dict) -> None:
         t.add_row(label, self._MARK.get(job.get("status"), "?"),
-                  (job.get("spec") or {}).get("model", "?"), self._job_scope(job))
+                  (job.get("spec") or {}).get("model", "?"), self._job_scope(job), self._job_time(job))
         self._map.append(("daemon", job["id"]))
 
     def refill(self) -> None:
@@ -1468,7 +1476,7 @@ class QueueScreen(ModalScreen):
         # The benchmark we're actively mirroring — shown from local state so it stays visible even if
         # the snapshot momentarily omits it.
         if app.run_active and app._run_spec and app._run_job_id is None:
-            t.add_row("run", "▶", app._run_spec["name"], "running")
+            t.add_row("run", "▶", app._run_spec["name"], "running", "")
             self._map.append(("active", None))
         # Run queue: the running benchmark, then those waiting behind it (GPU, one at a time).
         for j in sorted((r for r in runs if r.get("status") in ("running", "queued")),
@@ -1483,7 +1491,7 @@ class QueueScreen(ModalScreen):
         for j in sorted(done, key=lambda j: j.get("finished") or 0, reverse=True)[:6]:
             self._add(t, "⬇ dl" if j.get("kind") == "download" else "run", j)
         if not self._map:
-            t.add_row("", "idle", "(nothing queued)", "")
+            t.add_row("", "idle", "(nothing queued)", "", "")
         else:
             t.move_cursor(row=min(cur or 0, len(self._map) - 1))
         self._sig = self._signature()
@@ -2070,31 +2078,6 @@ class ModelsScreen(ModalScreen):
             self._run(nm)                            # reproduce downloads (as part of the queued job) then runs
         self.app.push_screen(ConfirmScreen(
             f"[b]{label}[/] isn't downloaded. Download and run it?\nThe download runs as a queued job.", go))
-
-
-class HistoryScreen(ModalScreen):
-    CSS = """
-    HistoryScreen { align: center middle; }
-    #history { width: 96; height: 22; border: thick $accent; background: $surface; padding: 1; }
-    #hist-tbl { height: 1fr; }
-    """
-    BINDINGS = [("escape", "dismiss", "Close")]
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="history"):
-            yield Static("[b]Reproduce history[/b]  ·  Esc close")
-            yield DataTable(id="hist-tbl", zebra_stripes=True)
-
-    def on_mount(self) -> None:
-        t = self.query_one("#hist-tbl", DataTable)
-        t.add_columns("When", "Model", "Your TPS", "Published", "Code", "Result")
-        rows = list(reversed(history.load()))
-        for h in rows:
-            t.add_row(h.get("at", ""), h.get("model", ""),
-                      _fmt(h.get("your_tps"), "{:.0f}"), _fmt(h.get("published_tps"), "{:.0f}"),
-                      _fmt(h.get("code_score")), "ok" if h.get("ok") else (h.get("note") or "fail")[:24])
-        if not rows:
-            t.add_row("", "(no reproduce runs yet)", "", "", "", "")
 
 
 class ChallengesScreen(ModalScreen):
