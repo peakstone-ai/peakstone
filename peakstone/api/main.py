@@ -194,7 +194,7 @@ OFFICIAL_SUITE = os.environ.get("PEAKSTONE_OFFICIAL_SUITE")
 # refused). LATEST defaults to the server's own package version; bump PEAKSTONE_CLIENT_MIN when an old
 # client would produce incompatible bundles.
 CLIENT_LATEST = os.environ.get("PEAKSTONE_CLIENT_LATEST") or versions.pkg_version()
-CLIENT_MIN = os.environ.get("PEAKSTONE_CLIENT_MIN", "0.1.0")
+CLIENT_MIN = os.environ.get("PEAKSTONE_CLIENT_MIN") or "0.1.0"
 
 
 # token-efficiency keys live in result.metrics but are summarized specially (honest, ctx-limited-aware)

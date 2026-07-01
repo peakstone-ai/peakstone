@@ -31,6 +31,9 @@ services:
       # GitHub OAuth for `peakstone login` / account binding — unset = binding disabled
       PEAKSTONE_GITHUB_CLIENT_ID: ${PEAKSTONE_GITHUB_CLIENT_ID:-}
       PEAKSTONE_GITHUB_CLIENT_SECRET: ${PEAKSTONE_GITHUB_CLIENT_SECRET:-}
+      # client-version policy served at /version (blank -> latest=server version, min=0.1.0)
+      PEAKSTONE_CLIENT_LATEST: ${PEAKSTONE_CLIENT_LATEST:-}
+      PEAKSTONE_CLIENT_MIN: ${PEAKSTONE_CLIENT_MIN:-}
     # apply migrations, then serve. Migrations run before the app so the schema is current on deploy.
     command: ["sh", "-c", "alembic upgrade head && uvicorn peakstone.api.main:app --host 0.0.0.0 --port 8000"]
     depends_on:

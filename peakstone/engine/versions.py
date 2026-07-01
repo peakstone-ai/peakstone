@@ -20,9 +20,15 @@ def is_outdated(installed: str | None, minimum: str | None) -> bool:
 
 
 def pkg_version() -> str:
-    """The installed peakstone package version (or '0.0.0' if it can't be determined)."""
+    """The peakstone version: dist metadata when pip-installed, else the packaged __version__ (the
+    API Docker image COPYs the source rather than installing it), else '0.0.0'."""
     try:
         from importlib.metadata import version
         return version("peakstone")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from peakstone import __version__
+        return __version__
     except Exception:  # noqa: BLE001
         return "0.0.0"
