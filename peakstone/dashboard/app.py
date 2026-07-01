@@ -412,8 +412,11 @@ class Dashboard(App):
         self._corpus = None                     # cached local peakstone corpus (coverage + spec lookup)
 
     def corpus(self) -> list:
-        """Local peakstone corpus (cached) — for the coverage denominator and challenge spec lookup."""
-        if self._corpus is None:
+        """Local peakstone corpus (cached) — for the coverage denominator and challenge spec lookup.
+        Only a NON-empty load is cached: if the corpus was momentarily unavailable at first access
+        (e.g. mid-`corpus sync`, or a checkout that appeared later), retry rather than getting stuck
+        showing every challenge under 'other'."""
+        if not self._corpus:
             try:
                 self._corpus = ch_browse.load_corpus()
             except Exception:  # noqa: BLE001
