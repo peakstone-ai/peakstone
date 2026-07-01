@@ -60,10 +60,10 @@ export default async function Home({
   return (
     <main className="mx-auto max-w-[1600px] px-4 py-8">
       {showHero && (
-        <>
+        <div className="mx-auto max-w-4xl">
           <Hero />
           <GettingStarted />
-        </>
+        </div>
       )}
       <h2 className="text-2xl font-semibold">{boardTitle}</h2>
       <p className="mt-1 max-w-2xl text-sm text-stone-400">
@@ -341,15 +341,15 @@ function Terminal() {
   );
 }
 
-function StepCard({ n, title, cmd, children }: {
-  n: string; title: string; cmd: string; children: React.ReactNode;
+function StepCard({ n, title, cmd, shell = true, children }: {
+  n: string; title: string; cmd: string; shell?: boolean; children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-lg border border-stone-800 bg-stone-900/40 p-4">
+    <div className="rounded-lg border border-stone-800 bg-stone-900/40 p-4 text-left">
       <div className="text-xs font-medium uppercase tracking-wide text-emerald-400">{n}</div>
       <h3 className="mt-1 font-medium text-stone-100">{title}</h3>
       <code className="mt-2 block rounded bg-black px-2 py-1 font-mono text-xs text-stone-200">
-        {cmd}
+        {shell ? <span className="text-emerald-400">$ </span> : null}{cmd}
       </code>
       <p className="mt-2 text-sm text-stone-400">{children}</p>
     </div>
@@ -365,9 +365,9 @@ client.chat.completions.create(          # the model field picks which local
     messages=[{"role": "user", "content": "refactor this function..."}],
 )`;
   return (
-    <section className="mb-10 border-b border-stone-800 pb-8">
+    <section className="mb-10 border-b border-stone-800 pb-8 text-center">
       <h2 className="text-lg font-semibold text-stone-200">Once installed</h2>
-      <p className="mt-1 text-sm text-stone-400">
+      <p className="mx-auto mt-1 max-w-2xl text-sm text-stone-400">
         Peakstone isn&apos;t just a leaderboard — it&apos;s a full local stack: a hardware dashboard, a
         model-swapping OpenAI gateway, and a browser chat UI.
       </p>
@@ -382,12 +382,12 @@ client.chat.completions.create(          # the model field picks which local
             localhost:12434/chat
           </a>.
         </StepCard>
-        <StepCard n="Step 3" title="Use the OpenAI API" cmd="http://localhost:12434/v1">
+        <StepCard n="Step 3" title="Use the OpenAI API" cmd="http://localhost:12434/v1" shell={false}>
           Point any OpenAI-compatible app or SDK at it. The <code>model</code> field selects which
           local model to serve — no per-model servers to manage.
         </StepCard>
       </div>
-      <details className="mt-4">
+      <details className="mt-4 text-left">
         <summary className="cursor-pointer text-sm font-medium text-stone-300 hover:text-stone-100">
           Drop-in OpenAI example
         </summary>
@@ -401,33 +401,31 @@ client.chat.completions.create(          # the model field picks which local
 
 function Hero() {
   return (
-    <section className="mb-10 border-b border-stone-800 pb-8">
+    <section className="mb-10 border-b border-stone-800 pb-8 text-center">
       <h1 className="text-3xl font-semibold tracking-tight text-stone-100">
         The reproducible leaderboard for open &amp; local LLMs
       </h1>
-      <p className="mt-3 max-w-2xl text-stone-400">
+      <p className="mx-auto mt-3 max-w-2xl text-stone-400">
         Peakstone ranks open and locally-runnable models on coding, math, agentic and safety tasks by
         their <em>held-out</em> score — only challenges published <em>after</em> a model&apos;s release,
         so it couldn&apos;t have trained on them. Every result is a{" "}
         <strong className="text-stone-200">signed, content-addressed run</strong> anyone can reproduce.
       </p>
-      <div className="mt-6 grid items-center gap-6 md:grid-cols-2">
+      <div className="mx-auto mt-6 w-full max-w-md text-left">
         <Terminal />
-        <div className="text-sm text-stone-400">
-          <p>
-            <strong className="text-stone-200">Run it on your own hardware.</strong> The terminal
-            dashboard shows the board filtered to models that fit <em>your</em> GPU, serves and
-            reproduces any run, then lets you submit your own signed results.
-          </p>
-          <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1">
-            <a href="https://pypi.org/project/peakstone/" target="_blank" rel="noreferrer"
-               className="text-emerald-400 hover:underline">PyPI ↗</a>
-            <a href="https://github.com/peakstone-ai/peakstone" target="_blank" rel="noreferrer"
-               className="text-emerald-400 hover:underline">GitHub ↗</a>
-            <Link href="/challenges" className="text-emerald-400 hover:underline">Challenges</Link>
-            <Link href="/submit" className="text-emerald-400 hover:underline">Submit a run</Link>
-          </div>
-        </div>
+      </div>
+      <p className="mx-auto mt-4 max-w-xl text-sm text-stone-400">
+        <strong className="text-stone-200">Run it on your own hardware.</strong> The dashboard shows
+        the board filtered to models that fit <em>your</em> GPU, serves and reproduces any run, then
+        lets you submit your own signed results.
+      </p>
+      <div className="mt-4 flex flex-wrap justify-center gap-x-5 gap-y-1">
+        <a href="https://pypi.org/project/peakstone/" target="_blank" rel="noreferrer"
+           className="text-emerald-400 hover:underline">PyPI ↗</a>
+        <a href="https://github.com/peakstone-ai/peakstone" target="_blank" rel="noreferrer"
+           className="text-emerald-400 hover:underline">GitHub ↗</a>
+        <Link href="/challenges" className="text-emerald-400 hover:underline">Challenges</Link>
+        <Link href="/submit" className="text-emerald-400 hover:underline">Submit a run</Link>
       </div>
     </section>
   );
