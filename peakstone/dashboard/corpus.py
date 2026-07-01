@@ -81,6 +81,55 @@ def _extract_challenges(blob: bytes, dest: Path) -> int:
     return n
 
 
+MARKER = ".peakstone-sync-ref"   # records which git ref the local corpus was synced from
+
+
+def _ref_default() -> str:
+    return f"tags/v{__version__}"
+
+
+def sync(ref: str | None = None, dest=None, log=print) -> tuple[int, str]:
+    """Fetch + extract the corpus into ``dest`` ($PEAKSTONE_HOME/challenges by default). Records the
+    ref in a marker file so staleness is detectable. Returns (n_challenges, ref_used); raises
+    RuntimeError if no ref resolved on GitHub."""
+    dest = Path(dest) if dest else paths.home_dir() / "challenges"
+    for r in ([ref] if ref else [_ref_default(), "heads/main"]):
+        log(f"fetching {_tarball_url(r)} ...")
+        blob = _fetch(_tarball_url(r))
+        if blob is None:
+            log(f"  {r}: not found, trying next")
+            continue
+        n = _extract_challenges(blob, dest)
+        try:
+            (dest / MARKER).write_text(r)
+        except Exception:  # noqa: BLE001
+            pass
+        return n, r
+    raise RuntimeError("could not fetch the corpus (no matching ref found on GitHub).")
+
+
+def local_ref(dest=None) -> str | None:
+    """The git ref the local corpus was last synced from (None if never synced)."""
+    dest = Path(dest) if dest else paths.home_dir() / "challenges"
+    m = dest / MARKER
+    try:
+        return m.read_text().strip() if m.exists() else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def should_autosync() -> bool:
+    """True when the dashboard should auto-(re)sync on startup: only in pip-installed mode (the corpus
+    resolves to $PEAKSTONE_HOME/challenges, not a repo checkout or explicit override), and only when
+    it's missing/empty or was synced from a different client version."""
+    home_corpus = paths.home_dir() / "challenges"
+    if paths.challenges_dir() != home_corpus:
+        return False                       # repo checkout / PEAKSTONE_REPO / PEAKSTONE_CHALLENGES → user-managed
+    if not home_corpus.exists() or not any(home_corpus.rglob("meta.toml")):
+        return True                        # missing / empty
+    return local_ref(home_corpus) != _ref_default()   # stale: synced from another version
+
+
 def corpus_main(argv: list[str]) -> int:
     ap = argparse.ArgumentParser(prog="peakstone corpus",
                                  description="Manage the local challenge corpus")
@@ -95,22 +144,15 @@ def corpus_main(argv: list[str]) -> int:
     if args.cmd != "sync":
         ap.print_help()
         return 2
-
+    try:
+        n, ref = sync(args.ref, args.dest, log=print)
+    except RuntimeError as e:
+        print(str(e), file=sys.stderr)
+        return 1
     dest = Path(args.dest) if args.dest else paths.home_dir() / "challenges"
-    refs = [args.ref] if args.ref else [f"tags/v{__version__}", "heads/main"]
-    for ref in refs:
-        url = _tarball_url(ref)
-        print(f"fetching {url} ...")
-        blob = _fetch(url)
-        if blob is None:
-            print(f"  {ref}: not found, trying next")
-            continue
-        n = _extract_challenges(blob, dest)
-        print(f"synced {n} challenges -> {dest}  (ref {ref})")
-        print("run the suite with:  peakstone-bench --level standard --models <your-model>")
-        return 0
-    print("could not fetch the corpus (no matching ref found on GitHub).", file=sys.stderr)
-    return 1
+    print(f"synced {n} challenges -> {dest}  (ref {ref})")
+    print("run the suite with:  peakstone-bench --level standard --models <your-model>")
+    return 0
 
 
 if __name__ == "__main__":

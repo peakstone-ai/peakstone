@@ -26,6 +26,7 @@ from rich.text import Text
 from peakstone.engine import capabilities as eng_caps
 from peakstone.engine import levels as eng_levels
 from peakstone.engine import paths as eng_paths
+from peakstone.engine import versions as eng_versions
 
 from . import challenges as ch_browse
 from . import client, hardware, history, models, preflight, reproduce, wishlist
@@ -372,6 +373,7 @@ class Dashboard(App):
         self.sort_i = 0
         self._board_rows: list[dict] = []
         self._account_label = ""   # right side of the sort bar: @handle when the signing key is linked
+        self._version = eng_versions.pkg_version()   # shown on the sort bar (aids version-mismatch debugging)
         # challenges chosen in the Challenges screen; empty = use the quick default repro set.
         self.selected_ids: list[str] = []
         # set when the selection came from a level shortcut (1-5) — runs via --level so the level's
@@ -743,6 +745,7 @@ class Dashboard(App):
         self.load_board()
         self._load_account()                     # fill in the linked-account name on the sort bar
         self._check_update()                      # nudge if a newer client is available
+        self._autosync_corpus()                   # pip installs: fetch the corpus if missing/stale
         tree.focus()
         # Poll the daemon's queues: adopt+mirror any benchmark it's already running (CLI-launched, or
         # left from a prior session) and keep the snapshot fresh for the overview / status bar / queue.
@@ -766,7 +769,8 @@ class Dashboard(App):
         grid = Table.grid(expand=True)
         grid.add_column(ratio=1)
         grid.add_column(justify="right")
-        grid.add_row(left, self._account_label)
+        acct = f"   {self._account_label}" if self._account_label else ""
+        grid.add_row(left, f"[dim]v{self._version}[/]{acct}")
         return grid
 
     @work(thread=True, exclusive=True, group="account")
@@ -803,6 +807,24 @@ class Dashboard(App):
         elif versions.is_outdated(installed, info.get("latest")):
             self.call_from_thread(self.push_screen,
                                   UpdateScreen(installed, info["latest"], required=False))
+
+    @work(thread=True, exclusive=True, group="corpus-sync")
+    def _autosync_corpus(self) -> None:
+        """For pip-installed clients, fetch the challenge corpus from GitHub if it's missing or was
+        synced from a different version — so the challenge tree groups correctly instead of dumping
+        everything under 'other'. No-op for repo checkouts / explicit PEAKSTONE_CHALLENGES."""
+        from . import corpus
+        if not corpus.should_autosync():
+            return
+        self.call_from_thread(self.notify, "fetching the challenge corpus …", timeout=6)
+        try:
+            n, _ref = corpus.sync(log=lambda *_: None)
+        except Exception as e:  # noqa: BLE001
+            self.call_from_thread(self.notify, f"corpus sync failed: {e} — run `peakstone corpus sync`",
+                                  severity="warning", timeout=10)
+            return
+        self._corpus = None                       # invalidate so the self-healing cache reloads it
+        self.call_from_thread(self.notify, f"challenge corpus ready ✓ ({n} challenges)", timeout=6)
 
     def action_link(self) -> None:
         """Link the signing key to a GitHub account — hand off to the browser OAuth flow, then refresh."""
@@ -2643,6 +2665,7 @@ def main() -> None:
         sys.exit(corpus_main(sys.argv[2:]))
 
     ap = argparse.ArgumentParser(prog="peakstone", description="Peakstone hardware dashboard")
+    ap.add_argument("--version", action="version", version=f"peakstone {eng_versions.pkg_version()}")
     ap.add_argument("--api", default=client.API_DEFAULT, help="Peakstone API base URL")
     ap.add_argument("--no-gateway", action="store_true",
                     help="don't auto-spawn the local model gateway (peakstone serve) on startup")

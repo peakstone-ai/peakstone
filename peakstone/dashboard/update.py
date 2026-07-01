@@ -43,11 +43,20 @@ def update_main(argv=None) -> int:
            else [sys.executable, "-m", "pip", "install", "-U", "peakstone[dashboard]"])
     print("running:", " ".join(cmd))
     try:
-        return subprocess.call(cmd)
+        rc = subprocess.call(cmd)
     except FileNotFoundError as e:
         print(f"could not run the upgrader ({e}); update manually with `pipx upgrade peakstone` "
               f"or `pip install -U 'peakstone[dashboard]'`", file=sys.stderr)
         return 1
+    if rc == 0:
+        # refresh the corpus to match the just-installed version (runs the NEW peakstone, so it syncs
+        # that version's tag). Best-effort — the dashboard also auto-syncs a missing/stale corpus.
+        print("\nrefreshing the challenge corpus …")
+        try:
+            subprocess.call(["peakstone", "corpus", "sync"])
+        except FileNotFoundError:
+            print("run `peakstone corpus sync` to refresh the challenge corpus.")
+    return rc
 
 
 if __name__ == "__main__":
