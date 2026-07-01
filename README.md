@@ -120,8 +120,8 @@ pipx install "peakstone[dashboard]"          # recommended — pipx gives it its
 # …or a plain venv:
 python -m venv ~/.peakstone/venv && ~/.peakstone/venv/bin/pip install "peakstone[dashboard]"
 
-peakstone --api https://peakstone.ai         # or default http://localhost:8000
-peakstone login                              # link your signing key to GitHub (one browser round-trip)
+peakstone --api https://peakstone.ai/api     # public API is under /api; default http://localhost:8000
+peakstone login --api https://peakstone.ai/api   # link your signing key to GitHub (one browser round-trip)
 ```
 
 `peakstone login` binds your local ed25519 signing key to a GitHub handle: it opens the OAuth consent
@@ -195,13 +195,15 @@ to that model: chat requests for the same model are served, but a request for a 
 
 ## Running the server (peakstone.ai)
 
-The leaderboard API + Postgres + automatic-HTTPS proxy run as one Docker stack (`infra/`). On a
-Linux box reachable on a public IP:
+The website + leaderboard API + Postgres + automatic-HTTPS proxy run as one Docker stack (`infra/`).
+Caddy serves the Next.js site at `/` and the API under `/api/*` on the same domain (so
+`https://<domain>/` is the leaderboard and `https://<domain>/api/...` is the API). On a Linux box
+reachable on a public IP:
 
 ```bash
 git clone https://github.com/peakstone-ai/peakstone && cd peakstone
 cp infra/.env.example infra/.env        # set PEAKSTONE_DOMAIN + a strong POSTGRES_PASSWORD
-./infra/deploy.sh                        # build, migrate (alembic), start db + api + caddy
+./infra/deploy.sh                        # build, migrate (alembic), start db + api + web + caddy
 ```
 
 [Caddy](https://caddyserver.com) provisions and renews the TLS cert for `PEAKSTONE_DOMAIN`

@@ -33,6 +33,16 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  web:
+    build:
+      context: ../web
+      dockerfile: Dockerfile
+      args:
+        # the site fetches the API server-side, so it uses the API container's internal address
+        NEXT_PUBLIC_API_URL: http://api:8000
+    depends_on: [api]
+    restart: unless-stopped
+
   caddy:
     image: caddy:2
     environment:
@@ -42,7 +52,7 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data        # certificates (persist across restarts to avoid LE rate limits)
       - caddy_config:/config
-    depends_on: [api]
+    depends_on: [api, web]
     restart: unless-stopped
 
 volumes:

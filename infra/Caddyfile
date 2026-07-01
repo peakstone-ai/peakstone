@@ -8,5 +8,13 @@
 # (DNS A record -> the server's public IP, ports 80 + 443 reachable) and Caddy does the rest.
 {$PEAKSTONE_DOMAIN:localhost} {
 	encode zstd gzip
-	reverse_proxy api:8000
+	# The API lives under /api/* (external clients: the TUI/CLI, submissions, `peakstone login`).
+	# handle_path strips the /api prefix, so /api/leaderboard -> api:8000/leaderboard.
+	handle_path /api/* {
+		reverse_proxy api:8000
+	}
+	# Everything else is the website (the Next.js leaderboard / model pages / run explorer).
+	handle {
+		reverse_proxy web:3000
+	}
 }
