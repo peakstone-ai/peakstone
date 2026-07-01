@@ -122,6 +122,7 @@ export function getRun(hash: string) {
 
 // One challenge's full result incl. transcript — fetched when opening the solution view.
 export type Transcript = {
+  prompt?: string;
   system_prompt?: string;
   plan?: string;
   reasoning?: string;

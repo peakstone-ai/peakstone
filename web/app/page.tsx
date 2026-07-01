@@ -58,7 +58,7 @@ export default async function Home({
   const [data, facets] = await Promise.all([getLeaderboard(sp), getFacets()]);
 
   return (
-    <main className="mx-auto max-w-5xl px-4 py-8">
+    <main className="mx-auto max-w-[1600px] px-4 py-8">
       {showHero && <Hero />}
       <h2 className="text-2xl font-semibold">{boardTitle}</h2>
       <p className="mt-1 max-w-2xl text-sm text-stone-400">

@@ -81,13 +81,27 @@ export default async function SolutionPage({
         </p>
       ) : (
         <>
+          {/* reading order: the challenge, then how the model was instructed, then what it produced */}
+          <details className="mt-5">
+            <summary className="cursor-pointer text-sm font-medium text-stone-300 hover:text-stone-100">
+              Challenge
+            </summary>
+            <p className="mt-1 text-sm text-stone-400">
+              <Link
+                href={`/challenges/${encodeURIComponent(data.challenge)}`}
+                className="text-emerald-400 hover:underline"
+              >
+                Open the {data.challenge} challenge page →
+              </Link>
+            </p>
+          </details>
+          <Section title="System prompt" text={t.system_prompt} collapsible />
           <Section title="Proposed solution" text={t.raw_output} />
           <Section title="Plan" text={t.plan} />
           {t.stdout ? <Section title="Test output (stdout)" text={t.stdout} /> : null}
           {t.stderr ? <Section title="Errors (stderr)" text={t.stderr} /> : null}
           <Section title="Reasoning (chain-of-thought)" text={t.reasoning} collapsible />
           <Section title="Self-repair attempts" text={attempts} collapsible />
-          <Section title="System prompt" text={t.system_prompt} collapsible />
         </>
       )}
     </main>
