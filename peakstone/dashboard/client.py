@@ -12,7 +12,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-API_DEFAULT = os.environ.get("PEAKSTONE_API_URL", "http://localhost:8000")
+# Public instance by default — the dashboard ships to users via pipx and should point at the hosted
+# leaderboard out of the box. The /api prefix matches Caddy's reverse-proxy route (handle_path /api/*
+# -> api:8000). Override with PEAKSTONE_API_URL or --api to hit a local/self-hosted server.
+API_DEFAULT = os.environ.get("PEAKSTONE_API_URL", "https://peakstone.ai/api")
 
 # The local model gateway (peakstone serve). Loopback is auth-exempt, so the dashboard usually needs
 # no token; PEAKSTONE_GATEWAY_TOKEN is sent as a bearer header when set (e.g. remote gateway).

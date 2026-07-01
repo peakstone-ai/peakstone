@@ -41,3 +41,6 @@ infra/.env
 
 # local security review notes — must never be published
 RELEASE-REVIEW.md
+
+# session scratch (not part of the package)
+scratchpad/

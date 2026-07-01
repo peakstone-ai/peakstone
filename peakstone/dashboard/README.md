@@ -9,8 +9,8 @@ pip install -e ".[dashboard]"      # or:  pip install peakstone[dashboard]
 peakstone                          # or:  python -m peakstone.dashboard  [--api URL]
 ```
 
-By default it talks to `$PEAKSTONE_API_URL` (or `http://localhost:8000`). Pass `--api https://peakstone.ai`
-for the public instance.
+By default it talks to the public instance at `https://peakstone.ai/api` (override with
+`$PEAKSTONE_API_URL`). Pass `--api http://localhost:8000` to point at a local/self-hosted server.
 
 ## Keys
 | key | action |

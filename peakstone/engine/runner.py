@@ -271,8 +271,12 @@ def main(argv=None):
                     help="probe --models for capabilities (tools/agentic/reasoner), cache them, and exit")
     ap.add_argument("--import-capabilities", action="store_true",
                     help="pull observed capabilities for --models from the API into the local cache")
-    ap.add_argument("--api", default=os.environ.get("PEAKSTONE_API", "http://localhost:8000"),
-                    help="API base URL (for --import-capabilities)")
+    ap.add_argument("--api",
+                    default=(os.environ.get("PEAKSTONE_API")
+                             or os.environ.get("PEAKSTONE_API_URL")
+                             or "https://peakstone.ai/api"),
+                    help="API base URL for --import-capabilities (default: the public instance; "
+                         "override with --api, $PEAKSTONE_API, or $PEAKSTONE_API_URL for self-hosting)")
     ap.add_argument("--prebuilt", action="store_true",
                     help="for repo-patch: use each instance's prebuilt per-instance Docker image "
                          "(full fidelity) instead of a generic clone+install")

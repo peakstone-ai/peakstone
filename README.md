@@ -120,8 +120,9 @@ pipx install peakstone                        # recommended — pipx gives it it
 # …or a plain venv:
 python -m venv ~/.peakstone/venv && ~/.peakstone/venv/bin/pip install peakstone
 
-peakstone --api https://peakstone.ai/api      # public API is under /api; default http://localhost:8000
-peakstone login --api https://peakstone.ai/api    # link your signing key to GitHub (one browser round-trip)
+peakstone                                     # talks to the public API (https://peakstone.ai/api) by default
+peakstone login                               # link your signing key to GitHub (one browser round-trip)
+# self-hosting? point at your own server with --api http://localhost:8000 (or $PEAKSTONE_API_URL)
 
 peakstone corpus sync                         # fetch the challenge corpus from GitHub (native + HumanEval + BigCodeBench + GSM8K)
 peakstone-bench --level standard --models <your-model>   # run the official self-contained suite
