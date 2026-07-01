@@ -50,12 +50,17 @@ def config_path() -> Path:
     return Path(os.environ.get("PEAKSTONE_CONFIG") or _PKG / "config.toml")
 
 
+def home_dir() -> Path:
+    """Per-machine Peakstone home: ``$PEAKSTONE_HOME`` (default ~/.peakstone). Holds the signing keys,
+    the config override, and the GitHub-synced challenge corpus for pip-installed clients."""
+    return Path(os.environ.get("PEAKSTONE_HOME", str(Path.home() / ".peakstone")))
+
+
 def user_config_path() -> Path:
     """Per-machine config override at ``$PEAKSTONE_HOME/config.toml`` (default ~/.peakstone/config.toml).
     Untracked; its sections overlay the committed engine/config.toml so a machine can opt into local
     settings (e.g. [gateway] host/open for LAN exposure) without editing the repo."""
-    home = Path(os.environ.get("PEAKSTONE_HOME", str(Path.home() / ".peakstone")))
-    return home / "config.toml"
+    return home_dir() / "config.toml"
 
 
 # --- repo data (the benchmark workspace; needs a checkout) --------------------------------------
@@ -70,8 +75,16 @@ def _repo_dir(name: str, env: str) -> Path:
 
 
 def challenges_dir() -> Path:
-    """The challenge corpus root (override: ``PEAKSTONE_CHALLENGES``)."""
-    return _repo_dir("challenges", "PEAKSTONE_CHALLENGES")
+    """The challenge corpus root. Override: ``PEAKSTONE_CHALLENGES``. In a repo checkout it's
+    ``<repo>/challenges``; for a pip-installed client with no checkout it falls back to the corpus
+    synced from GitHub into ``$PEAKSTONE_HOME/challenges`` (populate it with ``peakstone corpus sync``)."""
+    env = os.environ.get("PEAKSTONE_CHALLENGES")
+    if env:
+        return Path(env)
+    repo = repo_root() / "challenges"
+    if repo.exists():
+        return repo
+    return home_dir() / "challenges"
 
 
 def serve_dir() -> Path:
@@ -90,7 +103,7 @@ def require(path: Path, what: str) -> Path:
     if path.exists():
         return path
     raise DataNotFound(
-        f"{what} not found at {path}. Running the benchmark suite needs a repo checkout — "
-        f"`git clone` it and set PEAKSTONE_REPO=<checkout> (or pass an explicit path). "
-        f"The PyPI package ships the dashboard + engine library, not the challenge corpus."
+        f"{what} not found at {path}. For a pip-installed client, fetch the challenge corpus with "
+        f"`peakstone corpus sync`. In a repo checkout, run from the checkout or set "
+        f"PEAKSTONE_REPO=<checkout>. (serve/ helpers + weights still need a checkout.)"
     )
