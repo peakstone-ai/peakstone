@@ -82,9 +82,12 @@ hardware stats come from `sysctl`/`ioreg`/`vm_stat` (the dashboard shows the uni
 live), and it uses GNU `time` only when present. One-time toolchain setup:
 
 ```bash
+# Work in an isolated venv — don't install into system / conda-base Python:
+python -m venv ~/.peakstone/venv && source ~/.peakstone/venv/bin/activate
+
 # Python: engine deps + the optional library-challenge references + the dashboard TUI
 pip install jsonschema cryptography pytest numpy pandas pydantic networkx more-itertools \
-            python-dateutil sortedcontainers "textual>=0.60"
+            python-dateutil sortedcontainers "textual>=0.60" "huggingface_hub>=0.20"
 
 # JS/TS challenges: install the jsenv libs, plus tsx + typescript on PATH (the TS runner needs them)
 ( cd peakstone/engine/jsenv && npm install )
@@ -109,9 +112,15 @@ which Apple Silicon does not provide).
 A Textual terminal UI shows your **local GPU/CPU/RAM** live, next to the leaderboard **filtered to
 what fits your hardware** — so you can see how models that actually run on your machine compare:
 
+Install into an **isolated environment** so Peakstone's dependencies never touch your system or
+conda-base Python (they'd otherwise clobber whatever `requests`/`urllib3`/etc. you already have):
+
 ```bash
-pip install peakstone[dashboard]            # client only — engine (harness) + dashboard (TUI)
-peakstone --api https://peakstone.ai        # or default http://localhost:8000
+pipx install "peakstone[dashboard]"          # recommended — pipx gives it its own venv + a PATH shim
+# …or a plain venv:
+python -m venv ~/.peakstone/venv && ~/.peakstone/venv/bin/pip install "peakstone[dashboard]"
+
+peakstone --api https://peakstone.ai         # or default http://localhost:8000
 ```
 
 The published package is the **client**: the engine and the dashboard, nothing server-side. The
