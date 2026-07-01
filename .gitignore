@@ -29,3 +29,6 @@ infra/.env
 # Claude Code per-machine local settings (permission allowlist etc.) — keep out of the repo
 .claude/settings.local.json
 /gateway.log
+
+# local security review notes — must never be published
+RELEASE-REVIEW.md
