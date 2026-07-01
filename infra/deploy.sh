@@ -18,7 +18,7 @@ if [[ ! -f infra/.env ]]; then
   exit 1
 fi
 
-echo ">> Building and (re)starting db + api + caddy ..."
+echo ">> Building and (re)starting db + api + web + caddy ..."
 # api's start command runs `alembic upgrade head` before serving, so the schema is migrated here.
 $compose up -d --build
 

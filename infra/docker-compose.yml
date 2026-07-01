@@ -26,6 +26,11 @@ services:
       PEAKSTONE_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-peakstone}:${POSTGRES_PASSWORD:-peakstone}@db:5432/${POSTGRES_DB:-peakstone}
       # the suite the default (held-out) leaderboard scopes to, so the headline is apples-to-apples
       PEAKSTONE_OFFICIAL_SUITE: ${PEAKSTONE_OFFICIAL_SUITE:-level-standard@2026.06}
+      # operator key(s) whose runs rank (M2); without this the ranked held-out board is empty
+      PEAKSTONE_TRUSTED_PUBKEYS: ${PEAKSTONE_TRUSTED_PUBKEYS:-}
+      # GitHub OAuth for `peakstone login` / account binding — unset = binding disabled
+      PEAKSTONE_GITHUB_CLIENT_ID: ${PEAKSTONE_GITHUB_CLIENT_ID:-}
+      PEAKSTONE_GITHUB_CLIENT_SECRET: ${PEAKSTONE_GITHUB_CLIENT_SECRET:-}
     # apply migrations, then serve. Migrations run before the app so the schema is current on deploy.
     command: ["sh", "-c", "alembic upgrade head && uvicorn peakstone.api.main:app --host 0.0.0.0 --port 8000"]
     depends_on:
