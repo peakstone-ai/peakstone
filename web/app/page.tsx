@@ -401,7 +401,7 @@ client.chat.completions.create(          # the model field picks which local
 
 function Hero() {
   return (
-    <section className="mb-10 border-b border-stone-800 pb-8 text-center">
+    <section className="mb-10 text-center">
       <h1 className="text-3xl font-semibold tracking-tight text-stone-100">
         The reproducible leaderboard for open &amp; local LLMs
       </h1>
