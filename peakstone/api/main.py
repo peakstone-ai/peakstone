@@ -12,13 +12,13 @@ import re
 from collections import defaultdict
 from contextlib import asynccontextmanager
 
-from fastapi import Body, Depends, FastAPI, HTTPException, Query
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query
 from sqlalchemy import case, distinct, func, select
 from sqlalchemy.orm import Session
 
 from . import identity, ingest, models, proposals
 from .db import get_session, init_db
-from ..engine import contamination
+from ..engine import contamination, versions
 from ..engine.bundle import reasoning_mode
 
 # Capability categories that are safety/honesty, not coding ability — scored separately so a strong
@@ -130,11 +130,23 @@ def healthz():
     return {"status": "ok"}
 
 
+@app.get("/version")
+def version_info():
+    """Client-version policy: the dashboard shows an upgrade nudge when it's behind `latest`, and a
+    stronger one (or a refused submission) when it's below `min_supported`."""
+    return {"latest": CLIENT_LATEST, "min_supported": CLIENT_MIN, "api": versions.pkg_version()}
+
+
 @app.post("/submissions", status_code=201)
-def post_submission(bundle: dict = Body(...), db: Session = Depends(get_session)):
+def post_submission(bundle: dict = Body(...), db: Session = Depends(get_session),
+                    x_peakstone_client: str | None = Header(default=None)):
     """Validate (schema + content-hash + signature) and store a result bundle. An xz-compressed body
     (Content-Encoding: xz) is transparently decompressed by the _XzBody middleware before this runs, so
-    large transcript-heavy uploads cost ~6.5-8x less bandwidth."""
+    large transcript-heavy uploads cost ~6.5-8x less bandwidth. Clients below the minimum supported
+    version are refused (they'd produce incompatible bundles) — the header is advisory, sent by the CLI."""
+    if x_peakstone_client and versions.is_outdated(x_peakstone_client, CLIENT_MIN):
+        raise HTTPException(426, f"client {x_peakstone_client} is below the minimum supported "
+                                 f"{CLIENT_MIN}; upgrade with `peakstone update`")
     try:
         sub = ingest.ingest_bundle(db, bundle)
     except ingest.IngestError as e:
@@ -177,6 +189,12 @@ HELD_OUT_MIN_CLEAN = 5
 HELD_OUT_MIN_COVERAGE = 0.5
 # "name@version" of the suite the default board scopes to. Unset (dev) -> the board spans all suites.
 OFFICIAL_SUITE = os.environ.get("PEAKSTONE_OFFICIAL_SUITE")
+
+# Client-version policy (served at /version; the dashboard nudges to upgrade, submissions below MIN are
+# refused). LATEST defaults to the server's own package version; bump PEAKSTONE_CLIENT_MIN when an old
+# client would produce incompatible bundles.
+CLIENT_LATEST = os.environ.get("PEAKSTONE_CLIENT_LATEST") or versions.pkg_version()
+CLIENT_MIN = os.environ.get("PEAKSTONE_CLIENT_MIN", "0.1.0")
 
 
 # token-efficiency keys live in result.metrics but are summarized specially (honest, ctx-limited-aware)

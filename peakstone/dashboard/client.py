@@ -69,6 +69,19 @@ def get_account(base_url: str, pubkey: str, *, timeout: float = 5) -> dict | Non
         return None
 
 
+def client_version() -> str:
+    from ..engine import versions
+    return versions.pkg_version()
+
+
+def get_version(base_url: str, *, timeout: float = 5) -> dict | None:
+    """The server's client-version policy {latest, min_supported, api}, or None if unreachable."""
+    try:
+        return _get(base_url, "/version", {}, timeout)
+    except APIError:
+        return None
+
+
 def get_run(base_url: str, bundle_hash: str, *, timeout: float = 10) -> dict:
     """Per-challenge results for one run (lite: scores + error type, no transcripts)."""
     return _get(base_url, f"/runs/{urllib.parse.quote(bundle_hash, safe='')}", {}, timeout)
@@ -89,7 +102,9 @@ def submit_bundle(base_url: str, bundle: dict, *, timeout: float = 30) -> tuple[
     body = lzma.compress(json.dumps(bundle).encode())
     req = urllib.request.Request(
         f"{base_url.rstrip('/')}/submissions", data=body,
-        headers={"content-type": "application/json", "content-encoding": "xz"}, method="POST")
+        headers={"content-type": "application/json", "content-encoding": "xz",
+                 "x-peakstone-client": client_version()},   # lets the server refuse too-old clients
+        method="POST")
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.status, r.read().decode()[:200]

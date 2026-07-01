@@ -111,6 +111,18 @@ def test_held_out_ranked_requires_trust(client, monkeypatch):
     assert byfam["selfHO"]["held_out_status"] == "provisional"    # same forged dates, but can't rank
 
 
+def test_version_endpoint_and_client_gate(client):
+    """/version exposes the client policy; a too-old client is refused on submit (426)."""
+    import json
+    v = client.get("/version").json()
+    assert v["latest"] and v["min_supported"] and v["api"]
+    ap, a = _newkey()
+    b = _bundle("gateM", [0.5], 30, ap, a, "gate")
+    r = client.post("/submissions", content=json.dumps(b),
+                    headers={"content-type": "application/json", "x-peakstone-client": "0.0.1"})
+    assert r.status_code == 426 and "minimum supported" in r.json()["detail"]
+
+
 def test_reconcile_promotes_trusted_key_runs(client, monkeypatch):
     """A run submitted before its key was trusted is self-reported; reconciling after the key joins
     PEAKSTONE_TRUSTED_PUBKEYS promotes it to runner-verified so it can rank (the seed-board case)."""

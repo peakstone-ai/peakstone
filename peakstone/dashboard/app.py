@@ -738,6 +738,7 @@ class Dashboard(App):
         self._update_sortbar()                   # populate the bar immediately (before the board loads)
         self.load_board()
         self._load_account()                     # fill in the linked-account name on the sort bar
+        self._check_update()                      # nudge if a newer client is available
         tree.focus()
         # Poll the daemon's queues: adopt+mirror any benchmark it's already running (CLI-launched, or
         # left from a prior session) and keep the snapshot fresh for the overview / status bar / queue.
@@ -780,6 +781,27 @@ class Dashboard(App):
     def _set_account(self, label: str) -> None:
         self._account_label = label
         self._update_sortbar()
+
+    @work(thread=True, exclusive=True, group="update-check")
+    def _check_update(self) -> None:
+        """Nudge (once, on startup) if the client is behind the server's latest/min version. Off with
+        PEAKSTONE_NO_UPDATE_CHECK=1. Notify only — never self-installs."""
+        if os.environ.get("PEAKSTONE_NO_UPDATE_CHECK") in ("1", "true"):
+            return
+        from ..engine import versions
+        info = client.get_version(self.base_url)
+        if not info:
+            return
+        installed = versions.pkg_version()
+        if versions.is_outdated(installed, info.get("min_supported")):
+            msg, sev = (f"client {installed} is below the required {info['min_supported']} — "
+                        f"run: peakstone update", "error")
+        elif versions.is_outdated(installed, info.get("latest")):
+            msg, sev = (f"update available: {info['latest']} (you have {installed}) — "
+                        f"run: peakstone update", "information")
+        else:
+            return
+        self.call_from_thread(self.notify, msg, severity=sev, timeout=10)
 
     def action_link(self) -> None:
         """Link the signing key to a GitHub account — hand off to the browser OAuth flow, then refresh."""
@@ -2444,6 +2466,9 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "login":
         from peakstone.dashboard.login import login_main   # link the signing key to a GitHub account
         sys.exit(login_main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "update":
+        from peakstone.dashboard.update import update_main   # upgrade the client (pipx/pip)
+        sys.exit(update_main(sys.argv[2:]))
 
     ap = argparse.ArgumentParser(prog="peakstone", description="Peakstone hardware dashboard")
     ap.add_argument("--api", default=client.API_DEFAULT, help="Peakstone API base URL")
