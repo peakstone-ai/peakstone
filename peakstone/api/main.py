@@ -522,7 +522,12 @@ def run_results(bundle_hash: str, db: Session = Depends(get_session)):
                 "error": (r.transcript or {}).get("error")}
                for r in sub.results]
     results.sort(key=lambda r: (r["category"] or "", r["challenge"]))
-    return {"bundle_hash": bundle_hash, "n": len(results), "results": results}
+    art = db.get(models.ModelArtifact, sub.artifact_id)      # header context so the run page can title
+    fam = db.get(models.ModelFamily, art.family_id) if art else None   # itself + link back to the model
+    return {"bundle_hash": bundle_hash, "n": len(results), "results": results,
+            "family": fam.name if fam else None, "artifact": art.artifact if art else None,
+            "context": sub.context, "trust_tier": sub.trust_tier,
+            "suite": f"{sub.suite_name}@{sub.suite_version}"}
 
 
 @app.get("/runs/{bundle_hash}/challenge/{challenge_id}")

@@ -95,6 +95,56 @@ export function getModel(family: string) {
   return getJSON<ModelPage>(`/models/${encodeURIComponent(family)}`);
 }
 
+// One run's per-challenge results (the breakdown behind a leaderboard/model row).
+export type RunChallengeRow = {
+  challenge: string;
+  category: string | null;
+  verification: string | null;
+  final: number;
+  passed: number | null;
+  total: number | null;
+  difficulty: number | null;
+  error: string | null;
+};
+export type RunResults = {
+  bundle_hash: string;
+  n: number;
+  results: RunChallengeRow[];
+  family: string | null;
+  artifact: string | null;
+  context: number | null;
+  trust_tier: string;
+  suite: string;
+};
+export function getRun(hash: string) {
+  return getJSON<RunResults>(`/runs/${encodeURIComponent(hash)}`);
+}
+
+// One challenge's full result incl. transcript — fetched when opening the solution view.
+export type Transcript = {
+  system_prompt?: string;
+  plan?: string;
+  reasoning?: string;
+  attempts?: unknown[];
+  raw_output?: string;
+  stdout?: string;
+  stderr?: string;
+  error?: string;
+};
+export type RunChallenge = {
+  challenge: string;
+  final: number;
+  passed: number | null;
+  total: number | null;
+  category: string | null;
+  transcript: Transcript | null;
+};
+export function getRunChallenge(hash: string, id: string) {
+  return getJSON<RunChallenge>(
+    `/runs/${encodeURIComponent(hash)}/challenge/${encodeURIComponent(id)}`
+  );
+}
+
 export type Facets = {
   quants: string[];
   suites: { name: string; version: string }[];

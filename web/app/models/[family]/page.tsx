@@ -54,7 +54,14 @@ export default async function ModelPage({
           <tbody>
             {data.runs.map((r) => (
               <tr key={r.run.bundle_hash} className="border-t border-stone-800">
-                <td className="py-2 pr-4 text-stone-200">{r.run.artifact}</td>
+                <td className="py-2 pr-4">
+                  <Link
+                    href={`/runs/${encodeURIComponent(r.run.bundle_hash)}`}
+                    className="text-stone-200 hover:text-emerald-400"
+                  >
+                    {r.run.artifact}
+                  </Link>
+                </td>
                 <td className="py-2 pr-4 tabular-nums text-stone-400">
                   {r.run.context ? `${Math.round(r.run.context / 1024)}K` : "—"}
                 </td>

@@ -111,6 +111,21 @@ def test_held_out_ranked_requires_trust(client, monkeypatch):
     assert byfam["selfHO"]["held_out_status"] == "provisional"    # same forged dates, but can't rank
 
 
+def test_run_results_and_transcript(client):
+    """The web run-explorer contract: /runs/{hash} carries model header + per-challenge rows, and
+    /runs/{hash}/challenge/{id} returns that challenge's transcript (the proposed solution)."""
+    ap, a = _newkey()
+    b = _bundle("runX", [0.5], 27, ap, a, "run-ts")
+    assert client.post("/submissions", json=b).status_code == 201
+    h = b["bundle_hash"]
+    run = client.get(f"/runs/{h}").json()
+    assert run["family"] == "runX" and run["artifact"] and run["trust_tier"] == "self-reported"
+    assert run["results"] and all("final" in r for r in run["results"])
+    cid = run["results"][0]["challenge"]
+    tr = client.get(f"/runs/{h}/challenge/{cid}").json()
+    assert tr["challenge"] == cid and tr["transcript"]["raw_output"] == "x"   # the model's answer
+
+
 def test_submission_trust_chain(client):
     ap, a = _newkey()
     r = client.post("/submissions", json=_bundle("trustX", [0.5], 24, ap, a, "s"))
