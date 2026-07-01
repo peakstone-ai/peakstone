@@ -1,0 +1,12 @@
+id            = "gsm8k-0045"
+title         = "GSM8K #46"
+language      = "text"
+difficulty    = 2
+category      = "math"
+type          = "math"
+scoring       = "answer-match"
+expect        = "104"
+solution_file = ""
+timeout       = 60
+published_at  = "2021-10-27"
+published_at_source = "upstream"

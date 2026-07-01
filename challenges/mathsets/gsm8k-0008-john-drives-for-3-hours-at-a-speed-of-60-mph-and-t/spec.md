@@ -1,0 +1,7 @@
+# GSM8K Problem 9
+
+John drives for 3 hours at a speed of 60 mph and then turns around because he realizes he forgot something very important at home.  He tries to get home in 4 hours but spends the first 2 hours in standstill traffic.  He spends the next half-hour driving at a speed of 30mph, before being able to drive the remaining time of the 4 hours going at 80 mph.  How far is he from home at the end of those 4 hours?
+
+Reason step by step, then give ONLY the final answer on the last line as \boxed{ANSWER}.
+
+<!-- imported from openai/gsm8k (test) -->

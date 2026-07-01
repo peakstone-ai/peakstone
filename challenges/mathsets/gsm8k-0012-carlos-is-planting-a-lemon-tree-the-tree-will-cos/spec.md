@@ -1,0 +1,7 @@
+# GSM8K Problem 13
+
+Carlos is planting a lemon tree. The tree will cost $90 to plant. Each year it will grow 7 lemons, which he can sell for $1.5 each. It costs $3 a year to water and feed the tree. How many years will it take before he starts earning money on the lemon tree?
+
+Reason step by step, then give ONLY the final answer on the last line as \boxed{ANSWER}.
+
+<!-- imported from openai/gsm8k (test) -->

@@ -1,0 +1,7 @@
+# GSM8K Problem 30
+
+Gloria is shoe shopping when she comes across a pair of boots that fit her shoe budget. However, she has to choose between the boots and two pairs of high heels that together cost five dollars less than the boots. If one pair of heels costs $33 and the other costs twice as much, how many dollars are the boots?
+
+Reason step by step, then give ONLY the final answer on the last line as \boxed{ANSWER}.
+
+<!-- imported from openai/gsm8k (test) -->
