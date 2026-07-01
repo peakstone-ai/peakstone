@@ -1,0 +1,12 @@
+id            = "math-combo-01"
+title         = "Counting Idempotent Self-Maps"
+language      = "text"
+difficulty    = 3
+category      = "math"
+type          = "math"
+scoring       = "answer-match"
+expect        = "196"
+solution_file = ""
+timeout       = 30
+published_at  = "2026-07-01"
+published_at_source = "author"

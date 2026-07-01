@@ -1,0 +1,11 @@
+id            = "algo-numalgo-01"
+title         = "Generalized discrete logarithm"
+language      = "python"
+difficulty    = 5
+category      = "algorithms"
+type          = "algorithms"
+scoring       = "tests"
+solution_file = "solution.py"
+timeout       = 30
+published_at  = "2026-07-01"
+published_at_source = "author"

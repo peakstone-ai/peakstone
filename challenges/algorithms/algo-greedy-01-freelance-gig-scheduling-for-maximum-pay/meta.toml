@@ -1,0 +1,11 @@
+id            = "algo-greedy-01"
+title         = "Freelance gig scheduling for maximum payout"
+language      = "python"
+difficulty    = 4
+category      = "algorithms"
+type          = "algorithms"
+scoring       = "tests"
+solution_file = "solution.py"
+timeout       = 30
+published_at  = "2026-07-01"
+published_at_source = "author"

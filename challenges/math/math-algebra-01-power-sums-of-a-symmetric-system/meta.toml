@@ -1,0 +1,12 @@
+id            = "math-algebra-01"
+title         = "Power Sums of a Symmetric System"
+language      = "text"
+difficulty    = 3
+category      = "math"
+type          = "math"
+scoring       = "answer-match"
+expect        = "98"
+solution_file = ""
+timeout       = 30
+published_at  = "2026-07-01"
+published_at_source = "author"

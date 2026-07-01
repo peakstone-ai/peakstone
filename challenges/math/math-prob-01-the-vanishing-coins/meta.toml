@@ -1,0 +1,12 @@
+id            = "math-prob-01"
+title         = "The Vanishing Coins"
+language      = "text"
+difficulty    = 4
+category      = "math"
+type          = "math"
+scoring       = "answer-match"
+expect        = "22/7"
+solution_file = ""
+timeout       = 30
+published_at  = "2026-07-01"
+published_at_source = "author"

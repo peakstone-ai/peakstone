@@ -1,0 +1,12 @@
+id            = "math-func-01"
+title         = "A Multiplicative Functional Equation"
+language      = "text"
+difficulty    = 4
+category      = "math"
+type          = "math"
+scoring       = "answer-match"
+expect        = "8"
+solution_file = ""
+timeout       = 30
+published_at  = "2026-07-01"
+published_at_source = "author"
