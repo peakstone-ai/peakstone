@@ -113,7 +113,7 @@ export default async function SolutionPage({
             )}
           </details>
           <Section title="System prompt" text={t.system_prompt} collapsible />
-          <Section title="Proposed solution" text={t.raw_output} />
+          <Section title="Proposed solution" text={t.raw_output} collapsible />
           <Section title="Plan" text={t.plan} />
           {t.stdout ? <Section title="Test output (stdout)" text={t.stdout} /> : null}
           {t.stderr ? <Section title="Errors (stderr)" text={t.stderr} /> : null}

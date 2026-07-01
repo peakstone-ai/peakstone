@@ -65,8 +65,8 @@ export default async function Home({
           <GettingStarted />
         </div>
       )}
-      <h2 className="text-2xl font-semibold">{boardTitle}</h2>
-      <p className="mt-1 max-w-2xl text-sm text-stone-400">
+      <h2 className="text-center text-2xl font-semibold">{boardTitle}</h2>
+      <p className="mx-auto mt-1 max-w-2xl text-center text-sm text-stone-400">
         {isPlanner ? (
           <>
             The best <em>planner</em> run per family — the model writes an implementation plan, a
@@ -95,7 +95,7 @@ export default async function Home({
         )}
       </p>
 
-      <div className="my-5 flex flex-wrap items-center gap-2">
+      <div className="my-5 flex flex-wrap items-center justify-center gap-2">
         <span className="text-sm text-stone-500">Fits my hardware:</span>
         {VRAM_PRESETS.map(([label, val]) => {
           const active = vram === val;
@@ -122,7 +122,7 @@ export default async function Home({
       </div>
 
       {facets && (
-        <div className="mb-5 flex flex-wrap items-center gap-4">
+        <div className="mb-5 flex flex-wrap items-center justify-center gap-4">
           {facets.quants.length > 0 && (
             <SelectFilter param="quant" label="Quant" options={facets.quants} />
           )}
@@ -411,21 +411,23 @@ function Hero() {
         so it couldn&apos;t have trained on them. Every result is a{" "}
         <strong className="text-stone-200">signed, content-addressed run</strong> anyone can reproduce.
       </p>
-      <div className="mx-auto mt-6 w-full max-w-md text-left">
+      <div className="mt-6 grid items-center gap-6 text-left md:grid-cols-2">
         <Terminal />
-      </div>
-      <p className="mx-auto mt-4 max-w-xl text-sm text-stone-400">
-        <strong className="text-stone-200">Run it on your own hardware.</strong> The dashboard shows
-        the board filtered to models that fit <em>your</em> GPU, serves and reproduces any run, then
-        lets you submit your own signed results.
-      </p>
-      <div className="mt-4 flex flex-wrap justify-center gap-x-5 gap-y-1">
-        <a href="https://pypi.org/project/peakstone/" target="_blank" rel="noreferrer"
-           className="text-emerald-400 hover:underline">PyPI ↗</a>
-        <a href="https://github.com/peakstone-ai/peakstone" target="_blank" rel="noreferrer"
-           className="text-emerald-400 hover:underline">GitHub ↗</a>
-        <Link href="/challenges" className="text-emerald-400 hover:underline">Challenges</Link>
-        <Link href="/submit" className="text-emerald-400 hover:underline">Submit a run</Link>
+        <div className="text-sm text-stone-400">
+          <p>
+            <strong className="text-stone-200">Run it on your own hardware.</strong> The dashboard
+            shows the board filtered to models that fit <em>your</em> GPU, serves and reproduces any
+            run, then lets you submit your own signed results.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1">
+            <a href="https://pypi.org/project/peakstone/" target="_blank" rel="noreferrer"
+               className="text-emerald-400 hover:underline">PyPI ↗</a>
+            <a href="https://github.com/peakstone-ai/peakstone" target="_blank" rel="noreferrer"
+               className="text-emerald-400 hover:underline">GitHub ↗</a>
+            <Link href="/challenges" className="text-emerald-400 hover:underline">Challenges</Link>
+            <Link href="/submit" className="text-emerald-400 hover:underline">Submit a run</Link>
+          </div>
+        </div>
       </div>
     </section>
   );
