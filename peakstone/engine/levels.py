@@ -93,3 +93,30 @@ def resolve(level: Level, challenges) -> list[str]:
                 seen.add(c.id)
                 out.append(c.id)
     return out
+
+
+def resolve_env(level: Level, env_challenges) -> list[str]:
+    """Env (agentic goal-state) challenge ids this level selects. Env challenges live OUTSIDE the coding
+    corpus (own env.toml loader), so `resolve()` never sees them — they resolve here, from the level's
+    ``{ family = "env", ids = [...] }`` (or difficulty/limit) axes, and run through the agent loop.
+    Ordered + de-duped; unknown ids are skipped so a level stays valid on a corpus without them."""
+    by_id = {c.id: c for c in env_challenges}
+    out: list[str] = []
+    seen: set[str] = set()
+    for sel in level.select:
+        if sel.get("family") != "env":
+            continue
+        ids = sel.get("ids")
+        cand = [by_id[i] for i in ids if i in by_id] if ids else list(env_challenges)
+        diffs = sel.get("difficulty")
+        if diffs:
+            want = [int(x) for x in diffs]
+            cand = [c for c in cand if getattr(c, "difficulty", None) in want]
+        cand.sort(key=lambda c: c.id)
+        if sel.get("limit"):
+            cand = cand[: int(sel["limit"])]
+        for c in cand:
+            if c.id not in seen:
+                seen.add(c.id)
+                out.append(c.id)
+    return out
