@@ -53,12 +53,14 @@ export default async function Home({
     ? "Planner leaderboard"
     : isAllCorpus
     ? "Coder leaderboard (all challenges)"
-    : "Held-out coding leaderboard";
+    : "Leaderboard";
+  const showHero = Object.keys(sp).length === 0;   // pristine landing view only
   const [data, facets] = await Promise.all([getLeaderboard(sp), getFacets()]);
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-8">
-      <h1 className="text-2xl font-semibold">{boardTitle}</h1>
+      {showHero && <Hero />}
+      <h2 className="text-2xl font-semibold">{boardTitle}</h2>
       <p className="mt-1 max-w-2xl text-sm text-stone-400">
         {isPlanner ? (
           <>
@@ -314,5 +316,56 @@ export default async function Home({
         </div>
       )}
     </main>
+  );
+}
+
+function Terminal() {
+  return (
+    <div className="overflow-hidden rounded-lg border border-stone-800 bg-black shadow-lg shadow-black/40">
+      <div className="flex items-center gap-1.5 border-b border-stone-800 bg-stone-900/80 px-3 py-2">
+        <span className="h-3 w-3 rounded-full bg-red-500/70" />
+        <span className="h-3 w-3 rounded-full bg-yellow-500/70" />
+        <span className="h-3 w-3 rounded-full bg-green-500/70" />
+        <span className="ml-2 text-xs text-stone-500">bash</span>
+      </div>
+      <div className="px-4 py-4 font-mono text-sm">
+        <span className="text-emerald-400">${" "}</span>
+        <span className="term-type text-stone-100">pipx install &quot;peakstone[dashboard]&quot;</span>
+      </div>
+    </div>
+  );
+}
+
+function Hero() {
+  return (
+    <section className="mb-10 border-b border-stone-800 pb-8">
+      <h1 className="text-3xl font-semibold tracking-tight text-stone-100">
+        The reproducible leaderboard for open &amp; local LLMs
+      </h1>
+      <p className="mt-3 max-w-2xl text-stone-400">
+        Peakstone ranks open and locally-runnable models on coding, math, agentic and safety tasks by
+        their <em>held-out</em> score — only challenges published <em>after</em> a model&apos;s release,
+        so it couldn&apos;t have trained on them. Every result is a{" "}
+        <strong className="text-stone-200">signed, content-addressed run</strong> anyone can reproduce.
+      </p>
+      <div className="mt-6 grid items-center gap-6 md:grid-cols-2">
+        <Terminal />
+        <div className="text-sm text-stone-400">
+          <p>
+            <strong className="text-stone-200">Run it on your own hardware.</strong> The terminal
+            dashboard shows the board filtered to models that fit <em>your</em> GPU, serves and
+            reproduces any run, then lets you submit your own signed results.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1">
+            <a href="https://pypi.org/project/peakstone/" target="_blank" rel="noreferrer"
+               className="text-emerald-400 hover:underline">PyPI ↗</a>
+            <a href="https://github.com/peakstone-ai/peakstone" target="_blank" rel="noreferrer"
+               className="text-emerald-400 hover:underline">GitHub ↗</a>
+            <Link href="/challenges" className="text-emerald-400 hover:underline">Challenges</Link>
+            <Link href="/submit" className="text-emerald-400 hover:underline">Submit a run</Link>
+          </div>
+        </div>
+      </div>
+    </section>
   );
 }

@@ -4,3 +4,20 @@ body {
   font-family:
     ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 }
+
+/* Terminal typewriter for the install command on the landing hero. The command is 35 monospace
+   chars, so it reveals via width 0 -> 35ch with a blinking caret (border-right). */
+@keyframes term-typing { from { width: 0 } to { width: 35ch } }
+@keyframes term-caret { 0%, 49% { border-color: #34d399 } 50%, 100% { border-color: transparent } }
+.term-type {
+  display: inline-block;
+  overflow: hidden;
+  white-space: nowrap;
+  vertical-align: bottom;
+  width: 35ch;
+  border-right: 2px solid #34d399;
+  animation: term-typing 2.2s steps(35, end) 0.4s both, term-caret 0.9s step-end 0.4s infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .term-type { animation: none; width: auto; border-right: 0; }
+}
