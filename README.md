@@ -116,12 +116,12 @@ Install into an **isolated environment** so Peakstone's dependencies never touch
 conda-base Python (they'd otherwise clobber whatever `requests`/`urllib3`/etc. you already have):
 
 ```bash
-pipx install "peakstone[dashboard]"          # recommended — pipx gives it its own venv + a PATH shim
+pipx install peakstone                        # recommended — pipx gives it its own venv + a PATH shim
 # …or a plain venv:
-python -m venv ~/.peakstone/venv && ~/.peakstone/venv/bin/pip install "peakstone[dashboard]"
+python -m venv ~/.peakstone/venv && ~/.peakstone/venv/bin/pip install peakstone
 
-peakstone --api https://peakstone.ai/api     # public API is under /api; default http://localhost:8000
-peakstone login --api https://peakstone.ai/api   # link your signing key to GitHub (one browser round-trip)
+peakstone --api https://peakstone.ai/api      # public API is under /api; default http://localhost:8000
+peakstone login --api https://peakstone.ai/api    # link your signing key to GitHub (one browser round-trip)
 ```
 
 `peakstone login` binds your local ed25519 signing key to a GitHub handle: it opens the OAuth consent

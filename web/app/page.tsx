@@ -330,7 +330,7 @@ function Terminal() {
       </div>
       <div className="px-4 py-4 font-mono text-sm">
         <span className="text-emerald-400">${" "}</span>
-        <span className="term-type text-stone-100">pipx install &quot;peakstone[dashboard]&quot;</span>
+        <span className="term-type text-stone-100">pipx install peakstone</span>
       </div>
     </div>
   );
