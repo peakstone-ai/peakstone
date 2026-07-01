@@ -19,18 +19,24 @@ fi
 cur=$(python -c "import tomllib;print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
 echo ">> $cur -> $new"
 
-# bump the single source of truth (the `version = "..."` under [project])
+# bump both version strings in lockstep: pyproject's [project].version (the source of truth for the
+# built dist) and peakstone/__init__.py's __version__ (the fallback used when running from a source
+# checkout / the COPY'd API Docker image, where dist metadata is absent).
 python - "$new" <<'PY'
 import re, sys
 new = sys.argv[1]
-p = "pyproject.toml"
-s = open(p).read()
-s, n = re.subn(r'(?m)^(version\s*=\s*)"[^"]+"', rf'\1"{new}"', s, count=1)
-assert n == 1, "could not find the version line in pyproject.toml"
-open(p, "w").write(s)
+edits = [
+    ("pyproject.toml", r'(?m)^(version\s*=\s*)"[^"]+"'),
+    ("peakstone/__init__.py", r'(?m)^(__version__\s*=\s*)"[^"]+"'),
+]
+for p, pat in edits:
+    s = open(p).read()
+    s, n = re.subn(pat, rf'\1"{new}"', s, count=1)
+    assert n == 1, f"could not find the version line in {p}"
+    open(p, "w").write(s)
 PY
 
-git add pyproject.toml
+git add pyproject.toml peakstone/__init__.py
 git commit -q -m "release: v$new"
 git tag -a "v$new" -m "v$new"
 echo ">> committed + tagged v$new. Push to publish:"
