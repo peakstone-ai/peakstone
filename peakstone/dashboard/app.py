@@ -15,7 +15,7 @@ from collections import deque
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Footer, Header, Input, Static, Tree
 from rich.console import Group
@@ -788,8 +788,8 @@ class Dashboard(App):
 
     @work(thread=True, exclusive=True, group="update-check")
     def _check_update(self) -> None:
-        """Nudge (once, on startup) if the client is behind the server's latest/min version. Off with
-        PEAKSTONE_NO_UPDATE_CHECK=1. Notify only — never self-installs."""
+        """On startup, if the client is behind the server's latest/min version, pop up an update
+        prompt (recommend + offer to update, default yes). Off with PEAKSTONE_NO_UPDATE_CHECK=1."""
         if os.environ.get("PEAKSTONE_NO_UPDATE_CHECK") in ("1", "true"):
             return
         from ..engine import versions
@@ -798,14 +798,11 @@ class Dashboard(App):
             return
         installed = versions.pkg_version()
         if versions.is_outdated(installed, info.get("min_supported")):
-            msg, sev = (f"client {installed} is below the required {info['min_supported']} — "
-                        f"run: peakstone update", "error")
+            self.call_from_thread(self.push_screen,
+                                  UpdateScreen(installed, info["min_supported"], required=True))
         elif versions.is_outdated(installed, info.get("latest")):
-            msg, sev = (f"update available: {info['latest']} (you have {installed}) — "
-                        f"run: peakstone update", "information")
-        else:
-            return
-        self.call_from_thread(self.notify, msg, severity=sev, timeout=10)
+            self.call_from_thread(self.push_screen,
+                                  UpdateScreen(installed, info["latest"], required=False))
 
     def action_link(self) -> None:
         """Link the signing key to a GitHub account — hand off to the browser OAuth flow, then refresh."""
@@ -2548,6 +2545,79 @@ class WishlistScreen(ModalScreen):
             self.notify("no HF repo on this entry — press x to remove and re-add with a repo")
             return
         self.app.push_screen(QuantScreen(row["name"], self.base_url, repo=row["repo"]))
+
+
+class UpdateScreen(ModalScreen):
+    """Popup when a newer client is available: recommends updating and offers to do it (default).
+    'Update' suspends the TUI, runs the right upgrader (pipx/pip), then prompts a restart; the running
+    process keeps the old code in memory until relaunched. Escape / 'Later' dismisses."""
+    CSS = """
+    UpdateScreen { align: center middle; }
+    #upd { width: 66; height: auto; border: thick $accent; background: $surface; padding: 1 2; }
+    #upd-btns { height: auto; padding-top: 1; }
+    #upd-btns Button { margin-right: 2; }
+    """
+    BINDINGS = [("escape", "later", "Later")]
+
+    def __init__(self, installed: str, latest: str, required: bool = False):
+        super().__init__()
+        self.installed = installed
+        self.latest = latest
+        self.required = required
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="upd"):
+            if self.required:
+                yield Static(f"[b red]Update required[/]\n\nThis client ([b]{self.installed}[/]) is below "
+                             f"the minimum supported version ([b]{self.latest}[/]). Update to keep "
+                             f"submitting runs and stay compatible with the leaderboard.")
+            else:
+                yield Static(f"[b]A new Peakstone version is available[/]\n\n"
+                             f"[b]{self.latest}[/] is out — you have [b]{self.installed}[/].\n"
+                             f"Updating is recommended. Update now?")
+            with Horizontal(id="upd-btns"):
+                yield Button("Update", id="update", variant="success")
+                yield Button("Later", id="later")
+
+    def on_mount(self) -> None:
+        self.query_one("#update", Button).focus()   # default action → Enter updates
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "update":
+            self._do_update()
+        else:
+            self.action_later()
+
+    def action_later(self) -> None:
+        self.dismiss(False)
+
+    def _do_update(self) -> None:
+        import subprocess
+        import sys
+        from .update import _install_kind
+        kind = _install_kind()
+        if kind == "editable":
+            self.notify("dev/editable install — update with: git pull (then reinstall if deps changed)",
+                        timeout=10)
+            self.dismiss(False)
+            return
+        cmd = (["pipx", "upgrade", "peakstone"] if kind == "pipx"
+               else [sys.executable, "-m", "pip", "install", "-U", "peakstone[dashboard]"])
+        with self.app.suspend():
+            print(f"\nUpdating Peakstone ({kind}) …  {' '.join(cmd)}\n")
+            try:
+                rc = subprocess.call(cmd)
+            except FileNotFoundError as e:
+                print(f"could not run the upgrader ({e}); try `peakstone update` manually.")
+                rc = 1
+            input("\n(press Enter to return to the dashboard)")
+        if rc == 0:
+            self.notify("updated ✓ — quit (q) and relaunch to use the new version",
+                        severity="information", timeout=15)
+        else:
+            self.notify("update failed — run `peakstone update` in a terminal", severity="error",
+                        timeout=10)
+        self.dismiss(rc == 0)
 
 
 def main() -> None:
