@@ -122,7 +122,15 @@ python -m venv ~/.peakstone/venv && ~/.peakstone/venv/bin/pip install peakstone
 
 peakstone --api https://peakstone.ai/api      # public API is under /api; default http://localhost:8000
 peakstone login --api https://peakstone.ai/api    # link your signing key to GitHub (one browser round-trip)
+
+peakstone corpus sync                         # fetch the challenge corpus from GitHub (native + HumanEval + BigCodeBench + GSM8K)
+peakstone-bench --level standard --models <your-model>   # run the official self-contained suite
 ```
+
+The `standard` suite is fully self-contained (permissively-licensed content only). The heavier
+`deep`/`max` levels additionally reference copyright-encumbered imports (Codeforces/LiveCodeBench/
+AIME/SWE-bench) that you regenerate locally via `python -m peakstone.engine.importers.<name>` and use
+under the upstream terms — they are never committed or published.
 
 `peakstone login` binds your local ed25519 signing key to a GitHub handle: it opens the OAuth consent
 page, catches the redirect on a loopback callback, and proves key ownership by signing a server nonce —

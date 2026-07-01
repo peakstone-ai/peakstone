@@ -49,10 +49,12 @@ def _extract_challenges(blob: bytes, dest: Path) -> int:
     n = 0
     with tarfile.open(fileobj=io.BytesIO(blob), mode="r:gz") as tf:
         for m in tf.getmembers():
-            if "/challenges/" not in m.name:
+            # only the top-level <top>/challenges/** tree — NOT e.g. web/app/challenges/[id]/
+            parts = m.name.split("/", 2)
+            if len(parts) < 3 or parts[1] != "challenges":
                 continue
-            rel = m.name.split("/challenges/", 1)[1]
-            if not rel:
+            rel = parts[2]
+            if not rel or rel.split("/", 1)[0][:1] in ("_", "."):   # skip _archived/ etc.
                 continue
             target = (tmp / rel).resolve()
             if not str(target).startswith(str(tmp.resolve())):
