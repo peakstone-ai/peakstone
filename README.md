@@ -125,7 +125,7 @@ peakstone login                               # link your signing key to GitHub 
 # self-hosting? point at your own server with --api http://localhost:8000 (or $PEAKSTONE_API_URL)
 
 peakstone corpus sync                         # fetch the challenge corpus from GitHub (native + HumanEval + BigCodeBench + GSM8K)
-peakstone-bench --level standard --models <your-model>   # run the official self-contained suite
+peakstone bench --level standard --models <your-model>   # run the official self-contained suite (alias: peakstone-bench)
 ```
 
 The `standard` suite is fully self-contained (permissively-licensed content only). The heavier

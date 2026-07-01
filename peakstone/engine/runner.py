@@ -242,7 +242,11 @@ def _host_load():
 
 
 def main(argv=None):
+    from . import versions
     ap = argparse.ArgumentParser(description="Local coding-LLM eval harness")
+    ap.add_argument("--version", action="version", version=f"peakstone {versions.pkg_version()}")
+    ap.add_argument("--update", action="store_true",
+                    help="upgrade the installed peakstone client (same as `peakstone update`), then exit")
     ap.add_argument("--models",
                     help="comma list of model names (must be in config [models]); "
                          "use 'reference' with --reference. Not needed with --judge-only.")
@@ -344,6 +348,10 @@ def main(argv=None):
                     help="environment provider for --env: auto|local|docker|microvm (default auto: "
                          "the cheapest that satisfies each challenge's network requirements).")
     args = ap.parse_args(argv)
+
+    if args.update:
+        from peakstone.dashboard.update import update_main
+        return update_main([])
 
     cfg = tomllib.loads(Path(args.config).read_text())
     host = cfg["server"]["host"]

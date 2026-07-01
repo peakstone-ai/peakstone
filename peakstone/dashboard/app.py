@@ -2657,12 +2657,15 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "login":
         from peakstone.dashboard.login import login_main   # link the signing key to a GitHub account
         sys.exit(login_main(sys.argv[2:]))
-    if len(sys.argv) > 1 and sys.argv[1] == "update":
+    if len(sys.argv) > 1 and sys.argv[1] in ("update", "--update"):
         from peakstone.dashboard.update import update_main   # upgrade the client (pipx/pip)
         sys.exit(update_main(sys.argv[2:]))
     if len(sys.argv) > 1 and sys.argv[1] == "corpus":
         from peakstone.dashboard.corpus import corpus_main   # fetch the challenge corpus from GitHub
         sys.exit(corpus_main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] in ("bench", "run"):
+        from peakstone.engine.runner import main as bench_main   # the eval CLI, unified under `peakstone`
+        sys.exit(bench_main(sys.argv[2:]))
 
     ap = argparse.ArgumentParser(prog="peakstone", description="Peakstone hardware dashboard")
     ap.add_argument("--version", action="version", version=f"peakstone {eng_versions.pkg_version()}")
