@@ -11,10 +11,19 @@ infra/.env
 *.egg-info/
 /dist/
 
-# Imported benchmark corpora — regenerable via peakstone.engine.importers.* (kept out of
-# git for size, and because LiveCodeBench problems are scraped from coding platforms).
-/challenges/humaneval/
-/challenges/bigcodebench/
+# Permissively-licensed imports are committed so `standard@2026.07` is self-contained:
+#   humaneval (MIT) in full; a bigcodebench (Apache-2.0) slice for the standard/quick axes
+#   (the full 1k+ set regenerates via peakstone.engine.importers.bigcodebench for deep/max).
+/challenges/bigcodebench/*
+!/challenges/bigcodebench/SOURCE.md
+!/challenges/bigcodebench/bcb-000*
+!/challenges/bigcodebench/bcb-001*
+!/challenges/bigcodebench/bcb-002*
+!/challenges/bigcodebench/bcb-003*
+!/challenges/bigcodebench/bcb-004*
+# Copyright-encumbered sets are NEVER committed — Codeforces/LiveCodeBench statements are
+# platform-copyrighted, AIME is MAA-copyrighted, SWE-bench mixes upstream repo licenses. Use them
+# only as PRIVATE challenges (you accept the upstream terms); regenerate via their importers.
 /challenges/livecodebench/
 /challenges/codeforces/
 /challenges/aime/

@@ -1,3 +1,6 @@
+# ⚠ COPYRIGHT NOTICE: LiveCodeBench aggregates problems scraped from LeetCode/AtCoder/Codeforces — platform-copyrighted.
+#   The generated corpus is gitignored and must NOT be committed or published to peakstone.ai.
+#   Use only as PRIVATE challenges (you accept the upstream terms). Not part of the public suite.
 """Import LiveCodeBench (code generation) into peakstone challenges.
 
 LiveCodeBench (https://huggingface.co/datasets/livecodebench/code_generation_lite,

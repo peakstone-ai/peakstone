@@ -1,0 +1,21 @@
+# Auto-generated from OpenAI HumanEval HumanEval/101. Do not edit by hand.
+from solution import *  # noqa: F401,F403 (prompt helpers may be referenced by tests)
+from solution import words_string as candidate
+
+def check(candidate):
+
+    # Check some simple cases
+    assert True, "This prints if this assert fails 1 (good for debugging!)"
+    assert candidate("Hi, my name is John") == ["Hi", "my", "name", "is", "John"]
+    assert candidate("One, two, three, four, five, six") == ["One", "two", "three", "four", "five", "six"]
+    assert candidate("Hi, my name") == ["Hi", "my", "name"]
+    assert candidate("One,, two, three, four, five, six,") == ["One", "two", "three", "four", "five", "six"]
+
+    # Check some edge cases that are easy to work out by hand.
+    assert True, "This prints if this assert fails 2 (also good for debugging!)"
+    assert candidate("") == []
+    assert candidate("ahmed     , gamal") == ["ahmed", "gamal"]
+
+
+def test_he_101():
+    check(candidate)

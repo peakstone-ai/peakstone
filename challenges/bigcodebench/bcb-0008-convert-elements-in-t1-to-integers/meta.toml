@@ -1,0 +1,12 @@
+# requires: collections, random, itertools
+id            = "bcb-0008"
+title         = "BigCodeBench/8"
+language      = "python"
+difficulty    = 2
+category      = "library-fluency"
+type          = "lib-knowledge"
+scoring       = "tests"
+solution_file = "solution.py"
+timeout       = 60
+published_at  = "2024-06-01"
+published_at_source = "upstream"

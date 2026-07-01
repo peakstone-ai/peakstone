@@ -1,0 +1,11 @@
+id            = "he-069"
+title         = "HumanEval/69"
+language      = "python"
+difficulty    = 2
+category      = "code-correctness"
+type          = "basic"
+scoring       = "tests"
+solution_file = "solution.py"
+timeout       = 30
+published_at  = "2021-07-07"
+published_at_source = "upstream"

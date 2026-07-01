@@ -1,0 +1,11 @@
+id            = "he-020"
+title         = "HumanEval/20"
+language      = "python"
+difficulty    = 3
+category      = "code-correctness"
+type          = "algorithms"
+scoring       = "tests"
+solution_file = "solution.py"
+timeout       = 30
+published_at  = "2021-07-07"
+published_at_source = "upstream"

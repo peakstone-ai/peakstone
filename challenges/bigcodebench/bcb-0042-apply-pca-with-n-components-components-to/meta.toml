@@ -1,0 +1,12 @@
+# requires: pandas, matplotlib, sklearn
+id            = "bcb-0042"
+title         = "BigCodeBench/42"
+language      = "python"
+difficulty    = 3
+category      = "library-fluency"
+type          = "lib-knowledge"
+scoring       = "tests"
+solution_file = "solution.py"
+timeout       = 60
+published_at  = "2024-06-01"
+published_at_source = "upstream"

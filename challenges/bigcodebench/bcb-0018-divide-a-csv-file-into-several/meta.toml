@@ -1,0 +1,12 @@
+# requires: glob, subprocess, random, os, csv
+id            = "bcb-0018"
+title         = "BigCodeBench/18"
+language      = "python"
+difficulty    = 5
+category      = "library-fluency"
+type          = "lib-knowledge"
+scoring       = "tests"
+solution_file = "solution.py"
+timeout       = 60
+published_at  = "2024-06-01"
+published_at_source = "upstream"

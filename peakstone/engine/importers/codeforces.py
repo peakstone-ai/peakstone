@@ -1,3 +1,6 @@
+# ⚠ COPYRIGHT NOTICE: Codeforces problem statements are copyrighted by Codeforces and the problem authors.
+#   The generated corpus is gitignored and must NOT be committed or published to peakstone.ai.
+#   Use only as PRIVATE challenges (you accept the upstream terms). Not part of the public suite.
 """Import recent Codeforces problems (open-r1/codeforces) as peakstone challenges.
 
 This is the answer to "newer than the models": LiveCodeBench is frozen at 2025-04, but

@@ -1,0 +1,48 @@
+# BigCodeBench/49
+
+Implement a file **`solution.py`** that completes the function below. Keep the given name and signature; define `task_func` at module level.
+
+Allowed libraries: `pandas`, `datetime`, `matplotlib`.
+
+```python
+from datetime import datetime
+import pandas as pd
+import matplotlib.pyplot as plt
+
+# Constants
+DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+
+def task_func(timestamps):
+    """
+    Convert a list of Unix timestamps to date objects, create a Pandas DataFrame, and draw a histogram.
+    - The date format should be as DATE_FORMAT.
+    - The DataFrame should have 'Timestamp' and 'Datetime' as column names.
+    - If the list of timestamps is empty, raise a ValueError with the message "Input list of timestamps is empty".
+
+    Parameters:
+    - timestamps (list): The list of Unix timestamps.
+
+    Returns:
+    - pandas.DataFrame: A pandas DataFrame containing the original Unix timestamps and the converted datetime objects.
+    - Axes: The Axes object of the histogram plot. The histogram will have 10 bins by default, representing the distribution of the datetime objects.
+
+    Raises:
+    - ValueError("Input list of timestamps is empty."): If the list of timestamps is empty.
+
+    Requirements:
+    - datetime
+    - pandas
+    - matplotlib.pyplot
+
+    Examples:
+    >>> df, ax = task_func([1347517370, 1475153730, 1602737300])
+    >>> print(df)
+        Timestamp             Datetime
+    0  1347517370  2012-09-13 02:22:50
+    1  1475153730  2016-09-29 08:55:30
+    2  1602737300  2020-10-15 00:48:20
+    """
+```
+
+<!-- imported from BigCodeBench (BigCodeBench/49) -->

@@ -1,3 +1,6 @@
+# ⚠ COPYRIGHT NOTICE: AIME problems are copyrighted by the MAA (Mathematical Association of America).
+#   The generated corpus is gitignored and must NOT be committed or published to peakstone.ai.
+#   Use only as PRIVATE challenges (you accept the upstream terms). Not part of the public suite.
 """Import AIME competition problems as peakstone answer-match challenges.
 
 AIME (American Invitational Mathematics Examination) is naturally contamination-resistant: it's an

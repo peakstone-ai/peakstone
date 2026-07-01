@@ -1,0 +1,39 @@
+# BigCodeBench/2
+
+Implement a file **`solution.py`** that completes the function below. Keep the given name and signature; define `task_func` at module level.
+
+Allowed libraries: `statistics`, `random`.
+
+```python
+import random
+import statistics
+
+def task_func(LETTERS):
+    """
+    Create a dictionary in which keys are random letters and values are lists of random integers.
+    The dictionary is then sorted by the mean of the values in descending order, demonstrating the use of the statistics library.
+    
+    Parameters:
+        LETTERS (list of str): A list of characters used as keys for the dictionary.
+    
+    Returns:
+    dict: The sorted dictionary with letters as keys and lists of integers as values, sorted by their mean values.
+    
+    Requirements:
+    - random
+    - statistics
+    
+    Example:
+    >>> import random
+    >>> random.seed(42)
+    >>> sorted_dict = task_func(['a', 'b', 'c'])
+    >>> list(sorted_dict.keys())
+    ['a', 'b', 'c']
+    >>> isinstance(sorted_dict['a'], list)
+    True
+    >>> type(sorted_dict['a'])  # Check type of values
+    <class 'list'>
+    """
+```
+
+<!-- imported from BigCodeBench (BigCodeBench/2) -->

@@ -1,3 +1,6 @@
+# ⚠ COPYRIGHT NOTICE: SWE-bench tasks embed content from upstream GitHub repositories under varied licenses.
+#   The generated corpus is gitignored and must NOT be committed or published to peakstone.ai.
+#   Use only as PRIVATE challenges (you accept the upstream terms). Not part of the public suite.
 """Import SWE-bench-Live as peakstone repo-patch challenges (contamination-resistant agentic coding).
 
 SWE-bench-Live is dated (each instance has created_at) and keeps adding recent GitHub issues, so it's

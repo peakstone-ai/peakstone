@@ -1,0 +1,12 @@
+# requires: pandas, matplotlib, seaborn
+id            = "bcb-0009"
+title         = "BigCodeBench/9"
+language      = "python"
+difficulty    = 2
+category      = "library-fluency"
+type          = "lib-knowledge"
+scoring       = "tests"
+solution_file = "solution.py"
+timeout       = 60
+published_at  = "2024-06-01"
+published_at_source = "upstream"
