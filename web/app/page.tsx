@@ -59,7 +59,12 @@ export default async function Home({
 
   return (
     <main className="mx-auto max-w-[1600px] px-4 py-8">
-      {showHero && <Hero />}
+      {showHero && (
+        <>
+          <Hero />
+          <GettingStarted />
+        </>
+      )}
       <h2 className="text-2xl font-semibold">{boardTitle}</h2>
       <p className="mt-1 max-w-2xl text-sm text-stone-400">
         {isPlanner ? (
@@ -333,6 +338,64 @@ function Terminal() {
         <span className="term-type text-stone-100">pipx install peakstone</span>
       </div>
     </div>
+  );
+}
+
+function StepCard({ n, title, cmd, children }: {
+  n: string; title: string; cmd: string; children: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-lg border border-stone-800 bg-stone-900/40 p-4">
+      <div className="text-xs font-medium uppercase tracking-wide text-emerald-400">{n}</div>
+      <h3 className="mt-1 font-medium text-stone-100">{title}</h3>
+      <code className="mt-2 block rounded bg-black px-2 py-1 font-mono text-xs text-stone-200">
+        {cmd}
+      </code>
+      <p className="mt-2 text-sm text-stone-400">{children}</p>
+    </div>
+  );
+}
+
+function GettingStarted() {
+  const snippet = `from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:12434/v1", api_key="local")
+client.chat.completions.create(          # the model field picks which local
+    model="qwen3-coder",                 # model to load — the gateway swaps it in
+    messages=[{"role": "user", "content": "refactor this function..."}],
+)`;
+  return (
+    <section className="mb-10 border-b border-stone-800 pb-8">
+      <h2 className="text-lg font-semibold text-stone-200">Once installed</h2>
+      <p className="mt-1 text-sm text-stone-400">
+        Peakstone isn&apos;t just a leaderboard — it&apos;s a full local stack: a hardware dashboard, a
+        model-swapping OpenAI gateway, and a browser chat UI.
+      </p>
+      <div className="mt-4 grid gap-4 md:grid-cols-3">
+        <StepCard n="Step 1" title="Launch the dashboard" cmd="peakstone">
+          The terminal UI: the leaderboard filtered to <em>your</em> GPU, browse &amp; download models,
+          run the benchmark, and keep a wishlist of models to test.
+        </StepCard>
+        <StepCard n="Step 2" title="Chat with your models" cmd="peakstone serve">
+          Starts a local gateway that loads models on demand, then open the built-in chat UI at{" "}
+          <a href="http://localhost:12434/chat" className="text-emerald-400 hover:underline">
+            localhost:12434/chat
+          </a>.
+        </StepCard>
+        <StepCard n="Step 3" title="Use the OpenAI API" cmd="http://localhost:12434/v1">
+          Point any OpenAI-compatible app or SDK at it. The <code>model</code> field selects which
+          local model to serve — no per-model servers to manage.
+        </StepCard>
+      </div>
+      <details className="mt-4">
+        <summary className="cursor-pointer text-sm font-medium text-stone-300 hover:text-stone-100">
+          Drop-in OpenAI example
+        </summary>
+        <pre className="mt-2 overflow-x-auto rounded-lg border border-stone-800 bg-black p-4 font-mono text-xs leading-relaxed text-stone-200">
+          {snippet}
+        </pre>
+      </details>
+    </section>
   );
 }
 
