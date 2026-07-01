@@ -211,6 +211,19 @@ every deploy before the app starts. Postgres is internal-only (not published to 
 proxy is exposed. For a local self-signed smoke test, leave `PEAKSTONE_DOMAIN=localhost` and run
 `docker compose -f infra/docker-compose.yml up --build`.
 
+**Running the API directly (dev / LAN).** Outside Docker, `python -m peakstone.api` starts uvicorn
+with host/port from the `[api]` block in `engine/config.toml`. It's local-only by default; to reach it
+from your phone or another machine on the LAN, expose it without editing the tracked config by dropping
+this in `~/.peakstone/config.toml` (or pass `--host 0.0.0.0`, or set `PEAKSTONE_API_HOST=0.0.0.0`):
+
+```toml
+[api]
+host = "0.0.0.0"
+```
+
+Ingest is signature-verified, but account/admin endpoints are reachable too — only bind `0.0.0.0` on a
+trusted network.
+
 ## Add a challenge
 
 Create `challenges/<lang-or-category>/NN-slug/` with `meta.toml`, `spec.md`, `tests/`, and a

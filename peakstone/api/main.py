@@ -1,7 +1,8 @@
 """Peakstone API — submission ingest + faceted leaderboards.
 
-Run (dev, SQLite):   uvicorn api.main:app --reload
-Run (Postgres):      PEAKSTONE_DATABASE_URL=postgresql+psycopg://... uvicorn api.main:app
+Run (dev, SQLite):   python -m peakstone.api            # host/port from [api] in config.toml
+Run (LAN):           add [api] host="0.0.0.0" to ~/.peakstone/config.toml, or --host 0.0.0.0
+Run (Postgres):      PEAKSTONE_DATABASE_URL=postgresql+psycopg://... python -m peakstone.api
 """
 from __future__ import annotations
 

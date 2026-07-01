@@ -22,6 +22,15 @@ open = false
 #     host = "0.0.0.0"
 #     open = true
 
+[api]
+# `python -m peakstone.api` — the submission/leaderboard API (FastAPI/uvicorn). host 127.0.0.1 keeps
+# it local; set "0.0.0.0" to reach it from other devices on your LAN (phone, another machine, the web
+# app). Same override rule as [gateway]: drop an [api] block in ~/.peakstone/config.toml to expose it
+# on YOUR machine without editing this tracked file. Ingest is signature-verified, but account/admin
+# endpoints are reachable too — only bind 0.0.0.0 on a trusted network.
+host = "127.0.0.1"
+port = 8000
+
 [models]
 # model name -> port (must match serve/models.toml)
 "glm-4.7-flash"      = 8081

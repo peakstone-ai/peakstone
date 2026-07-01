@@ -126,6 +126,20 @@ def test_run_results_and_transcript(client):
     assert tr["challenge"] == cid and tr["transcript"]["raw_output"] == "x"   # the model's answer
 
 
+def test_api_config_host_port(monkeypatch, tmp_path):
+    """[api] host/port resolution: committed default, then env override (LAN opt-in)."""
+    from peakstone.api.__main__ import load_api_config
+    monkeypatch.setattr("peakstone.engine.paths.user_config_path", lambda: tmp_path / "none.toml")
+    monkeypatch.delenv("PEAKSTONE_API_HOST", raising=False)
+    monkeypatch.delenv("PEAKSTONE_API_PORT", raising=False)
+    c = load_api_config()
+    assert c["host"] == "127.0.0.1" and c["port"] == 8000        # committed defaults, local-only
+    monkeypatch.setenv("PEAKSTONE_API_HOST", "0.0.0.0")
+    monkeypatch.setenv("PEAKSTONE_API_PORT", "9001")
+    c = load_api_config()
+    assert c["host"] == "0.0.0.0" and c["port"] == 9001          # env wins
+
+
 def test_submission_trust_chain(client):
     ap, a = _newkey()
     r = client.post("/submissions", json=_bundle("trustX", [0.5], 24, ap, a, "s"))
