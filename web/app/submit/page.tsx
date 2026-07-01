@@ -40,8 +40,11 @@ export default function SubmitPage() {
         <li>Per-challenge content hashes, transcripts, and scores.</li>
       </ul>
       <p className="mt-3 text-sm text-stone-400">
-        The whole bundle is content-addressed and signed by your key — the signature is the root
-        identity; linking it to a handle/account (GitHub, …) comes later and is optional.
+        The whole bundle is content-addressed and signed by your key — the signature is your root
+        identity. Link that key to GitHub with{" "}
+        <code className="rounded bg-stone-800 px-1 text-stone-200">peakstone login</code>: optional,
+        but it attributes runs to your handle and lets your reproductions count toward the
+        community-verified (ranked) tier.
       </p>
     </main>
   );

@@ -121,7 +121,13 @@ pipx install "peakstone[dashboard]"          # recommended — pipx gives it its
 python -m venv ~/.peakstone/venv && ~/.peakstone/venv/bin/pip install "peakstone[dashboard]"
 
 peakstone --api https://peakstone.ai         # or default http://localhost:8000
+peakstone login                              # link your signing key to GitHub (one browser round-trip)
 ```
+
+`peakstone login` binds your local ed25519 signing key to a GitHub handle: it opens the OAuth consent
+page, catches the redirect on a loopback callback, and proves key ownership by signing a server nonce —
+the private key never leaves your machine. Optional, but it attributes your runs and lets your
+reproductions count toward the community-verified (ranked) tier.
 
 The published package is the **client**: the engine and the dashboard, nothing server-side. The
 submission API (`api/`) is the *server* and is deployed from this repo, never installed from PyPI —

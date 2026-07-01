@@ -2403,6 +2403,9 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "jobs":
         from peakstone.gateway.__main__ import jobs_main
         sys.exit(jobs_main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "login":
+        from peakstone.dashboard.login import login_main   # link the signing key to a GitHub account
+        sys.exit(login_main(sys.argv[2:]))
 
     ap = argparse.ArgumentParser(prog="peakstone", description="Peakstone hardware dashboard")
     ap.add_argument("--api", default=client.API_DEFAULT, help="Peakstone API base URL")
