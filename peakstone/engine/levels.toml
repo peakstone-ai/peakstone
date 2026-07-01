@@ -8,8 +8,15 @@
 # Each level: judge/agent/prebuilt/retries settings + a `select` list of axes. Each axis filters the
 # corpus by `family` (the dir under challenges/) and optional `difficulty`, sorts by id, and takes the
 # first `limit` (omit limit = all). Bump `version` when you change selections so old comparisons stand.
+#
+# LICENSING: the `standard`/`quick`/`smoke`/`calibration` levels use only families committed to this
+# repo (native challenges + HumanEval [MIT] + a BigCodeBench [Apache-2.0] slice + GSM8K [MIT] in
+# `mathsets`), so `pipx install peakstone` + `peakstone corpus sync` runs them fully self-contained.
+# The `deep`/`max` levels additionally reference copyright-encumbered imports (livecodebench,
+# codeforces, aime, swebench) which are GITIGNORED — you must regenerate them via their importers and
+# accept the upstream terms; on a clean checkout those families are simply empty and skipped.
 
-version = "2026.06"
+version = "2026.07"
 
 [smoke]
 description = "Fastest sanity + tok/s probe."
@@ -21,14 +28,15 @@ select = [
 ]
 
 [quick]
-description = "Multi-axis snapshot (code/math/tools/safety). No judge, no repo-level."
+description = "Multi-axis snapshot (code/math/tools/safety). No judge, no repo-level. Self-contained."
 time_hint = "~20-40 min"
 judge = false
 select = [
   { family = "humaneval", limit = 12 },
   { family = "bigcodebench", limit = 15 },
-  { family = "livecodebench", limit = 15 },
-  { family = "aime", limit = 10 },
+  { family = "algorithms", limit = 4 },
+  { family = "math", limit = 4 },
+  { family = "mathsets", limit = 10 },
   { family = "tool-calling" },
   { family = "refusal" },
   { family = "hallucination" },
@@ -41,16 +49,18 @@ time_hint = "~20-40 min"
 judge = false
 calibration = true
 # A small set spanning easy→hard so pass/fail VARIES (that's where calibration has signal): HumanEval
-# floor, the native Python ladder (T2→T5 incl. the architecture challenges), and Go/Rust (compiled).
+# floor, the native Python ladder (T2→T5 incl. the architecture challenges), Go/Rust (compiled), and a
+# few native math problems (answer-match varies sharply by difficulty).
 select = [
   { family = "humaneval", limit = 4 },
   { family = "python" },
   { family = "go", limit = 3 },
   { family = "rust", limit = 3 },
+  { family = "math", limit = 3 },
 ]
 
 [standard]
-description = "The official suite: broad multi-axis coverage, held-out reported. Ordered cheap-first."
+description = "The official suite: broad multi-axis coverage, held-out reported. Self-contained; ordered cheap-first."
 time_hint = "~2-4 h"
 judge = true
 # Modifiers ride on the coding challenges already being run, so one `--level standard` run yields the
@@ -59,52 +69,62 @@ judge = true
 retries = 2
 calibration = true
 # Axis ORDER here IS the run order (runner preserves it). Cheapest/fastest axes first, so a run shows
-# quick early signal and a stall is obvious; the slow, long-generation axes (competitive programming +
-# AIME math) run last. Per-axis limits keep the whole suite to ~2-3 h/model on a single GPU — light
-# enough that community submitters will actually run it. Dated families take their NEWEST entries
-# (resolve() sorts by published_at desc), so trimming them keeps held-out coverage strong.
+# quick early signal and a stall is obvious; the slow, long-generation axes (BigCodeBench + long
+# context) run last. Per-axis limits keep the whole suite to ~2-3 h/model on a single GPU — light
+# enough that community submitters will actually run it. Every family here is committed to the repo, so
+# no external sourcing is needed. (The agentic `env` axis runs separately via `--env` for now.)
 select = [
   # fast: floor + the contamination-resistant native code core + short-response safety/tools
   { family = "humaneval", limit = 30 },
   { family = "python" }, { family = "go" }, { family = "rust" },
   { family = "typescript" }, { family = "javascript" },
+  { family = "algorithms" },   # native T4-T5 — hard-algorithm coverage (replaces competitive-programming imports)
   { family = "tool-calling" },
   { family = "refusal" }, { family = "hallucination" }, { family = "injection" }, { family = "security" },
-  # moderate
+  # math (a separate axis from code): native competition problems + GSM8K word problems
+  { family = "math" },
+  { family = "mathsets", limit = 24 },
+  # moderate coding — run last (longer generations)
   { family = "bigcodebench", limit = 30 },
-  # slow (long generations) — run last; newest-dated for held-out coverage
-  { family = "livecodebench", limit = 35 },
-  { family = "codeforces", limit = 25 },
-  { family = "aime", limit = 20 },          # math is a separate axis; 20 is plenty of signal
   { family = "longcontext" },
-  { family = "swebench", limit = 5 },
 ]
 
 [deep]
-description = "Full LCB/BCB/AIME + a streamed prebuilt SWE-bench slice, agent mode."
+description = "Full permissive corpus + the opt-in copyright-encumbered imports + a prebuilt SWE-bench slice, agent mode."
 time_hint = "~1-3 days (tens of GB streamed)"
 judge = true
 agent = true
 prebuilt = true
+# The livecodebench/codeforces/aime/swebench families are gitignored: regenerate them via their
+# importers (you accept the upstream terms) before running deep — on a clean checkout they're skipped.
 select = [
-  { family = "humaneval" }, { family = "bigcodebench" }, { family = "livecodebench" },
-  { family = "codeforces" }, { family = "aime" }, { family = "tool-calling" },
+  { family = "humaneval" }, { family = "bigcodebench" }, { family = "algorithms" },
+  { family = "math" }, { family = "mathsets" },
+  { family = "python" }, { family = "go" }, { family = "rust" },
+  { family = "typescript" }, { family = "javascript" },
+  { family = "tool-calling" },
   { family = "refusal" }, { family = "hallucination" }, { family = "injection" }, { family = "security" },
   { family = "longcontext" },
+  # opt-in, copyright-encumbered (import locally; not committed/published):
+  { family = "livecodebench" }, { family = "codeforces" }, { family = "aime" },
   { family = "swebench", limit = 30 },
 ]
 
 [max]
-description = "Everything, full fidelity: all suites + full SWE-bench (prebuilt, agent, self-repair)."
+description = "Everything, full fidelity: all committed + opt-in imports + full SWE-bench (prebuilt, agent, self-repair)."
 time_hint = "weeks; multi-TB image traffic"
 judge = true
 agent = true
 prebuilt = true
 retries = 2
 select = [
-  { family = "humaneval" }, { family = "bigcodebench" }, { family = "livecodebench" },
-  { family = "codeforces" }, { family = "aime" }, { family = "tool-calling" },
+  { family = "humaneval" }, { family = "bigcodebench" }, { family = "algorithms" },
+  { family = "math" }, { family = "mathsets" },
+  { family = "python" }, { family = "go" }, { family = "rust" },
+  { family = "typescript" }, { family = "javascript" },
+  { family = "tool-calling" },
   { family = "refusal" }, { family = "hallucination" }, { family = "injection" }, { family = "security" },
   { family = "longcontext" },
-  { family = "swebench" },
+  # opt-in, copyright-encumbered (import locally; not committed/published):
+  { family = "livecodebench" }, { family = "codeforces" }, { family = "aime" }, { family = "swebench" },
 ]
