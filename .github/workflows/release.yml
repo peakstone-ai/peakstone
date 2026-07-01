@@ -2,6 +2,13 @@ name: Release
 
 # Cut a release by pushing a tag:  git tag v0.1.0 && git push origin v0.1.0
 # Or dry-run to TestPyPI from the Actions tab (Run workflow -> target: testpypi).
+#
+# Publishing uses PyPI Trusted Publishing (OIDC) — no stored token. This ONLY works once the
+# publisher is registered on PyPI, otherwise the publish step fails with an OIDC "invalid-publisher"
+# error (the build job still passes, which is why a green build can precede a failed release).
+# Register it at https://pypi.org/manage/project/peakstone/settings/publishing/ with EXACTLY:
+#     Owner: peakstone-ai   Repository: peakstone   Workflow: release.yml   Environment: pypi
+# and the same for TestPyPI (Environment: testpypi) if you use the dry-run path.
 on:
   push:
     tags: ["v*"]
@@ -60,6 +67,7 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
+          skip-existing: true          # re-running a failed run won't error on already-uploaded files
 
   publish-pypi:
     # real release: a pushed tag, or a manual run explicitly targeting pypi
@@ -75,6 +83,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: dist, path: dist }
       - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true          # idempotent re-runs: don't fail if the version is already up
       - name: Create GitHub Release with the built artifacts
         if: github.event_name == 'push'
         env:
