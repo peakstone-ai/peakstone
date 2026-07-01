@@ -23,9 +23,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# the local hardware dashboard (Textual TUI). Reads the public API; runs the engine to reproduce.
-# huggingface_hub backs the quant browser / model downloads (it pulls in requests transitively).
-dashboard = ["textual>=0.60", "huggingface_hub>=0.20"]
+# the local hardware dashboard (Textual TUI) — the full local client: browse the leaderboard, and
+# run/reproduce models locally via the standing gateway (`peakstone serve`) + its chat UI. textual =
+# TUI; huggingface_hub = quant browser/downloads (pulls in requests); fastapi/uvicorn/httpx = the
+# model gateway the dashboard auto-spawns.
+dashboard = ["textual>=0.60", "huggingface_hub>=0.20", "fastapi>=0.110", "uvicorn>=0.27", "httpx>=0.27"]
 dev = ["pytest>=8", "httpx>=0.27"]
 # NOTE: the submission/leaderboard API (FastAPI + Postgres) is intentionally NOT a PyPI extra.
 # It is the *server* side (deployed to peakstone.ai), not something users install. It ships only
@@ -52,4 +54,6 @@ exclude = ["peakstone.api*", "web*", "*.tests", "*.tests.*"]
 # checkout anyway (reference solutions, the JS sandbox's node_modules, serve.sh, GGUF weights), so
 # peakstone.engine.paths resolves them from $PEAKSTONE_REPO and errors clearly if absent.
 [tool.setuptools.package-data]
-"peakstone.engine" = ["config.toml", "schema/*.json", "schema/*.md"]
+# runtime data files that must ship in the wheel (loaded from the package dir at runtime)
+"peakstone.engine" = ["config.toml", "levels.toml", "schema/*.json", "schema/*.md"]
+"peakstone.gateway" = ["webchat/*.html"]   # the chat UI served by `peakstone serve`
