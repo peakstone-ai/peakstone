@@ -1615,3 +1615,25 @@ def test_reproduce_attempt_boundary_in_review(monkeypatch):
             assert sol.index("first answer") < sol.index("attempt 2") < sol.index("second answer")
 
     asyncio.run(scenario())
+
+
+def test_get_account_returns_none_on_error(monkeypatch):
+    monkeypatch.setattr(client, "_get", lambda *a, **k: {"handle": "alice", "providers": []})
+    assert client.get_account("http://x", "PUB")["handle"] == "alice"
+
+    def boom(*a, **k):
+        raise client.APIError("404 not bound")
+    monkeypatch.setattr(client, "_get", boom)
+    assert client.get_account("http://x", "PUB") is None      # unbound / unreachable -> None
+
+
+def test_sortbar_shows_linked_account():
+    """The linked @handle renders to the right of the controls on the sort bar."""
+    from rich.console import Console
+    app = Dashboard("http://x")
+    app._account_label = "[green]@zoe[/]"         # what _load_account sets when the key is linked
+    c = Console(width=120)
+    with c.capture() as cap:
+        c.print(app._sortbar_renderable(max_vram=8))
+    out = cap.get()
+    assert "@zoe" in out and out.index("@zoe") > out.index("sort")   # account right, controls left

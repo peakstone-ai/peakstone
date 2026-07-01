@@ -358,6 +358,7 @@ class Dashboard(App):
         ("v", "quants", "Quants"),
         ("m", "models", "Models"),
         ("u", "queue", "Queue"),
+        ("l", "link", "Link GitHub"),
     ]
     SORTS = ["held_out_score", "code_score", "math_score", "self_verify_accuracy", "recovery_rate",
              "agent_score", "planner_score", "tok_per_s", "total_time_s", "score_per_1k_tokens",
@@ -369,6 +370,7 @@ class Dashboard(App):
         self.fit = True          # filter to models that fit my VRAM
         self.sort_i = 0
         self._board_rows: list[dict] = []
+        self._account_label = ""   # right side of the sort bar: @handle when the signing key is linked
         # challenges chosen in the Challenges screen; empty = use the quick default repro set.
         self.selected_ids: list[str] = []
         # set when the selection came from a level shortcut (1-5) — runs via --level so the level's
@@ -735,6 +737,7 @@ class Dashboard(App):
         tree.auto_expand = False
         self._update_sortbar()                   # populate the bar immediately (before the board loads)
         self.load_board()
+        self._load_account()                     # fill in the linked-account name on the sort bar
         tree.focus()
         # Poll the daemon's queues: adopt+mirror any benchmark it's already running (CLI-launched, or
         # left from a prior session) and keep the snapshot fresh for the overview / status bar / queue.
@@ -747,10 +750,45 @@ class Dashboard(App):
         if max_vram is None:
             snap = hardware.snapshot()
             max_vram = snap.max_vram_gb if (self.fit and snap.max_vram_gb) else None
+        self.query_one("#sortbar", Static).update(self._sortbar_renderable(max_vram))
+
+    def _sortbar_renderable(self, max_vram: float | None):
+        """One line: sort/hardware controls on the left, the linked account on the right."""
         scope = f"fits ≤{max_vram:g} GB" if max_vram else "all hardware"
         sel = f"   ·   ▶ {len(self.selected_ids)} challenges selected" if self.selected_ids else ""
-        self.query_one("#sortbar", Static).update(
-            f"[b]sort[/] {self.SORTS[self.sort_i]}   ·   [b]hardware[/] {scope}{sel}")
+        left = f"[b]sort[/] {self.SORTS[self.sort_i]}   ·   [b]hardware[/] {scope}{sel}"
+        from rich.table import Table
+        grid = Table.grid(expand=True)
+        grid.add_column(ratio=1)
+        grid.add_column(justify="right")
+        grid.add_row(left, self._account_label)
+        return grid
+
+    @work(thread=True, exclusive=True, group="account")
+    def _load_account(self) -> None:
+        """Look up whether this machine's signing key is linked to an account; show it on the sort bar."""
+        try:
+            from ..engine import keys as eng_keys
+            _, pub = eng_keys.load_or_create_keypair()
+        except Exception:  # noqa: BLE001
+            return
+        acct = client.get_account(self.base_url, pub)
+        label = (f"[green]@{acct['handle']}[/]" if acct and acct.get("handle")
+                 else "[dim]unlinked · l[/]")
+        self.call_from_thread(self._set_account, label)
+
+    def _set_account(self, label: str) -> None:
+        self._account_label = label
+        self._update_sortbar()
+
+    def action_link(self) -> None:
+        """Link the signing key to a GitHub account — hand off to the browser OAuth flow, then refresh."""
+        from .login import login_main
+        with self.suspend():
+            rc = login_main(["--api", self.base_url])
+        self.notify("linked ✓" if rc == 0 else "not linked (cancelled or failed)",
+                    severity="information" if rc == 0 else "warning")
+        self._load_account()
 
     def action_refresh(self) -> None:
         self.load_board()

@@ -61,6 +61,14 @@ def get_model(base_url: str, family: str, *, timeout: float = 10) -> dict:
     return _get(base_url, f"/models/{urllib.parse.quote(family, safe='')}", {}, timeout)
 
 
+def get_account(base_url: str, pubkey: str, *, timeout: float = 5) -> dict | None:
+    """The account bound to `pubkey` (handle + providers), or None if unbound / unreachable."""
+    try:
+        return _get(base_url, "/account", {"pubkey": pubkey}, timeout)
+    except APIError:
+        return None
+
+
 def get_run(base_url: str, bundle_hash: str, *, timeout: float = 10) -> dict:
     """Per-challenge results for one run (lite: scores + error type, no transcripts)."""
     return _get(base_url, f"/runs/{urllib.parse.quote(bundle_hash, safe='')}", {}, timeout)
