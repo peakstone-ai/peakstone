@@ -81,6 +81,29 @@ def _recompute_trust(db, sub: models.Submission) -> None:
             s.trust_tier = "community-verified"
 
 
+def reconcile_trusted_keys(db) -> int:
+    """Promote every stored run signed by a currently-trusted operator key to runner-verified.
+
+    Trust tier is stamped at INGEST, so a key added to PEAKSTONE_TRUSTED_PUBKEYS *after* its runs were
+    submitted would otherwise stay self-reported and never rank. Run at startup (idempotent) so the
+    ranked board reflects the current trusted set — including operator runs seeded before the key was
+    trusted. Returns the number promoted. Never downgrades (runner-verified is the top tier)."""
+    if not TRUSTED_PUBKEYS:
+        return 0
+    key_ids = [k.id for k in db.scalars(
+        select(models.Key).where(models.Key.pubkey.in_(TRUSTED_PUBKEYS))).all()]
+    if not key_ids:
+        return 0
+    subs = db.scalars(select(models.Submission).where(
+        models.Submission.key_id.in_(key_ids),
+        models.Submission.trust_tier != "runner-verified")).all()
+    for s in subs:
+        s.trust_tier = "runner-verified"
+    if subs:
+        db.commit()
+    return len(subs)
+
+
 def _get_or_create(db, model, defaults=None, **filters):
     obj = db.scalar(select(model).filter_by(**filters))
     if obj:

@@ -111,6 +111,21 @@ def test_held_out_ranked_requires_trust(client, monkeypatch):
     assert byfam["selfHO"]["held_out_status"] == "provisional"    # same forged dates, but can't rank
 
 
+def test_reconcile_promotes_trusted_key_runs(client, monkeypatch):
+    """A run submitted before its key was trusted is self-reported; reconciling after the key joins
+    PEAKSTONE_TRUSTED_PUBKEYS promotes it to runner-verified so it can rank (the seed-board case)."""
+    from peakstone.api import ingest
+    from peakstone.api.db import SessionLocal
+    ap, a = _newkey()
+    r = client.post("/submissions", json=_bundle("reconM", [0.5], 33, ap, a, "recon"))
+    assert r.status_code == 201 and r.json()["trust_tier"] == "self-reported"
+    monkeypatch.setattr(ingest, "TRUSTED_PUBKEYS", {a})          # key becomes trusted after the fact
+    with SessionLocal() as db:
+        assert ingest.reconcile_trusted_keys(db) >= 1
+    runs = client.get("/models/reconM").json()["runs"]
+    assert runs and all(x["run"]["trust_tier"] == "runner-verified" for x in runs)
+
+
 def test_run_results_and_transcript(client):
     """The web run-explorer contract: /runs/{hash} carries model header + per-challenge rows, and
     /runs/{hash}/challenge/{id} returns that challenge's transcript (the proposed solution)."""

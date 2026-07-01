@@ -29,6 +29,13 @@ SAFETY = {"injection", "refusal", "hallucination", "security", "secure-code"}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    # promote any stored runs signed by a now-trusted operator key (trust is stamped at ingest, so
+    # keys added to PEAKSTONE_TRUSTED_PUBKEYS later need reconciling for the ranked board).
+    from .db import SessionLocal
+    with SessionLocal() as db:
+        n = ingest.reconcile_trusted_keys(db)
+        if n:
+            print(f"[startup] promoted {n} run(s) by trusted keys to runner-verified")
     yield
 
 
