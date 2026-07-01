@@ -25,7 +25,9 @@ services:
     environment:
       PEAKSTONE_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-peakstone}:${POSTGRES_PASSWORD:-peakstone}@db:5432/${POSTGRES_DB:-peakstone}
       # the suite the default (held-out) leaderboard scopes to, so the headline is apples-to-apples
-      PEAKSTONE_OFFICIAL_SUITE: ${PEAKSTONE_OFFICIAL_SUITE:-level-standard@2026.06}
+      PEAKSTONE_OFFICIAL_SUITE: ${PEAKSTONE_OFFICIAL_SUITE:-level-standard@2026.07}
+      # the committed challenge corpus baked into the image — powers /challenges/{id}/source
+      PEAKSTONE_CHALLENGES: /app/challenges
       # operator key(s) whose runs rank (M2); without this the ranked held-out board is empty
       PEAKSTONE_TRUSTED_PUBKEYS: ${PEAKSTONE_TRUSTED_PUBKEYS:-}
       # GitHub OAuth for `peakstone login` / account binding — unset = binding disabled

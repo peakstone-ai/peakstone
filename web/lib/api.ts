@@ -202,6 +202,22 @@ export function getChallenge(id: string) {
   return getJSON<ChallengeDetail>(`/challenges/${encodeURIComponent(id)}`);
 }
 
+// The public challenge source (spec + tests) for the solution viewer. null (404) for challenges not
+// in the public corpus — copyright-encumbered/private sets are never served.
+export type ChallengeSource = {
+  id: string;
+  title: string | null;
+  language: string | null;
+  category: string | null;
+  difficulty: number | null;
+  scoring: string | null;
+  spec: string | null;
+  tests: Record<string, string>;
+};
+export function getChallengeSource(id: string) {
+  return getJSON<ChallengeSource>(`/challenges/${encodeURIComponent(id)}/source`);
+}
+
 export type ProposalRow = {
   id: number;
   slug: string;

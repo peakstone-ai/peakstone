@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getRunChallenge } from "@/lib/api";
+import { getRunChallenge, getChallengeSource } from "@/lib/api";
 import { ApiDown, ScoreBar } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
@@ -47,7 +47,10 @@ export default async function SolutionPage({
   params: Promise<{ hash: string; challenge: string }>;
 }) {
   const { hash, challenge } = await params;
-  const data = await getRunChallenge(decodeURIComponent(hash), decodeURIComponent(challenge));
+  const [data, source] = await Promise.all([
+    getRunChallenge(decodeURIComponent(hash), decodeURIComponent(challenge)),
+    getChallengeSource(decodeURIComponent(challenge)),
+  ]);
   if (!data) {
     return (
       <main className="mx-auto max-w-5xl px-4 py-8">
@@ -84,16 +87,30 @@ export default async function SolutionPage({
           {/* reading order: the challenge, then how the model was instructed, then what it produced */}
           <details className="mt-5">
             <summary className="cursor-pointer text-sm font-medium text-stone-300 hover:text-stone-100">
-              Challenge
+              Challenge{source?.difficulty ? ` · difficulty ${source.difficulty}/5` : ""}
             </summary>
-            <p className="mt-1 text-sm text-stone-400">
-              <Link
-                href={`/challenges/${encodeURIComponent(data.challenge)}`}
-                className="text-emerald-400 hover:underline"
-              >
-                Open the {data.challenge} challenge page →
-              </Link>
-            </p>
+            {source ? (
+              <>
+                {source.spec ? <Code text={source.spec} /> : null}
+                {Object.entries(source.tests).map(([name, body]) => (
+                  <div key={name} className="mt-2">
+                    <div className="text-xs text-stone-500">tests/{name}</div>
+                    <Code text={body} />
+                  </div>
+                ))}
+              </>
+            ) : (
+              <p className="mt-1 text-sm text-stone-400">
+                This challenge isn&apos;t in the public source (an external / opt-in benchmark), so its
+                content isn&apos;t shown here.{" "}
+                <Link
+                  href={`/challenges/${encodeURIComponent(data.challenge)}`}
+                  className="text-emerald-400 hover:underline"
+                >
+                  Open the {data.challenge} page →
+                </Link>
+              </p>
+            )}
           </details>
           <Section title="System prompt" text={t.system_prompt} collapsible />
           <Section title="Proposed solution" text={t.raw_output} />

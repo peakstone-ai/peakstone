@@ -1,0 +1,22 @@
+# Build-context excludes for the API image (context = repo root). The server builds from a clean git
+# clone (public files only), so this is mainly a guard for local builds: keep copyright-encumbered and
+# private challenge sets, secrets, and heavy artifacts out of the image.
+.git/
+web/node_modules/
+web/.next/
+results/
+dist/
+build/
+*.egg-info/
+**/__pycache__/
+*.pyc
+*.db
+infra/.env
+RELEASE-REVIEW.md
+
+# copyright-encumbered / private challenge sets must never enter the image (never served)
+challenges/private/
+challenges/codeforces/
+challenges/aime/
+challenges/livecodebench/
+challenges/swebench/

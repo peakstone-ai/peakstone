@@ -656,6 +656,17 @@ def challenge_detail(challenge_id: str, db: Session = Depends(get_session)):
             "n_families": len(rows), "results": rows}
 
 
+@app.get("/challenges/{challenge_id}/source")
+def challenge_source_endpoint(challenge_id: str):
+    """The public challenge source (spec + test files) for the solution viewer. 404 for any challenge
+    not in the public corpus — copyright-encumbered/private sets are never in the image, so never served."""
+    from peakstone.engine.challenges import challenge_source
+    src = challenge_source(challenge_id)
+    if src is None:
+        raise HTTPException(404, f"no public source for {challenge_id!r}")
+    return src
+
+
 # --- account / identity binding ------------------------------------------------------------------
 
 @app.post("/account/key-challenge")

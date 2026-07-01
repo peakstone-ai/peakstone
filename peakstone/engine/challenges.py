@@ -109,6 +109,49 @@ def load_challenges(root: Path) -> list[Challenge]:
     return out
 
 
+def challenge_source(cid: str, root: Path | None = None) -> dict | None:
+    """Public source (spec + test files) for a challenge id, read from the corpus. Returns None if
+    the challenge isn't in the public source — absent, archived (``_*``), or under ``private/`` —
+    so copyright-encumbered / private challenges are never exposed. Powers the web solution viewer."""
+    from . import paths
+    root = root or paths.challenges_dir()
+    if not root.exists():
+        return None
+    # never expose non-public trees: private/, archived (_*), or the copyright-encumbered imports
+    # (defense-in-depth — they're gitignored + .dockerignore'd, so normally absent from the image)
+    nonpublic = {"private", "codeforces", "aime", "livecodebench", "swebench"}
+    for meta in sorted(root.rglob("meta.toml")):
+        d = meta.parent
+        rel = d.relative_to(root)
+        if rel.parts and (rel.parts[0] in nonpublic
+                          or any(p[:1] in ("_", ".") for p in rel.parts)):
+            continue
+        try:
+            m = tomllib.loads(meta.read_text())
+        except Exception:  # noqa: BLE001
+            continue
+        if m.get("id") != cid:
+            continue
+        tests: dict[str, str] = {}
+        tdir = d / "tests"
+        if tdir.is_dir():
+            for f in sorted(tdir.rglob("*")):
+                if f.is_file():
+                    try:
+                        tests[str(f.relative_to(tdir))] = f.read_text()
+                    except Exception:  # noqa: BLE001
+                        pass
+        spec = d / "spec.md"
+        return {
+            "id": cid, "title": m.get("title"), "language": m.get("language"),
+            "category": m.get("category"), "difficulty": m.get("difficulty"),
+            "scoring": m.get("scoring"),
+            "spec": spec.read_text() if spec.is_file() else None,
+            "tests": tests,
+        }
+    return None
+
+
 def _date10(s) -> str:
     """First 10 chars of an ISO date string if well-formed, else "" (ISO dates sort chronologically)."""
     d = (s or "").strip()[:10]
