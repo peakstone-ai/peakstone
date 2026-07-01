@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import secrets
 import sys
 import time
@@ -92,6 +93,17 @@ def _extract_code(pasted: str) -> str:
     return pasted
 
 
+def _looks_headless() -> bool:
+    """No usable local browser for the loopback flow. Over SSH the browser + the 127.0.0.1 callback are
+    on a DIFFERENT machine than this process, so the loopback server here never receives the redirect —
+    paste-the-code mode is the only thing that works. Also true on a Linux box with no display."""
+    if os.environ.get("SSH_CONNECTION") or os.environ.get("SSH_TTY"):
+        return True
+    if sys.platform.startswith("linux") and not (os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")):
+        return True
+    return False
+
+
 def login_main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="peakstone login",
                                  description="Link your signing key to a GitHub account")
@@ -100,9 +112,14 @@ def login_main(argv=None) -> int:
     ap.add_argument("--port", type=int, default=53682,
                     help="loopback callback port (must match the server's registered OAuth callback)")
     ap.add_argument("--manual", action="store_true",
-                    help="print the URL and paste the code back (headless / no local browser)")
+                    help="force paste-the-code mode (print the URL, paste the code back)")
+    ap.add_argument("--browser", action="store_true",
+                    help="force the loopback browser flow (override headless auto-detect)")
     args = ap.parse_args(argv)
     api = args.api.rstrip("/")
+    # over SSH / no local browser, the loopback can't work (browser + callback are on another machine),
+    # so default to paste-the-code there; --browser forces loopback, --manual forces paste.
+    manual = args.manual or (not args.browser and _looks_headless())
 
     priv, pub = eng_keys.load_or_create_keypair()   # local root identity; created on first use
 
@@ -131,10 +148,13 @@ def login_main(argv=None) -> int:
               file=sys.stderr)
         return 1
 
-    if args.manual:
-        print(f"1) Open this URL and authorize:\n\n  {authorize_url}\n\n"
-              f"2) Your browser will try to reach {redirect_uri} — copy the code (or the whole URL) "
-              f"from the address bar.")
+    if manual:
+        if not args.manual:
+            print("(no local browser detected — paste-the-code mode; pass --browser to force loopback)\n")
+        print(f"1) Open this URL in a browser on ANY machine and authorize:\n\n  {authorize_url}\n\n"
+              f"2) GitHub redirects to {redirect_uri} — that page won't load (it's a loopback on the\n"
+              f"   machine you ran this from), but the address bar will contain '…?code=…'. Copy that\n"
+              f"   whole URL (or just the code) and paste it here.")
         code = _extract_code(input("\nPaste it here: "))
     else:
         res = _capture_code_loopback(authorize_url, args.port)

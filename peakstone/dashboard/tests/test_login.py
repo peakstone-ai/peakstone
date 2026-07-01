@@ -50,7 +50,7 @@ def test_full_bind_sends_both_proofs(monkeypatch, capsys):
     captured = {}
     _wire_unbound(monkeypatch, captured,
                   capture_result=lambda state: {"code": "CODE", "state": state})
-    assert login.login_main(["--api", "http://x", "--port", "53682"]) == 0
+    assert login.login_main(["--api", "http://x", "--port", "53682", "--browser"]) == 0
     assert captured["pubkey"] == "PUBKEY" and captured["nonce"] == "NONCE"
     assert captured["signature"] == "SIG" and captured["code"] == "CODE"
     assert captured["redirect_uri"] == "http://127.0.0.1:53682/callback"
@@ -62,8 +62,21 @@ def test_state_mismatch_aborts(monkeypatch):
     captured = {}
     _wire_unbound(monkeypatch, captured,
                   capture_result=lambda state: {"code": "CODE", "state": "WRONG"})
-    assert login.login_main(["--api", "http://x"]) == 1
+    assert login.login_main(["--api", "http://x", "--browser"]) == 1
     assert not captured   # never reached /account/bind
+
+
+def test_headless_auto_falls_back_to_paste(monkeypatch):
+    """Over SSH the loopback can't work, so login auto-uses paste-mode (no --manual needed)."""
+    _patch_keys(monkeypatch)
+    monkeypatch.setenv("SSH_CONNECTION", "10.0.0.1 22 10.0.0.2 22")   # simulate SSH
+    assert login._looks_headless() is True
+    captured = {}
+    _wire_unbound(monkeypatch, captured,
+                  capture_result=lambda s: (_ for _ in ()).throw(AssertionError("loopback used over SSH")))
+    monkeypatch.setattr("builtins.input", lambda *a: "PASTED_CODE")
+    assert login.login_main(["--api", "http://x"]) == 0   # no --manual, but headless -> paste path
+    assert captured["code"] == "PASTED_CODE"
 
 
 def test_extract_code_accepts_bare_or_url():
