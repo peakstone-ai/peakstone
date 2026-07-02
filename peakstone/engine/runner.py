@@ -22,7 +22,8 @@ import tomllib
 from pathlib import Path
 
 from . import adherence, capabilities, global_rules, honesty, matheval, paths
-from .levels import GATED_CAP, load_levels, model_capabilities, relevant, resolve as resolve_level
+from .levels import (GATED_CAP, load_levels, model_capabilities, relevant, resolve as resolve_level,
+                     resolve_env)
 from .agentic import run_agentic_task
 from .challenges import filter_challenges, load_challenges
 from .extract import extract_files
@@ -461,6 +462,7 @@ def main(argv=None):
               "(comparable + submittable). Use --level smoke|quick for a quicker run, "
               "--no-judge to skip grading, or --ids/--lang/… for an ad-hoc selection.")
     level_meta: dict = {}
+    env_chs: list = []   # level-selected goal-state-env challenges (agentic axis; run after coding)
     if args.level:
         version, lvls = load_levels()
         level = lvls.get(args.level)
@@ -470,6 +472,14 @@ def main(argv=None):
         ordered = resolve_level(level, all_ch)   # manifest axis order (cheap/fast axes first)
         by_id = {c.id: c for c in all_ch}
         chs = [by_id[i] for i in ordered if i in by_id]   # run in manifest order, not filesystem order
+        # Env (goal-state) challenges live outside the coding corpus (own env.toml loader), so the
+        # level's `family = "env"` axes resolve separately; they run through the agent loop after the
+        # coding axes and land in the same results list → one bundle scores coding + agentic together.
+        if any(sel.get("family") == "env" for sel in level.select) and not args.reference:
+            from .env import load_env_challenges
+            env_by_id = {c.id: c for c in load_env_challenges(Path(args.challenges_dir))}
+            env_chs = [env_by_id[i] for i in resolve_env(level, env_by_id.values())
+                       if i in env_by_id]
         # apply level settings — explicit CLI flags still win (they only ever turn things ON here).
         if not level.judge:
             use_judge = False
@@ -480,7 +490,8 @@ def main(argv=None):
             args.retries = level.retries
         level_meta = {"suite_id": f"level-{args.level}", "suite_version": version}
         print(f"Level {args.level}@{version}: {len(chs)} challenges"
-              f"  (judge={use_judge} agent={args.agent} prebuilt={args.prebuilt})")
+              + (f" + {len(env_chs)} env" if env_chs else "")
+              + f"  (judge={use_judge} agent={args.agent} prebuilt={args.prebuilt})")
     else:
         ids = list(_csv(args.ids) or [])
         if args.ids_file:
@@ -496,7 +507,7 @@ def main(argv=None):
             published_after=args.published_after,
             published_before=args.published_before,
         )
-    if not chs:
+    if not chs and not env_chs:
         print("No challenges matched filters.", file=sys.stderr)
         return 1
 
@@ -958,10 +969,43 @@ def main(argv=None):
                 print(f"{label}  ✗ abandoning category '{ch.family}' "
                       f"({loop_skip_streak} consecutive repetition loops) — skipping the rest")
 
+        # Agentic axis: the level's goal-state-env challenges, run last (slowest — a multi-turn agent
+        # loop per challenge). Rows land in the SAME results list, so one bundle carries coding +
+        # agentic; scoring keeps agentic as its own axis (never mixed into code_score).
+        if env_chs and client is not None:
+            if not relevant("env", caps):
+                print(f"{model:>18} | env: SKIP {len(env_chs)} env challenge(s) "
+                      f"(model lacks '{GATED_CAP['env']}')")
+            else:
+                from .env import env_result_row
+                from .env.agent import run_env_task
+                from .env.firecracker import UnsupportedHost
+                for ch in env_chs:
+                    label = f"{model:>18} | {ch.id:<28}"
+                    print(f"{label}  → agent loop [goal-state-env] …")
+                    prov = _select_env_provider(args, ch)
+                    if prov is None:
+                        print(f"{label}  SKIP (no available provider satisfies its requirements)")
+                        continue
+                    try:
+                        res = run_env_task(client, model, ch, prov)
+                    except (UnsupportedHost, RuntimeError) as e:
+                        print(f"{label}  ERROR provider: {e}")
+                        continue
+                    results.append(env_result_row(ch, res, model=model,
+                                                  turns_to_green=res.get("turns_to_green"),
+                                                  turns_used=res.get("turns_used"),
+                                                  transcript=res.get("transcript", "")))
+                    if res["passed"]:
+                        run_passed_any = True
+                    print(f"{label}  {'ok ' if res['passed'] else '   '} env [{prov.name}] "
+                          f"passed={res['passed']} turns={res.get('turns_used')} "
+                          f"green@{res.get('turns_to_green')}")
+
     stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
     outdir = Path(args.out) if args.out else ROOT / "results" / stamp
     meta = {
-        "timestamp": stamp, "models": models, "n_challenges": len(chs),
+        "timestamp": stamp, "models": models, "n_challenges": len(chs) + len(env_chs),
         "judge": (judge_model if use_judge else None),
         "sandbox": effective_sandbox(run_cfg.get("sandbox")), "reference": args.reference,
         "gpu": _gpu_info(), "retries": args.retries,
