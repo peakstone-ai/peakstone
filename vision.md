@@ -425,25 +425,39 @@ A different, heavier cost profile than a normal run — another reason it's a de
 ### ★ Idea 10 — The self-feeding corpus: model-authored held-out challenges ride the standard run
 > Status: designed, **not built**. The fusion of Idea 2 (never-trained-on tests), Idea 9 (authoring as
 > a scored capability), and commit-and-reveal — promoted from post-release flagship to a **corpus
-> pipeline**: every standard run *authors* new sealed challenges and *blind-solves* previously sealed
-> ones, so the corpus refreshes itself at the frontier. Sequence after the trust-hardening pass + the
-> CI gate (Idea 1); it absorbs Idea 9's standalone timeline.
+> pipeline**: standard runs *author* challenges that stay private on the user's own box, the user's
+> own roster calibrates them locally, and the interesting ones funnel to private review → the next
+> standard suite. Sequence after the trust-hardening pass + the CI gate (Idea 1); it absorbs Idea 9's
+> standalone timeline.
 
-The reframe that makes it workable: **"private" only has to mean *provably created after every
-current model's training cutoff*** — not perpetually secret. A sealed epoch gives exactly that:
+Two reframes make it workable:
+- **"Private" only has to mean *provably created after every current model's training cutoff*** —
+  not perpetually secret. An optional content-free commitment timestamps creation.
+- **Nothing untrusted crosses machine boundaries.** Model-authored test code only ever runs on the
+  box that authored it (which was already running that model's untrusted output) and in the
+  reviewer's sandbox — the same trust posture as today's `propose.py` flow. There is *no community
+  distribution of unreviewed challenges*, which deletes what would otherwise be the pipeline's
+  biggest security surface. It's also the only honest option: **distribution is disclosure** — a
+  "sealed" candidate sent to other users' machines for blind-solving is effectively published on
+  day one (readable, scrapable, trainable), so a shared solve-pool never actually preserves the
+  held-out property it exists to create. Keeping candidates on the author's box until review is
+  what makes "never trained on" true by construction rather than promised.
 
 ```
-epoch N    each standard run AUTHORS ~2 challenges near its own frontier (few-shot anchored:
-           2 it solved + 1 it didn't, per Idea 9) ─► local gates: reference-must-pass +
-           novelty/near-dup check ─► SEAL: submit only H(spec‖tests‖reference‖salt) + safe
-           metadata; server stamps submitted_at (no content leaves the box — commit-and-reveal)
-epoch N+1  each standard run also BLIND-SOLVES a probe slice (~10) of epoch-N sealed candidates
-           ─► scores submitted content-free (`committed-private` tier, NO headline credit)
-epoch N+2  REVEAL + curate: candidates auto-nominated when their pass-pattern is *interesting*
-           (discriminates — neither floor nor ceiling, splits model families); admin reviews and
-           canonizes into standard@next — each arriving PRE-CALIBRATED (its epoch-N+1 pass-rate
-           IS its empirical tier) ─► once published: gold held-out point for every pre-reveal
-           model; a normal dated regression test for models released after
+on the user's box   each standard run AUTHORS ~2 challenges near its own frontier (few-shot
+(private, local)    anchored: 2 it solved + 1 it didn't, per Idea 9) ─► local gates:
+                    reference-must-pass + novelty/near-dup ─► saved under challenges/private/
+                    (gitignored; content never leaves the box)
+                    ─► optional SEAL: POST H(spec‖tests‖reference‖salt) + category only; the
+                       server stamps submitted_at — creation is provable, content stays private
+local calibration   the user's OWN models attempt each candidate across subsequent runs; the
+                    local pass-pattern (not floor, not ceiling, splits their roster) is the
+                    "interesting" signal — behind a one-time opt-in the client auto-nominates
+private review      the user submits the candidate (promising it stayed private; the commitment,
+                    if made, proves WHEN it was created) ─► admin re-runs it against a reference
+                    roster in the sandbox — the real cross-family calibration — and canonizes
+                    the keepers into standard@next ─► publication IS the reveal: a gold held-out
+                    point for every model released before it, a dated regression test after
 ```
 
 Why it's strong — three compounding effects:
@@ -451,10 +465,11 @@ Why it's strong — three compounding effects:
   "~solved," but *frontier refresh* is the long-term gap — T3/T4 must accrete as fast as models
   improve, and human authors won't keep pace. Here every run manufactures candidates near its own
   frontier; the two cold-starts feed each other.
-- **Candidates arrive pre-calibrated.** Pool attempts give each candidate cross-model pass-rates
-  *before* canonization — a challenge enters `standard@next` with a data-driven tier on day one.
-  This is the machinery that feeds the deferred **frontier band** (§9.A).
-- **A perpetual held-out supply.** Every epoch mints challenges no current model can have trained
+- **Candidates arrive pre-filtered and pre-measured.** The local pass-pattern nominates; the
+  review roster's re-run supplies cross-family pass-rates — so a challenge enters `standard@next`
+  with an empirical tier instead of an author guess. This is the machinery that feeds the deferred
+  **frontier band** (§9.A).
+- **A perpetual held-out supply.** Every cycle mints challenges no current model can have trained
   on, *by construction* — the strongest possible held-out points, on a conveyor belt.
 
 Participation is **exhaust, not labor** (the §7 operating rule): a one-time opt-in
@@ -463,26 +478,28 @@ often — no per-challenge ceremony; the user reviews nothing unless they want t
 stays available for the curious; the default path is automatic.
 
 Honest risks, and the gates that answer them:
-- **Security is the biggest new surface.** Blind-solving executes *unreviewed model-authored test
-  code* on community machines. Distribution gate: candidates enter the solve pool only under real
-  isolation (docker/microvm — never the plain-subprocess sandbox), and only after automated
-  screening (+ an admin skim once volume allows).
-- **Self-preference / gaming.** A model can author idiom-shaped challenges its own family aces.
-  Canonization requires *cross-family* pass evidence — a candidate solved only by its author's
-  family is flagged, not canonized. Validity + novelty gates stay automatic; human curation is the
-  final backstop (Idea 9's circularity mitigations apply verbatim).
-- **Sealed scores are self-reports.** Until reveal, a content-free score is just a timestamped
-  claim → `committed-private` tier, headline credit only after reveal + re-run, and the visible
-  "committed N / revealed M" counter makes selective reveal legible (file-drawer can't be
-  prevented, only shown).
-- **Cost.** Probe-sized, per the modifier philosophy: author ~2, solve ~10 per run. Expect a high
-  rejection rate at the gates — fine; authoring costs only model-time.
+- **Single-roster calibration bias.** Local data comes only from whatever models the user happens
+  to run — treat it as the *nomination filter*, never the tier. The review re-run against a
+  reference roster is the real calibration; review volume stays low because only nominated
+  candidates arrive.
+- **Self-preference / gaming.** A model can author idiom-shaped challenges its own family aces —
+  and a single-user roster can't expose that. It surfaces at review: a candidate only the author's
+  family solves on the reference roster is flagged for a closer look, not auto-canonized. Validity
+  + novelty gates stay automatic; human curation is the final backstop (Idea 9's circularity
+  mitigations apply verbatim).
+- **The privacy promise is honor-system — and the design degrades gracefully.** If a candidate
+  leaks (or was quietly trained on) before publication, first-seen dating treats it like any
+  public challenge. The commitment counter ("committed N / revealed M") keeps selective behavior
+  legible, and local scores on still-private candidates never earn headline credit.
+- **Cost.** Probe-sized, per the modifier philosophy: author ~2 per run; local calibration rides
+  runs already happening. Expect a high rejection rate at the gates — fine; authoring costs only
+  model-time.
 
-Staged build (mostly composition): (1) authoring modifier + local gates + commitment submission
-(reuses `propose.py`'s reference gate + commit-and-reveal slices 1–2); (2) sealed-pool service +
-blind-solve modifier + `committed-private` ingest tier; (3) auto-nominate heuristic +
-review/canonize flow into `standard@next` + the reveal verification (`verify_reveal`). Each stage
-is independently useful; stage 1 alone already yields Idea 9's authoring axis.
+Staged build (mostly composition): (1) authoring modifier + local gates + `challenges/private/`
+output + the optional commitment POST (reuses `propose.py`'s reference gate + commit-and-reveal
+slices 1–2); (2) local calibration tracking + the auto-nominate opt-in; (3) the private-review
+channel (extends the proposals queue) + reference-roster re-run + canonize with first-seen dating.
+No pool service, no epoch scheduler — and stage 1 alone already yields Idea 9's authoring axis.
 
 ---
 
