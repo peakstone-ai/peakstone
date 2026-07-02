@@ -20,6 +20,30 @@ from .capabilities import PROVIDER_CAPS, Capabilities
 
 _SECRET_RE = re.compile(r"KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL", re.I)
 
+# Node programs are UNTRUSTED model output running as host subprocesses — cap them like the test
+# sandbox does (engine/sandbox.py), or a runaway allocation OOMs the whole box and the kernel
+# SIGKILLs the runner mid-suite (glm-4.7-flash did exactly this on env-03). RLIMIT_AS is a blunt
+# virtual-address-space proxy; 8 GiB clears the Go runtime's large virtual reservations (env-04's
+# reference fails at 4) while staying well below catastrophe. NPROC is per-real-UID (counts ALL the
+# user's processes) — 512 matches the sandbox default; 256 broke Go thread creation here.
+_MEM_LIMIT_BYTES = int(os.environ.get("PEAKSTONE_ENV_MEM_LIMIT_GB", "8")) * 1024 ** 3
+_FSIZE_LIMIT_BYTES = int(os.environ.get("PEAKSTONE_ENV_FSIZE_LIMIT_GB", "1")) * 1024 ** 3
+_NPROC_LIMIT = int(os.environ.get("PEAKSTONE_ENV_NPROC_LIMIT", "512"))
+
+
+def _apply_limits():  # runs in the forked child before exec; inherited by its children
+    import resource
+    for res, lim in (
+        (resource.RLIMIT_AS, _MEM_LIMIT_BYTES),
+        (resource.RLIMIT_FSIZE, _FSIZE_LIMIT_BYTES),
+        (resource.RLIMIT_NPROC, _NPROC_LIMIT),
+        (resource.RLIMIT_CORE, 0),
+    ):
+        try:
+            resource.setrlimit(res, (lim, lim))
+        except (ValueError, OSError):
+            pass
+
 
 def _killpg(p: subprocess.Popen) -> None:
     """SIGKILL the whole process group (node programs spawn children)."""
@@ -90,12 +114,13 @@ class LocalNode(Node):
             log = self._dir / f".log-{len(self._bg)}"
             fh = open(log, "wb")
             p = subprocess.Popen(cmd, cwd=self._dir, env=self._proc_env(), shell=True,
-                                 stdout=fh, stderr=subprocess.STDOUT, start_new_session=True)
+                                 stdout=fh, stderr=subprocess.STDOUT, start_new_session=True,
+                                 preexec_fn=_apply_limits)
             self._bg.append((p, log))
             return RunResult(0, stdout=f"[started pid {p.pid}]")
         p = subprocess.Popen(cmd, cwd=self._dir, env=self._proc_env(), shell=True,
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                             start_new_session=True)
+                             start_new_session=True, preexec_fn=_apply_limits)
         try:
             out, err = p.communicate(timeout=timeout)
             return RunResult(p.returncode, (out or "")[-20000:], (err or "")[-20000:])
