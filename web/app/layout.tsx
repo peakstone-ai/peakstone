@@ -20,7 +20,7 @@ export default function RootLayout({
               <span aria-hidden>🪨</span> Peakstone
             </Link>
             <div className="flex gap-4 text-sm text-stone-400">
-              <Link href="/" className="hover:text-stone-100">Leaderboard</Link>
+              <Link href="/leaderboard" className="hover:text-stone-100">Leaderboard</Link>
               <Link href="/challenges" className="hover:text-stone-100">Challenges</Link>
               <Link href="/proposals" className="hover:text-stone-100">Propose</Link>
               <Link href="/evolution" className="hover:text-stone-100">Evolution</Link>

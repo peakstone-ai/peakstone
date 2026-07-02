@@ -25,7 +25,7 @@ export default async function ModelPage({
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-8">
-      <Link href="/" className="text-sm text-stone-500 hover:text-stone-300">
+      <Link href="/leaderboard" className="text-sm text-stone-500 hover:text-stone-300">
         ← leaderboard
       </Link>
       <h1 className="mt-2 text-2xl font-semibold">{data.family}</h1>

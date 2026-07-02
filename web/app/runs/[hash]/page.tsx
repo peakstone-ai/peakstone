@@ -30,7 +30,7 @@ export default async function RunPage({
           ← {data.family}
         </Link>
       ) : (
-        <Link href="/" className="text-sm text-stone-500 hover:text-stone-300">
+        <Link href="/leaderboard" className="text-sm text-stone-500 hover:text-stone-300">
           ← leaderboard
         </Link>
       )}
