@@ -45,6 +45,23 @@ def _apply_limits():  # runs in the forked child before exec; inherited by its c
             pass
 
 
+def _pid_isolate_prefix() -> list[str]:
+    """Command prefix putting a node process in its own unprivileged user+pid namespace, so a
+    model-issued `pkill`/`kill` can only reach the node's own descendants — NOT the runner.
+    (glm-4.7-flash deterministically ran a pkill while debugging a port conflict and SIGKILLed the
+    whole suite: same uid, no boundary.) Signals cannot cross a pid namespace outward. Same netns
+    is kept — peers talk over 127.0.0.1. Mirrors sandbox._net_isolate_prefix; empty on kernels
+    without unprivileged userns (the pre-existing no-boundary behavior, docker/microvm for that)."""
+    if not shutil.which("unshare"):
+        return []
+    probe = subprocess.run(["unshare", "-Ur", "-pf", "--kill-child", "true"],
+                           capture_output=True, timeout=10)
+    return ["unshare", "-Ur", "-pf", "--kill-child", "--"] if probe.returncode == 0 else []
+
+
+_PID_ISOLATE = _pid_isolate_prefix()
+
+
 def _killpg(p: subprocess.Popen) -> None:
     """SIGKILL the whole process group (node programs spawn children)."""
     try:
@@ -99,7 +116,12 @@ class LocalNode(Node):
             return {"error": str(e)}
         if not p.is_file():
             return {"error": f"no such file: {path}"}
-        return {"content": p.read_text()}
+        # cap what enters the runner/transcript — a node can legally write up to the FSIZE limit,
+        # and json-encoding a GiB string (twice) is a runner OOM waiting to happen
+        content = p.read_text(errors="replace")
+        if len(content) > 100_000:
+            return {"content": content[:100_000], "truncated": True, "total_chars": len(content)}
+        return {"content": content}
 
     def _proc_env(self) -> dict:
         # strip harness secrets — node programs are untrusted model output
@@ -110,15 +132,16 @@ class LocalNode(Node):
         return env
 
     def run(self, cmd: str, *, background: bool = False, timeout: int = 30) -> RunResult:
+        argv = _PID_ISOLATE + ["sh", "-c", cmd]   # sh -c keeps shell=True semantics
         if background:
             log = self._dir / f".log-{len(self._bg)}"
             fh = open(log, "wb")
-            p = subprocess.Popen(cmd, cwd=self._dir, env=self._proc_env(), shell=True,
+            p = subprocess.Popen(argv, cwd=self._dir, env=self._proc_env(),
                                  stdout=fh, stderr=subprocess.STDOUT, start_new_session=True,
                                  preexec_fn=_apply_limits)
             self._bg.append((p, log))
             return RunResult(0, stdout=f"[started pid {p.pid}]")
-        p = subprocess.Popen(cmd, cwd=self._dir, env=self._proc_env(), shell=True,
+        p = subprocess.Popen(argv, cwd=self._dir, env=self._proc_env(),
                              stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                              start_new_session=True, preexec_fn=_apply_limits)
         try:
