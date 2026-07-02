@@ -18,7 +18,7 @@ export PATH="$HOME/opt/node/bin:$PATH"
 
 API="${API:-http://localhost:8000}"
 PROVIDER="${ENV_PROVIDER:-auto}"
-TIMEOUT="${PER_MODEL_TIMEOUT:-2h}"
+TIMEOUT="${PER_MODEL_TIMEOUT:-}"        # empty = no per-model wall-clock cap (the default)
 MODELS=("$@")
 [ ${#MODELS[@]} -eq 0 ] && MODELS=(phi-4-mini qwen3.5-9b devstral qwen3-coder)
 
@@ -44,8 +44,8 @@ for m in "${MODELS[@]}"; do
   [ "$ready" = 1 ] || { echo "!! $m never ready — skipping"; kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null; continue; }
 
   mdir="$OUT/$m"
-  echo "=== [$m] driving env challenges (provider=$PROVIDER, timeout $TIMEOUT) ==="
-  timeout "$TIMEOUT" python -u -m peakstone.engine.runner --env --models "$m" \
+  echo "=== [$m] driving env challenges (provider=$PROVIDER, timeout ${TIMEOUT:-none}) ==="
+  ${TIMEOUT:+timeout "$TIMEOUT"} python -u -m peakstone.engine.runner --env --models "$m" \
       --bundle --env-provider "$PROVIDER" --out "$mdir" > "$OUT/$m.run.log" 2>&1
   rc=$?; [ "$rc" = 124 ] && echo "!! [$m] agentic run hit $TIMEOUT — killed; moving on"
   tail -5 "$OUT/$m.run.log" | sed 's/^/    /'

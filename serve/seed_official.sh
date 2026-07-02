@@ -3,8 +3,10 @@
 #
 # For each model: serve it, run the OFFICIAL standard level (generation-only / --no-judge, the
 # single-GPU path), produce a signed bundle, submit it to the local API, stop the server, next.
-# One model in VRAM at a time. A model that dies, never serves, or hangs past PER_MODEL_TIMEOUT is
-# killed and the loop moves on — one bad model never blocks the rest. All output goes to log FILES
+# One model in VRAM at a time. A model that dies or never serves is skipped — one bad model never
+# blocks the rest. NO wall-clock cap by default (a 90%-done run must never be thrown away; per-
+# request timeouts already bound a wedged server) — set PER_MODEL_TIMEOUT=8h to opt one in.
+# All output goes to log FILES
 # (no terminal pipe), so there's no pipe-buffer deadlock like the TUI's --stream-output path.
 #
 # The API must already be running against your seed DB, e.g.:
@@ -23,14 +25,14 @@ cd "$(dirname "$0")/.."
 export PATH="$HOME/opt/node/bin:$PATH"
 
 API="${API:-http://localhost:8000}"
-TIMEOUT="${PER_MODEL_TIMEOUT:-6h}"
+TIMEOUT="${PER_MODEL_TIMEOUT:-}"        # empty = no per-model wall-clock cap (the default)
 MAX_TOKENS="${MAX_TOKENS:-8192}"          # cap generation — stops runaway 16k-token rambles
 MODELS=("$@")
 [ ${#MODELS[@]} -eq 0 ] && MODELS=(qwen3.5-9b devstral qwen3-coder)
 
 STAMP=$(date +%Y%m%d-%H%M%S)
 OUT="results/seed-$STAMP"; mkdir -p "$OUT"
-echo "Seed -> $OUT   API=$API   timeout/model=$TIMEOUT   models: ${MODELS[*]}"
+echo "Seed -> $OUT   API=$API   timeout/model=${TIMEOUT:-none}   models: ${MODELS[*]}"
 
 # fail fast if the API/DB the bundles must land in isn't up
 if ! curl -fsS "$API/healthz" >/dev/null 2>&1; then
@@ -56,9 +58,9 @@ for m in "${MODELS[@]}"; do
     echo "!! $m never became ready — skipping"; kill "$SRV" 2>/dev/null; wait "$SRV" 2>/dev/null; continue
   fi
 
-  echo "=== [$m] running standard (no-judge), log: $OUT/$m.run.log  (timeout $TIMEOUT) ==="
+  echo "=== [$m] running standard (no-judge), log: $OUT/$m.run.log  (timeout ${TIMEOUT:-none}) ==="
   mdir="$OUT/$m"
-  timeout "$TIMEOUT" python -u -m peakstone.engine.runner --models "$m" \
+  ${TIMEOUT:+timeout "$TIMEOUT"} python -u -m peakstone.engine.runner --models "$m" \
       --level standard --no-judge --bundle --max-tokens "$MAX_TOKENS" --out "$mdir" > "$OUT/$m.run.log" 2>&1
   rc=$?
   [ "$rc" = 124 ] && echo "!! [$m] hit the $TIMEOUT timeout — killed; moving on"

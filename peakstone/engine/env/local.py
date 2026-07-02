@@ -135,6 +135,10 @@ class LocalEnvironment(Environment):
                 for declared in n.ports:
                     self._ports[(n.name, declared)] = _free_port()
             for n in spec.nodes:
+                # create every node workdir up front — launch/run use it as cwd + logfile home, and
+                # a node the agent never write_file'd into must still launch (and fail its checks,
+                # not crash the provider)
+                (self._root / n.name).mkdir(parents=True, exist_ok=True)
                 self.nodes[n.name] = LocalNode(n.name, self._root / n.name, self._node_env(n))
         except BaseException:
             self.teardown()   # don't leak the temp dir on partial construction

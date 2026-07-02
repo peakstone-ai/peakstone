@@ -1082,6 +1082,9 @@ def run_env_agent(args, host, ports, run_cfg):
             except (UnsupportedHost, RuntimeError) as e:
                 print(f"  {model}  --  {ch.id}: provider error: {e}")
                 continue
+            except Exception as e:  # noqa: BLE001 — one broken challenge must not nuke the whole run
+                print(f"  {model}  --  {ch.id}: {type(e).__name__}: {e}")
+                continue
             results.append(env_result_row(ch, res, model=model,
                                           turns_to_green=res.get("turns_to_green"),
                                           turns_used=res.get("turns_used"),
