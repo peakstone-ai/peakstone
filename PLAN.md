@@ -312,6 +312,10 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
   work.
 - **P4 — Multimodal.** vision-to-UI (build interface from screenshot/video), game-playing, for
   models that support it.
+- **P5 — Self-feeding corpus.** Model-authored sealed challenges ride the standard run: author near
+  own frontier → seal (commit-and-reveal) → blind-solve next epoch → auto-nominate interesting
+  candidates (opt-in) → reveal + canonize into `standard@next`, pre-calibrated. See vision.md §7
+  Idea 10 for the full design and gates.
 
 ## 10. Immediate next steps (P1, in order)
 1. ✅ **DONE** — name (Peakstone) + license (Apache-2.0 / CC-BY-4.0) + `/schema/result-bundle.schema.json`
