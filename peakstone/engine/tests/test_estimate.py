@@ -28,8 +28,9 @@ def _patch(monkeypatch, *, tps, mbps, caps):
 def test_estimate_known(monkeypatch):
     _patch(monkeypatch, tps=100.0, mbps=100.0, caps={"tools", "agentic", "reasoner"})
     e = est.estimate("quick", "m")
-    assert e["tps"] == 100.0 and e["n_challenges"] == 6
-    assert set(e["by_family"]) == {"humaneval", "aime", "tool-calling"}
+    # quick selects humaneval + tool-calling from the fake corpus (aime is deep/max-only)
+    assert e["tps"] == 100.0 and e["n_challenges"] == 4
+    assert set(e["by_family"]) == {"humaneval", "tool-calling"}
     assert e["total_min"] >= e["gen_min"] > 0
     assert e["unknowns"] == []                       # tps + bandwidth known
     assert "quick" in est.format_estimate(e)

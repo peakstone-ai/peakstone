@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from peakstone.engine.challenges import Challenge
-from peakstone.engine.levels import Level, load_levels, resolve
+from peakstone.engine.levels import Level, load_levels, resolve, resolve_env
 
 
 def _ch(cid, family, difficulty=1):
@@ -68,3 +68,32 @@ def test_resolve_dedups_across_axes():
     level = Level("t", select=[{"family": "aime"}, {"family": "aime", "limit": 1}])
     out = resolve(level, CORPUS)
     assert out == ["aime-0", "aime-1", "aime-2"] and len(out) == len(set(out))
+
+
+class _EnvCh:
+    def __init__(self, cid, difficulty):
+        self.id, self.difficulty = cid, difficulty
+
+
+_ENVS = [_EnvCh(f"env-{i:02d}-x", d) for i, d in enumerate([3, 4, 5, 5, 5, 3, 4, 5], start=1)]
+
+
+def test_resolve_env_by_ids_ordered_and_skips_unknown():
+    level = Level("t", select=[
+        {"family": "python", "limit": 1},   # non-env axes are ignored by resolve_env
+        {"family": "env", "ids": ["env-06-x", "env-01-x", "no-such-env", "env-06-x"]},
+    ])
+    assert resolve_env(level, _ENVS) == ["env-01-x", "env-06-x"]   # id-sorted, de-duped, unknown skipped
+
+
+def test_resolve_env_difficulty_and_limit():
+    level = Level("t", select=[{"family": "env", "difficulty": [5], "limit": 2}])
+    assert resolve_env(level, _ENVS) == ["env-03-x", "env-04-x"]
+
+
+def test_standard_level_selects_the_env_trio():
+    _, levels = load_levels()
+    trio = [_EnvCh(i, 3) for i in
+            ["env-01-file-server", "env-06-load-balancer", "env-08-two-phase-commit", "env-02-gossip-max"]]
+    assert resolve_env(levels["standard"], trio) == [
+        "env-01-file-server", "env-06-load-balancer", "env-08-two-phase-commit"]

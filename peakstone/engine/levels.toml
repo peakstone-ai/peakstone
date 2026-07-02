@@ -16,7 +16,7 @@
 # codeforces, aime, swebench) which are GITIGNORED — you must regenerate them via their importers and
 # accept the upstream terms; on a clean checkout those families are simply empty and skipped.
 
-version = "2026.07"
+version = "2026.08"
 
 [smoke]
 description = "Fastest sanity + tok/s probe."
@@ -70,9 +70,9 @@ retries = 2
 calibration = true
 # Axis ORDER here IS the run order (runner preserves it). Cheapest/fastest axes first, so a run shows
 # quick early signal and a stall is obvious; the slow, long-generation axes (BigCodeBench + long
-# context) run last. Per-axis limits keep the whole suite to ~2-3 h/model on a single GPU — light
-# enough that community submitters will actually run it. Every family here is committed to the repo, so
-# no external sourcing is needed. (The agentic `env` axis runs separately via `--env` for now.)
+# context, then the agentic env loop) run last. Per-axis limits keep the whole suite to ~2-3 h/model on
+# a single GPU — light enough that community submitters will actually run it. Every family here is
+# committed to the repo, so no external sourcing is needed.
 select = [
   # fast: floor + the contamination-resistant native code core + short-response safety/tools
   { family = "humaneval", limit = 30 },
@@ -87,6 +87,9 @@ select = [
   # moderate coding — run last (longer generations)
   { family = "bigcodebench", limit = 30 },
   { family = "longcontext" },
+  # agentic: goal-state env challenges (multi-node agent loop; own loader, resolves via resolve_env).
+  # All three run on the LOCAL provider (no Docker/network shaping needed). Gated on the 'agentic' cap.
+  { family = "env", ids = ["env-01-file-server", "env-06-load-balancer", "env-08-two-phase-commit"] },
 ]
 
 [deep]

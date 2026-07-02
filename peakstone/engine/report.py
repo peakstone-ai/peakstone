@@ -21,8 +21,9 @@ def write_report(results: list[dict], outdir: Path, meta: dict) -> Path:
         fn = tdir / f"{r['model']}__{r['challenge']}.md"
         parts = [
             f"# {r['model']} — {r['challenge']} ({r['language']} D{r['difficulty']})\n",
-            f"final={r['final_score']} test={r['test_score']} judge={r['judge_score']} "
-            f"passed={r['passed']}/{r['total']} tok/s={r.get('tok_per_s')}\n",
+            # .get: env (goal-state) rows carry final/passed/total but no test/judge scores
+            f"final={r['final_score']} test={r.get('test_score')} judge={r.get('judge_score')} "
+            f"passed={r.get('passed')}/{r.get('total')} tok/s={r.get('tok_per_s')}\n",
         ]
         if r.get("planner_response"):   # planner row: show the plan, then the coder's code
             parts += [f"_planner **{r.get('planner_model', r['model'])}** → coder "
