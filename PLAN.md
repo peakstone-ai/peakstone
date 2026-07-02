@@ -365,3 +365,56 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
 > submission data, not param-bucketed. **Run granularity** — every (quant, ctx, hardware, driver,
 > engine) is a distinct, never-collapsed run; the leaderboard is a faceted query, with a
 > "fits-my-hardware" (VRAM/perf) filter as a headline feature (§6a).
+
+## 12. Review backlog — 2026-07-02 multi-level review
+
+> A full code+concept+site review (three deep passes: web tier, engine/daemon, API/env/importers).
+> Detailed findings with file:line refs and failure scenarios live in the **local, gitignored
+> `RELEASE-REVIEW.md`** (same convention as the launch review — security detail never publishes);
+> `R#` below points into it. This section is the pickup-order work plan.
+
+**A. Trust-hardening sprint — do first; the moat is the product**
+1. **Run identity**: one `RunConfig` resolved once, recorded verbatim in meta + bundle (token
+   budget, judge on/off, harness version). Today three different numbers can describe one run. [R1]
+2. **Server-side truth for submitter-supplied fields**: notarized first-seen `published_at`,
+   trust-reconciled family metadata, suite content-hash actually compared at ingest,
+   distinct-account provenance for community-verified. [R2–R5]
+3. **Trust-gate every public aggregate** (challenge pages, pass-rates, provisional list, evolution
+   chart, landing stats) and persist env provider fidelity so it caps trust as designed. [R6–R7]
+4. **Re-seed the official board through the daemon**, judge on, per the level definition; retire or
+   provenance-label repack composites. [R8]
+5. **Scoring honesty**: swebench post-run revert covers all non-source files; "no tests ran" is
+   unscored, not 0.0; bidirectional partition probes; judge reachable (or loud) in gateway mode;
+   loop-streak/retry attribution fixes. [R9–R11, R13, R20]
+6. **Consent + safety defaults**: daemon auto-submit behind an explicit flag; agentic runs of
+   untrusted models never silently fall back to the non-isolating local provider. [R12, R14]
+
+**B. Funnel + web (cheap, high-visibility)**
+7. **Fix /submit**: public API base URL (split from the internal one) + current `peakstone` CLI
+   commands — the submission funnel is unusable as rendered. [R26, R33]
+8. **`peakstone check`** — the CI regression gate (vision §7 Idea 1, the ignition play): compare
+   against the user's own previous bundle, exit non-zero on regression; GH Action wrapper.
+9. Web hygiene: discriminated fetch result + real 404s, single filter-param list, `revalidate`
+   instead of `force-dynamic`, fetch timeouts, rate limiting at the proxy, leaderboard aggregation
+   moved into SQL. Explain seed tiers + tier migration on /challenges; show which suite the board
+   is scoped to. [R15, R23–R25, R27, R32–R33]
+
+**C. Engine/daemon refactors**
+10. `runner.main()` → per-scoring-mode handlers returning a typed result row (the 750-line
+    god-function; fixes several attribution bugs on the way). [R20]
+11. Daemon lifecycle: shutdown kills the in-flight runner; drain deadline + proxy read timeout;
+    `interrupted` jobs re-queueable; orphan llama-server reconciliation at startup. [R17–R19]
+12. Shared runner↔TUI stream-protocol module (JSON lines, not `" | "` parsing); split
+    `dashboard/app.py`; remove the disconnected preflight free-GPU path. [R21]
+13. Unify `EnvChallenge` with `Challenge` (one base + `kind`; content-hash env challenge dirs so
+    agentic rows can be verified and held-out-dated) and wire `resolve_env` into
+    `--level standard` — the planned env-in-standard work. [R7, R28]
+14. `importers/_common.py` (fetch/slug/meta/stdin-shim dedupe); one axis-taxonomy module shared by
+    report/bundle/API; config overlay honored uniformly; env-provider cleanup leaks. [R22, R29–R31]
+
+**D. Then build the vision**
+15. P5 self-feeding corpus, stage 1 (authoring modifier + local gates + `challenges/private/` +
+    optional commitment) — see §9 P5 and vision.md §7 Idea 10.
+16. Flywheel accelerants (vision §7): "reproduce this run" one-liner per board row; static
+    best-model-per-VRAM-class pages with winning serve flags; weekly auto-generated frontier
+    report (tier migrations, first-solves) with RSS.
