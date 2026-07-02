@@ -989,8 +989,10 @@ def main(argv=None):
                         continue
                     try:
                         res = run_env_task(client, model, ch, prov)
-                    except (UnsupportedHost, RuntimeError) as e:
-                        print(f"{label}  ERROR provider: {e}")
+                    except Exception as e:  # noqa: BLE001 — a broken env challenge scores 0, it
+                        # must not take down the whole standard run
+                        kind = "provider" if isinstance(e, (UnsupportedHost, RuntimeError)) else type(e).__name__
+                        print(f"{label}  ERROR {kind}: {e}")
                         continue
                     results.append(env_result_row(ch, res, model=model,
                                                   turns_to_green=res.get("turns_to_green"),
