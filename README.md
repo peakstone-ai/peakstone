@@ -57,6 +57,43 @@ Each run records full per-challenge transcripts and the model/environment metada
 reproduce it. See `peakstone/engine/runner.py --help` for filters (`--lang`, `--type`, `--difficulty`,
 `--ids`) and modes (judge, retries, agents-md, planner eval).
 
+## CI regression gate (`peakstone check`)
+
+Fine-tuning or re-quantizing a model? Gate your pipeline on "did this checkpoint regress?" —
+compare the new run's bundle against your previous one and exit non-zero if any capability axis
+(code / math / long-context / safety / agentic / planner — the same split the leaderboard uses)
+dropped. The comparison is against **your own baseline**, entirely local; no leaderboard involved.
+
+```bash
+peakstone bench --level standard --models my-model --bundle --out runs/new   # produce the bundle
+peakstone check runs/new --against baselines/my-model.bundle.json           # exit 1 on regression
+cp runs/new/bundle.json baselines/my-model.bundle.json                      # roll the baseline
+```
+
+Both runs must be on the same `(suite, version)`; a changed challenge set is refused (re-baseline,
+or `--relax` to compare only the shared, content-identical challenges). Tuning: `--max-drop 0.02`
+(absolute score drop per axis), `--min-n 5` (axes with fewer results are reported, not gated),
+`--gate-categories` (also gate every per-category score), `--json` (machine-readable verdict).
+Per-challenge green→red flips are listed for debugging. A minimal GitHub Actions job:
+
+```yaml
+# .github/workflows/peakstone-check.yml — needs a self-hosted runner with your GPU
+jobs:
+  regression-gate:
+    runs-on: [self-hosted, gpu]
+    steps:
+      - uses: actions/checkout@v4
+      - run: pipx install peakstone && peakstone corpus sync
+      - run: ./serve/serve.sh my-model &   # or point --gateway at an already-running server
+      - run: peakstone bench --level standard --models my-model --bundle --out runs/new
+      - run: peakstone check runs/new --against baselines/my-model.bundle.json
+      - if: success()   # promote the new run to baseline (commit it, or use actions/cache)
+        run: cp runs/new/bundle.json baselines/my-model.bundle.json
+```
+
+Every check run produces a signed, submittable bundle — when you're happy with a checkpoint,
+`--submit` it to the public board (see peakstone.ai/submit).
+
 ### Offline test sandbox (Linux)
 
 Each test runs **offline**, in a throwaway network namespace (loopback only). This keeps a solution

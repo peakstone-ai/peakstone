@@ -15,6 +15,10 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import sys
+
+# script-style invocation puts scripts/ (not the repo root) on sys.path — make `peakstone` importable
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
 from peakstone.engine import bundle as B
 from peakstone.engine import challenges as C
