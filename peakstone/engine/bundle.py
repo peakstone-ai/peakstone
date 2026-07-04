@@ -363,12 +363,33 @@ def _token_metrics(row: dict, served_ctx: int | None) -> dict:
 
 
 def _result(row: dict, chash: dict, judge_model: str | None, cpub: dict | None = None,
-            served_ctx: int | None = None) -> dict:
+            served_ctx: int | None = None, cpriv: dict | None = None) -> dict:
     score: dict = {"final": round(float(row.get("final_score", 0.0)), 4)}
     if row.get("total"):
         score["passed"] = row.get("passed", 0)
         score["total"] = row["total"]
-    r: dict = {
+    if cpriv and row["challenge"] in cpriv:
+        # PRIVATE challenge (commit-and-reveal): the row carries ONLY the score numbers, safe
+        # numeric metadata, and the salted commitment — no transcript, judge detail, env logs, or
+        # dates, all of which leak content. The commitment is the content pin; challenge_hash is a
+        # sentinel so nothing downstream mistakes it for a public dir hash.
+        r: dict = {
+            "challenge_id": row["challenge"],
+            "challenge_hash": "(private)",
+            "private": True,
+            "commitment": cpriv[row["challenge"]],
+            "verification": _verification(row),
+            "score": score,
+        }
+        if row.get("type") or row.get("category"):
+            r["category"] = row.get("type") or row.get("category")
+        if isinstance(row.get("difficulty"), int) and 1 <= row["difficulty"] <= 5:
+            r["difficulty"] = row["difficulty"]
+        for k in ("attempts", "passed_on_attempt", "tok_per_s", "latency_s"):
+            if row.get(k) is not None:
+                r[k] = row[k]
+        return r
+    r = {
         "challenge_id": row["challenge"],
         "challenge_hash": chash.get(row["challenge"], "(unknown)"),
         "verification": _verification(row),
@@ -433,15 +454,19 @@ def produce_bundle(meta: dict, results: list[dict], *, harness_version: str = "0
     model_name = (meta.get("planner_model") or (meta.get("models") or ["unknown"])[0])
     chash = challenge_hashes(paths.challenges_dir())
     cpub = challenge_publication(paths.challenges_dir())
+    from . import private as _private
+    cpriv = _private.private_commitments(paths.challenges_dir())   # id -> salted commitment
     model = model_identity(model_name, run_cfg)
     model["reasoning"] = reasoning_mode(model.get("serve_flags"),
                                         (r.get("reasoning_tokens") for r in results))
     served_ctx = model.get("context")              # the window each result is judged for ctx-truncation against
 
-    bundle_results = [_result(r, chash, meta.get("judge"), cpub, served_ctx) for r in results]
+    bundle_results = [_result(r, chash, meta.get("judge"), cpub, served_ctx, cpriv) for r in results]
     # hash the sorted list as canonical JSON (self-delimiting) — bare concatenation is ambiguous
     # (["ab","c"] and ["a","bc"] would collide) for a value that pins the exact challenge set.
-    suite_hash = _sha256_bytes(canonical_bytes(sorted(r["challenge_hash"] for r in bundle_results)))
+    # Private rows pin by their salted commitment (their challenge_hash is a "(private)" sentinel).
+    suite_hash = _sha256_bytes(canonical_bytes(sorted(
+        r.get("commitment") or r["challenge_hash"] for r in bundle_results)))
 
     bundle: dict = {
         "bundle_version": BUNDLE_VERSION,

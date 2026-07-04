@@ -139,7 +139,9 @@
       "required": ["challenge_id", "challenge_hash", "verification", "score"],
       "properties": {
         "challenge_id": { "type": "string" },
-        "challenge_hash": { "type": "string", "description": "sha256 of the challenge's content (spec + tests + meta) — pins the exact challenge version scored." },
+        "challenge_hash": { "type": "string", "description": "sha256 of the challenge's content (spec + tests + meta) — pins the exact challenge version scored. For a private (commit-and-reveal) row this is the literal sentinel \"(private)\" and the pin lives in `commitment`." },
+        "private": { "type": "boolean", "description": "Commit-and-reveal: this row scores a PRIVATE challenge. Only score numbers, safe numeric metadata, and the salted `commitment` are carried — transcript/judge/dates are omitted (they leak content)." },
+        "commitment": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$", "description": "Salted content commitment: sha256(salt ‖ meta.toml ‖ spec.md ‖ tests/** ‖ reference/**). Revealing content + salt later proves the challenge pre-existed this submission unaltered — held-out by construction (server's submitted_at is the integrity anchor)." },
         "published_at": { "type": "string", "format": "date", "description": "When this challenge's content first became public. Compared against the model's release_date to decide contamination: clean iff published_at > release_date. Authoritative value is the platform's first-seen timestamp per challenge_hash (unforgeable); this field carries the engine's best local estimate." },
         "published_at_source": { "type": "string", "enum": ["upstream", "platform-first-seen", "git", "author", "unknown"], "description": "Provenance of published_at, so consumers can weight its trust: 'upstream' = the originating benchmark/contest date, 'platform-first-seen' = the platform notarized this content_hash, 'git' = first commit in the corpus, 'author' = self-declared, 'unknown'." },
         "category": { "type": "string", "description": "Declared capability category (e.g. 'architecture', 'tool-calling'). See taxonomy.json." },
