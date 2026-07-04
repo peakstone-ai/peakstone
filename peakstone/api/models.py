@@ -194,4 +194,28 @@ class Result(Base):
     # against the model's release_date to decide contamination (engine/contamination.py).
     published_at: Mapped[str | None] = mapped_column(String)
     published_at_source: Mapped[str | None] = mapped_column(String)
+    # Commit-and-reveal: a private row is a sealed claim — score numbers + a salted content
+    # commitment, no content. It earns NO credit on any axis until its challenge is revealed
+    # (content+salt verified against `commitment`), at which point `revealed` flips and
+    # published_at is set to the reveal date (source 'private-reveal') → it joins the held-out
+    # board. The integrity anchor is the submission's server-stamped submitted_at.
+    private: Mapped[bool] = mapped_column(default=False, index=True)
+    commitment: Mapped[str | None] = mapped_column(String, index=True)
+    revealed: Mapped[bool] = mapped_column(default=False)
     submission: Mapped[Submission] = relationship(back_populates="results")
+
+
+class Reveal(Base):
+    """An opened commitment: the revealed challenge content + salt, verified server-side to hash to
+    the commitment that sealed prior results. One reveal per commitment. The reference-must-pass
+    validation is the revealer's self-reported local run (the API never executes untrusted code —
+    same policy as ChallengeProposal); community re-runs verify from the stored content."""
+    __tablename__ = "reveals"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    commitment: Mapped[str] = mapped_column(String, unique=True, index=True)
+    salt: Mapped[str] = mapped_column(String)
+    challenge_id: Mapped[str] = mapped_column(ForeignKey("challenges.id"), index=True)
+    files: Mapped[dict] = mapped_column(JSONv)             # {relpath: text}: meta/spec/tests/reference
+    validation: Mapped[dict | None] = mapped_column(JSONv)  # revealer's local reference run (self-reported)
+    revealed_by_key_id: Mapped[int | None] = mapped_column(ForeignKey("keys.id"))
+    revealed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

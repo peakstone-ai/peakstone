@@ -2669,6 +2669,9 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "check":
         from peakstone.engine.check import check_main   # CI regression gate: bundle vs baseline bundle
         sys.exit(check_main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "reveal":
+        from peakstone.engine.private import reveal_main   # open a private challenge's commitment
+        sys.exit(reveal_main(sys.argv[2:]))
 
     ap = argparse.ArgumentParser(prog="peakstone", description="Peakstone hardware dashboard")
     ap.add_argument("--version", action="version", version=f"peakstone {eng_versions.pkg_version()}")

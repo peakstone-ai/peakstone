@@ -43,7 +43,9 @@ def _repro_sig(results: list[dict]) -> str | None:
     rounded so floating-point noise doesn't split a genuine reproduction. None if nothing
     deterministic ran (such a run can never be community-verified)."""
     det = [(r["challenge_id"], round(float(r.get("score", {}).get("final", 0.0)), 4))
-           for r in results if r.get("verification", "deterministic-tests") == "deterministic-tests"]
+           for r in results if r.get("verification", "deterministic-tests") == "deterministic-tests"
+           and not r.get("private")]   # private sets differ per submitter — they'd fragment
+                                       # reproduction groups and break community verification
     if not det:
         return None
     payload = json.dumps(sorted(det), separators=(",", ":"), ensure_ascii=False)
@@ -151,6 +153,14 @@ def ingest_bundle(db, b: dict) -> models.Submission:
             if _nonfinite(r.get(fld)):
                 raise IngestError(f"non-finite numeric in result.{fld} (NaN/Infinity)")
 
+    # 1c) commit-and-reveal shape: `private` and `commitment` come together or not at all, and a
+    # private row must not smuggle content (transcript) or a forgeable publication date.
+    for r in b.get("results", []):
+        if bool(r.get("private")) != bool(r.get("commitment")):
+            raise IngestError("private rows need a commitment (and commitments imply private)")
+        if r.get("private") and (r.get("transcript") or r.get("published_at")):
+            raise IngestError("a private row must not carry transcript/published_at")
+
     # 2) content-address: re-derive bundle_hash and require a match
     claimed = b.get("bundle_hash")
     recomputed = eng_bundle._sha256_bytes(eng_bundle.canonical_bytes(eng_bundle._without_sig(b)))
@@ -198,7 +208,8 @@ def ingest_bundle(db, b: dict) -> models.Submission:
 
     for r in b["results"]:
         sc = r.get("score", {})
-        db.add(models.Result(
+        private = bool(r.get("private"))
+        row = models.Result(
             submission_id=submission.id, challenge_id=r["challenge_id"],
             challenge_hash=r.get("challenge_hash"), category=r.get("category"),
             verification=r.get("verification"), difficulty=r.get("difficulty"),
@@ -206,14 +217,27 @@ def ingest_bundle(db, b: dict) -> models.Submission:
             tok_per_s=r.get("tok_per_s"), latency_s=r.get("latency_s"), metrics=r.get("metrics"),
             transcript=r.get("transcript"),   # solution + execution output (raw_output/stdout/stderr/plan)
             published_at=r.get("published_at"), published_at_source=r.get("published_at_source"),
-        ))
-        # lazily register the challenge in the corpus
-        ch = db.get(models.Challenge, r["challenge_id"])
-        if not ch:
-            db.add(models.Challenge(
-                id=r["challenge_id"], category=r.get("category"),
-                verification=r.get("verification"), seed_difficulty=r.get("difficulty"),
-                content_hash=r.get("challenge_hash")))
+            private=private, commitment=r.get("commitment"),
+        )
+        # a commitment already revealed by someone else opens this row too (late committer)
+        if private:
+            rev = db.scalar(select(models.Reveal).where(models.Reveal.commitment == r["commitment"]))
+            if rev:
+                row.revealed = True
+                row.challenge_id = rev.challenge_id
+                row.published_at = rev.revealed_at.date().isoformat()
+                row.published_at_source = "private-reveal"
+        db.add(row)
+        # lazily register the challenge in the corpus — but NEVER from a sealed private row: its
+        # challenge_id is an author-chosen slug that must not create (or be confused with) a
+        # public corpus entry until reveal.
+        if not private or row.revealed:
+            ch = db.get(models.Challenge, row.challenge_id)
+            if not ch:
+                db.add(models.Challenge(
+                    id=row.challenge_id, category=r.get("category"),
+                    verification=r.get("verification"), seed_difficulty=r.get("difficulty"),
+                    content_hash=r.get("challenge_hash")))
 
     # observed capabilities (positives) from this run -> union into the family (so others can import
     # a classification without re-testing). Mirrors engine.capabilities.observe on bundle-shaped rows.

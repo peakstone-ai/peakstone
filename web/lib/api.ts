@@ -51,6 +51,8 @@ export type LeaderRow = {
   n_code: number;
   n_agent: number;
   n_planner: number;
+  n_committed: number;           // sealed private (commit-and-reveal) claims — no credit until revealed
+  n_revealed: number;            // of those, opened + counting
   by_category: Record<string, number>;
   tok_per_s: number | null;
   metrics: Record<string, number>;

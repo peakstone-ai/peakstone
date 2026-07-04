@@ -320,7 +320,12 @@ def _held_out(code_rs, fam: models.ModelFamily | None) -> dict:
 
 
 def _summarize(sub: models.Submission, fam: models.ModelFamily | None = None) -> dict:
-    rs = sub.results
+    # Commit-and-reveal: a sealed private row is a timestamped CLAIM, not evidence — it earns no
+    # credit on any axis until revealed. Committed/revealed counts are surfaced so selective
+    # reveal (the file-drawer) stays visible rather than hidden.
+    n_committed = sum(1 for r in sub.results if r.private)
+    n_revealed = sum(1 for r in sub.results if r.private and r.revealed)
+    rs = [r for r in sub.results if not r.private or r.revealed]
     # capability axes, kept separate: coding ability, safety/honesty, agentic (goal-state-env,
     # multi-machine), and planning (planner plans → fixed coder executes → tests). A planner/agent
     # isn't a "coder" and vice-versa.
@@ -359,6 +364,8 @@ def _summarize(sub: models.Submission, fam: models.ModelFamily | None = None) ->
         "n_agent": len(agent),
         "n_planner": len(planner),
         "n_total": len(rs),                              # coverage: challenges in the run
+        "n_committed": n_committed,                      # sealed private claims (no credit until reveal)
+        "n_revealed": n_revealed,                        # of those, opened + counting
         "sol_per_s": _sol_per_s(rs),                     # throughput: challenges per second of work
         "total_time_s": _total_time(rs),                 # wall: sum of per-challenge model time
         "by_category": {k: round(sum(v) / len(v), 3) for k, v in sorted(by_cat.items())},
@@ -618,6 +625,9 @@ def challenges(db: Session = Depends(get_session)):
                func.count(models.Result.id).label("n"),
                func.avg(models.Result.final).label("avg"),
                func.sum(case((models.Result.final >= 0.999, 1), else_=0)).label("solved"))
+        # sealed private rows never aggregate — their author-chosen slug must not pollute (or
+        # collide with) a public challenge's stats; revealed rows count under the revealed id.
+        .where((models.Result.private.is_(False)) | (models.Result.revealed.is_(True)))
         .group_by(models.Result.challenge_id)).all()
     stats = {r.challenge_id: r for r in rows}
     out = []
@@ -641,7 +651,9 @@ def challenge_detail(challenge_id: str, db: Session = Depends(get_session)):
         raise HTTPException(404, f"unknown challenge {challenge_id!r}")
     best: dict[str, dict] = {}
     for r in db.scalars(select(models.Result)
-                        .where(models.Result.challenge_id == challenge_id)).all():
+                        .where(models.Result.challenge_id == challenge_id,
+                               (models.Result.private.is_(False))
+                               | (models.Result.revealed.is_(True)))).all():
         sub = db.get(models.Submission, r.submission_id)
         art = db.get(models.ModelArtifact, sub.artifact_id)
         fam = db.get(models.ModelFamily, art.family_id)
@@ -779,3 +791,84 @@ def deprecate_challenge(challenge_id: str, body: dict = Body(...), db: Session =
     except proposals.ProposalError as e:
         raise HTTPException(400, str(e))
     return {"id": ch.id, "status": ch.status, "deprecated": ch.deprecated, "version": ch.version}
+
+
+@app.post("/reveals", status_code=201)
+def reveal(body: dict = Body(...), db: Session = Depends(get_session)):
+    """Open a commitment (commit-and-reveal): the revealed content + salt must hash to a commitment
+    that sealed previously-submitted private results. Possession of (content, salt) IS the proof —
+    the sealed rows' server-stamped submitted_at anchors that the scores predate this reveal.
+
+    Verifies the commitment, materializes the challenge into the corpus (content stored; the
+    reference-must-pass validation is the revealer's self-reported local run — the API never
+    executes untrusted code, same policy as proposals), and flips every matching result to
+    `revealed` with published_at = today (source 'private-reveal') → they join the held-out board;
+    models released after today see this challenge as contaminated, as they should."""
+    import tomllib as _toml
+    from ..engine import private as eng_private
+
+    salt = body.get("salt") or ""
+    files = body.get("files")
+    if not isinstance(files, dict) or not files or \
+            not all(isinstance(k, str) and isinstance(v, str) for k, v in files.items()):
+        raise HTTPException(400, "files must be a non-empty {relpath: text} object")
+    try:
+        com = eng_private.commitment_from_files(files, salt)
+    except ValueError:
+        raise HTTPException(400, "salt must be hex")
+
+    rows = db.scalars(select(models.Result).where(models.Result.commitment == com,
+                                                  models.Result.private.is_(True))).all()
+    if not rows:
+        raise HTTPException(404, "no committed results reference this content+salt — nothing to open "
+                                 "(check the salt, and that the sealed bundle was submitted first)")
+    existing = db.scalar(select(models.Reveal).where(models.Reveal.commitment == com))
+    if existing:
+        raise HTTPException(409, f"already revealed as challenge {existing.challenge_id!r}")
+
+    # structural checks (same bar as a proposal payload)
+    try:
+        meta = _toml.loads(files.get("meta.toml", ""))
+    except _toml.TOMLDecodeError as e:
+        raise HTTPException(400, f"meta.toml does not parse: {e}")
+    cid = meta.get("id")
+    if not cid or not isinstance(cid, str):
+        raise HTTPException(400, "meta.toml must declare a string id")
+    if "spec.md" not in files or not any(p.startswith("tests/") for p in files):
+        raise HTTPException(400, "revealed content must include spec.md and tests/")
+    if db.get(models.Challenge, cid):
+        raise HTTPException(409, f"challenge id {cid!r} already exists in the public corpus — the "
+                                 "committed content can't be renamed; pick globally-unique ids for "
+                                 "private challenges")
+
+    # optional attribution: a signature over `reveal:<commitment>` binds the reveal to a key
+    author_key = None
+    pub, sig = body.get("pubkey"), body.get("signature")
+    if pub and sig:
+        from peakstone.engine import keys as eng_keys
+        if not eng_keys.verify(pub, sig, f"reveal:{com}".encode()):
+            raise HTTPException(403, "signature over 'reveal:<commitment>' does not verify")
+        author_key = db.scalar(select(models.Key).where(models.Key.pubkey == pub)) \
+            or models.Key(pubkey=pub)
+        db.add(author_key)
+        db.flush()
+
+    today = models._utcnow().date().isoformat()
+    ch = models.Challenge(
+        id=cid, title=meta.get("title"), language=meta.get("language"),
+        category=meta.get("category") or (rows[0].category if rows else None),
+        verification=rows[0].verification, seed_difficulty=meta.get("difficulty"),
+        content_hash=eng_private.public_content_hash(files), status="published",
+        author_key_id=author_key.id if author_key else None)
+    db.add(ch)
+    db.add(models.Reveal(commitment=com, salt=salt, challenge_id=cid, files=files,
+                         validation=body.get("validation"),
+                         revealed_by_key_id=author_key.id if author_key else None))
+    for r in rows:
+        r.revealed = True
+        r.challenge_id = cid
+        r.published_at = today
+        r.published_at_source = "private-reveal"
+    db.commit()
+    return {"challenge_id": cid, "commitment": com, "n_results_revealed": len(rows),
+            "published_at": today}

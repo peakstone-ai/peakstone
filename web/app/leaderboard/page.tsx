@@ -269,6 +269,14 @@ export default async function LeaderboardPage({
                   </td>
                   <td className="py-2 pr-4 tabular-nums text-stone-300">
                     {r.solved}/{r.n_code}
+                    {r.n_committed > 0 && (
+                      <span
+                        className="ml-1 text-xs text-stone-500"
+                        title={`commit-and-reveal: ${r.n_committed} sealed private result(s), ${r.n_revealed} revealed. Sealed claims earn no credit until revealed — the committed/revealed ratio keeps selective reveal visible.`}
+                      >
+                        🔒{r.n_revealed}/{r.n_committed}
+                      </span>
+                    )}
                   </td>
                   <td className="py-2 pr-4 text-xs tabular-nums text-stone-400">
                     {METRIC_COLS.filter((m) => r.metrics?.[m.key] != null).length === 0
