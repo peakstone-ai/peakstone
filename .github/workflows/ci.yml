@@ -24,8 +24,12 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           cache: pip
-      - name: Install (client + dev)
-        run: pip install -e ".[dashboard,dev]"
+      - name: Install (client + dev + server test deps)
+        # The api/ tests import the server stack (sqlalchemy et al.), which is deliberately NOT a
+        # PyPI extra (the wheel is client-only) — its pins live in peakstone/api/requirements.txt.
+        run: |
+          pip install -e ".[dashboard,dev]"
+          pip install -r peakstone/api/requirements.txt
       - name: Run the dependency-light suites
         # The pure-Python suites (engine/dashboard/api units + capability matching). The docker
         # (env) and KVM (firecracker) integration tests are intentionally excluded — they need a
