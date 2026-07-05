@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from . import identity, ingest, models, proposals
 from .db import get_session, init_db
-from ..engine import contamination, versions
+from ..engine import contamination, scoreboard, versions
 from ..engine.bundle import reasoning_mode
 
 # Capability categories that are safety/honesty, not coding ability — scored separately so a strong
@@ -156,29 +156,11 @@ def post_submission(bundle: dict = Body(...), db: Session = Depends(get_session)
             "n_results": len(sub.results), "suite": f"{sub.suite_name}@{sub.suite_version}"}
 
 
-def _avg(xs):
-    xs = [x for x in xs if x is not None]
-    return round(sum(xs) / len(xs), 3) if xs else None
-
-
-# No-LLM efficiency axes (engine/metrics.py). "asc" = smaller-is-better. Sortable on the leaderboard
-# alongside code_score; a model can be correct-but-bloated vs correct-and-lean.
-METRIC_AXES = {"peak_rss_mb": "asc", "loc": "asc", "solution_bytes": "asc", "test_wall_s": "asc"}
-# All sortable leaderboard keys → default order. held_out_score (contamination-adjusted code
-# score) is the headline timeline metric; ranking by it drops models with no release_date or no
-# post-release challenges (held_out_score=None → they don't qualify for that board).
-SORT_ORDER = {"code_score": "desc", "held_out_score": "desc", "math_score": "desc",
-              "agent_score": "desc", "planner_score": "desc", "safety_score": "desc",
-              "solved": "desc", "tok_per_s": "desc", "sol_per_s": "desc", "n_total": "desc",
-              "total_time_s": "asc",                  # quicker runs rank first
-              "score_per_1k_tokens": "desc",          # context-efficiency: capability per token
-              "tokens_to_solve": "asc", "gen_tokens": "asc",
-              "long_ctx_score": "desc",               # long-context comprehension axis
-              "self_verify_accuracy": "desc",          # calibration: does it know when it's right?
-              "confidence_score": "desc",              # calibration: pre-hoc confidence vs outcome
-              "recovery_rate": "desc",                 # self-repair: fixes its own first-try failures
-              "truncation_rate": "asc",                # budget-fit: lower = less often cut off mid-thought
-              **METRIC_AXES}
+# Axis math lives in engine/scoreboard.py (shared with the TUI's offline local board + `check`).
+# The API adapts ORM rows to the dicts it consumes; parity is gated by the exact-value tests below.
+_avg = scoreboard.avg
+METRIC_AXES = scoreboard.METRIC_AXES
+SORT_ORDER = scoreboard.SORT_ORDER
 
 # The default leaderboard lens is the contamination-filtered (held-out) score, scoped to the official
 # suite so it's apples-to-apples. A model needs at least this much held-out evidence to be *ranked*
@@ -197,193 +179,54 @@ CLIENT_LATEST = os.environ.get("PEAKSTONE_CLIENT_LATEST") or versions.pkg_versio
 CLIENT_MIN = os.environ.get("PEAKSTONE_CLIENT_MIN") or "0.1.0"
 
 
-# token-efficiency keys live in result.metrics but are summarized specially (honest, ctx-limited-aware)
-# in _ctx_efficiency — keep them out of the generic leanness aggregate so each is reported once.
-_TOKEN_KEYS = {"gen_tokens", "prompt_tokens", "tokens_to_solve", "ctx_limited", "reasoning_tokens"}
+# ORM Result → the bundle-shaped dict engine.scoreboard consumes. getattr-with-default so the API
+# tests can pass SimpleNamespace fakes lacking most attributes (test_api.py exercises the helpers).
+def _row_dict(r) -> dict:
+    return {"category": getattr(r, "category", None), "verification": getattr(r, "verification", None),
+            "score": {"final": getattr(r, "final", 0.0), "passed": getattr(r, "passed", None),
+                      "total": getattr(r, "total", None)},
+            "published_at": getattr(r, "published_at", None),
+            "private": getattr(r, "private", False), "revealed": getattr(r, "revealed", False),
+            "tok_per_s": getattr(r, "tok_per_s", None), "latency_s": getattr(r, "latency_s", None),
+            "metrics": getattr(r, "metrics", None)}
 
 
+# Thin wrappers kept at their historical names/signatures: test_api.py imports these and feeds
+# SimpleNamespace rows. Each adapts to dicts and delegates to the shared engine module.
 def _agg_metrics(rs) -> dict:
-    """Average each efficiency metric over the results that recorded it (the run's leanness)."""
-    buckets: dict[str, list] = defaultdict(list)
-    for r in rs:
-        for k, v in (r.metrics or {}).items():
-            # cal_*/repair_*/trunc_* are calibration, self-repair & truncation probes, summarized
-            # specially below (not leanness/efficiency axes)
-            if (k not in _TOKEN_KEYS and not k.startswith(("cal_", "repair_", "trunc_"))
-                    and isinstance(v, (int, float))):
-                buckets[k].append(v)
-    return {k: round(sum(v) / len(v), 2) for k, v in buckets.items() if v}
+    return scoreboard._agg_metrics([_row_dict(r) for r in rs])
 
 
 def _calibration(rs) -> dict:
-    """Metacognition over results carrying calibration probes (the `cal_*` metric keys). Two numbers,
-    both higher=better, computed only over the probed challenges:
-      * self_verify_accuracy — how often the model's POST-hoc 'is my solution correct?' matched the
-        actual test outcome (knowing when you're right is the bedrock of agentic reliability);
-      * confidence_score — 1 − Brier over the PRE-hoc 'will I solve this?' probability vs the outcome
-        (a perfectly calibrated forecaster scores 1.0; constant-0.5 guessing scores 0.75)."""
-    sv_n = sv_hit = br_n = 0
-    br_sum = 0.0
-    for r in rs:
-        m = r.metrics or {}
-        passed = 1.0 if r.final >= 0.999 else 0.0
-        if "cal_self_correct" in m:
-            sv_n += 1
-            if (1.0 if m["cal_self_correct"] >= 0.5 else 0.0) == passed:
-                sv_hit += 1
-        if "cal_pre_confidence" in m:
-            br_n += 1
-            br_sum += (float(m["cal_pre_confidence"]) - passed) ** 2
-    return {
-        "self_verify_accuracy": round(sv_hit / sv_n, 3) if sv_n else None,
-        "confidence_score": round(1 - br_sum / br_n, 3) if br_n else None,
-        "n_calibration": max(sv_n, br_n),
-    }
+    return scoreboard._calibration([_row_dict(r) for r in rs])
 
 
 def _self_repair(rs) -> dict:
-    """Self-repair (isolated from the headline, which is first-try): of the coding challenges a model
-    failed on its FIRST attempt, what fraction did it fix when shown the test error (--retries)?
-    recovery_rate in [0,1] (higher = better debugger); n_repair = the first-try failures it was probed
-    on. The headline code/held-out scores stay single-shot — this is the separate debugging axis."""
-    vals = [r.metrics["repair_recovered"] for r in rs
-            if r.metrics and "repair_recovered" in r.metrics]
-    return {
-        "recovery_rate": round(sum(vals) / len(vals), 3) if vals else None,
-        "n_repair": len(vals),
-    }
+    return scoreboard._self_repair([_row_dict(r) for r in rs])
 
 
 def _truncation(rs) -> dict:
-    """How often generation hit the token budget (max_tokens) instead of finishing on its own — i.e.
-    the model was likely cut off mid-thought. Token-bound, so it's hardware-independent and fully
-    reproducible; but a high rate is a WARNING that the budget is too tight to fairly measure this
-    model's capability (its score is budget-limited, not ability-limited). Lower is better."""
-    vals = [r.metrics["trunc_truncated"] for r in rs
-            if r.metrics and "trunc_truncated" in r.metrics]
-    return {
-        "truncation_rate": round(sum(vals) / len(vals), 3) if vals else None,
-        "n_generated": len(vals),
-    }
+    return scoreboard._truncation([_row_dict(r) for r in rs])
 
 
 def _ctx_efficiency(code_rs) -> dict:
-    """Context-efficiency over code results. Excludes ctx-limited results (whose token counts are
-    censored and scores depressed by window truncation, not capability) so the numbers are honest
-    like-for-like. Tokens are model-native — compare within a family/tokenizer (quant/ctx), not across
-    families. score_per_1k_tokens = mean code score per 1k tokens spent (capability per token)."""
-    measured = [r for r in code_rs if (r.metrics or {}).get("tokens_to_solve")]
-    n_ctx_limited = sum(1 for r in measured if (r.metrics or {}).get("ctx_limited"))
-    eff = [r for r in measured if not (r.metrics or {}).get("ctx_limited")]
-    if not eff:
-        return {"score_per_1k_tokens": None, "tokens_to_solve": None, "gen_tokens": None,
-                "reasoning_tokens": None, "n_ctx_limited": n_ctx_limited}
-
-    def _mean(vals):
-        vals = [v for v in vals if isinstance(v, (int, float))]
-        return (sum(vals) / len(vals)) if vals else None
-
-    mean_tts = _mean([r.metrics.get("tokens_to_solve") for r in eff])
-    mean_final = sum(r.final for r in eff) / len(eff)
-    rea = _mean([r.metrics.get("reasoning_tokens") for r in eff])    # None when the server never reported it
-    return {
-        "score_per_1k_tokens": round(mean_final / (mean_tts / 1000), 3) if mean_tts else None,
-        "tokens_to_solve": round(mean_tts) if mean_tts else None,
-        "gen_tokens": round(_mean([r.metrics.get("gen_tokens") for r in eff]) or 0) or None,
-        "reasoning_tokens": round(rea) if rea is not None else None,
-        "n_ctx_limited": n_ctx_limited,
-    }
+    return scoreboard._ctx_efficiency([_row_dict(r) for r in code_rs])
 
 
 def _held_out(code_rs, fam: models.ModelFamily | None) -> dict:
-    """Contamination-adjusted code score for one run: mean score over code challenges PUBLISHED
-    AFTER the model's release_date (the scores it provably couldn't have trained on), plus the
-    secondary claimed-clean view vs training_cutoff. Same population as code_score, filtered to
-    challenges newer than the boundary."""
-    rel = fam.release_date if fam else None
-    cut = fam.training_cutoff if fam else None
-    items = [{"published_at": r.published_at, "score": {"final": r.final}} for r in code_rs]
-    views = contamination.held_out_views(items, rel, cut)
-    off, clm = views["official"], views["claimed"]
-    return {
-        "held_out_score": off.score,
-        "held_out": {
-            "score": off.score,
-            "claimed_score": clm.score if clm else None,
-            "boundary": off.boundary,
-            "n_clean": off.n_clean,
-            "n_contaminated": off.n_contaminated,
-            "n_unknown": off.n_unknown,
-            "coverage": round(off.coverage, 3),
-        },
-    }
+    return scoreboard._held_out([_row_dict(r) for r in code_rs],
+                                fam.release_date if fam else None,
+                                fam.training_cutoff if fam else None)
 
 
 def _summarize(sub: models.Submission, fam: models.ModelFamily | None = None) -> dict:
-    # Commit-and-reveal: a sealed private row is a timestamped CLAIM, not evidence — it earns no
-    # credit on any axis until revealed. Committed/revealed counts are surfaced so selective
-    # reveal (the file-drawer) stays visible rather than hidden.
-    n_committed = sum(1 for r in sub.results if r.private)
-    n_revealed = sum(1 for r in sub.results if r.private and r.revealed)
-    rs = [r for r in sub.results if not r.private or r.revealed]
-    # capability axes, kept separate: coding ability, safety/honesty, agentic (goal-state-env,
-    # multi-machine), and planning (planner plans → fixed coder executes → tests). A planner/agent
-    # isn't a "coder" and vice-versa.
-    agent_rs = [r for r in rs if (r.verification or "") == "goal-state-env"]
-    agent = [r.final for r in agent_rs]
-    planner = [r.final for r in rs if (r.category or "") == "planner"]
-    math_rs = [r for r in rs if (r.category or "") == "math"]   # answer-match — its own axis
-    longctx_rs = [r for r in rs if (r.category or "") == "long-context"]  # long-window comprehension axis
-    code_rs = [r for r in rs if (r.category or "") not in SAFETY
-               and (r.category or "") not in ("planner", "math", "long-context")
-               and (r.verification or "") != "goal-state-env"]
-    code = [r.final for r in code_rs]
-    safety = [r.final for r in rs if (r.category or "") in SAFETY]
-    by_cat = defaultdict(list)
-    for r in rs:
-        by_cat[r.category or "other"].append(r.final)
-    return {
-        "code_score": _avg(code),
-        **_held_out(code_rs, fam),
-        **_ctx_efficiency(code_rs),               # context-efficiency: score_per_1k_tokens, n_ctx_limited, …
-        "math_score": _avg([r.final for r in math_rs]),
-        "math_held_out": _held_out(math_rs, fam)["held_out"],
-        "long_ctx_score": _avg([r.final for r in longctx_rs]),   # comprehension over a long context
-        "n_long_ctx": len(longctx_rs),
-        **_calibration(rs),                       # metacognition: self_verify_accuracy + confidence_score
-        **_self_repair(rs),                        # debugging: recovery_rate (headline stays first-try)
-        **_truncation(rs),                         # budget-fit warning: truncation_rate (lower=better)
-
-        "safety_score": _avg(safety),
-        "agent_score": _avg(agent),
-        "agent_held_out": _held_out(agent_rs, fam)["held_out"],   # SWE-bench-Live etc.: contamination-adjusted
-        "planner_score": _avg(planner),
-        "solved": sum(1 for x in code if x >= 0.999),
-        "n_code": len(code),
-        "n_math": len(math_rs),
-        "n_agent": len(agent),
-        "n_planner": len(planner),
-        "n_total": len(rs),                              # coverage: challenges in the run
-        "n_committed": n_committed,                      # sealed private claims (no credit until reveal)
-        "n_revealed": n_revealed,                        # of those, opened + counting
-        "sol_per_s": _sol_per_s(rs),                     # throughput: challenges per second of work
-        "total_time_s": _total_time(rs),                 # wall: sum of per-challenge model time
-        "by_category": {k: round(sum(v) / len(v), 3) for k, v in sorted(by_cat.items())},
-        "tok_per_s": _avg([r.tok_per_s for r in rs]),
-        "metrics": _agg_metrics(rs),
-    }
-
-
-def _sol_per_s(rs) -> float | None:
-    """Challenges solved per second over the run's total model time (sum of per-challenge latency)."""
-    lat = _total_time(rs)
-    return round(len(rs) / lat, 3) if lat else None
-
-
-def _total_time(rs) -> float | None:
-    """Total run time = sum of per-challenge model time (latency_s). None if no timing recorded."""
-    lat = sum(r.latency_s for r in rs if r.latency_s)
-    return round(lat, 1) if lat > 0 else None
+    """One submission's ORM results → the full leaderboard axis dict. Pure axis math lives in
+    engine.scoreboard (shared with the offline TUI board + `check`); this only adapts the rows +
+    supplies the family's contamination dates."""
+    return scoreboard.summarize_rows(
+        [_row_dict(r) for r in sub.results],
+        release_date=fam.release_date if fam else None,
+        training_cutoff=fam.training_cutoff if fam else None)
 
 
 def _submitter_handle(db, sub: models.Submission) -> str | None:
@@ -425,10 +268,7 @@ def _run_info(db, sub: models.Submission, art: models.ModelArtifact) -> dict:
             "bundle_hash": sub.bundle_hash}
 
 
-def _sort_value(row: dict, key: str):
-    if key in row:
-        return row.get(key)
-    return (row.get("metrics") or {}).get(key)
+_sort_value = scoreboard.sort_value
 
 
 @app.get("/leaderboard")

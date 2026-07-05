@@ -685,3 +685,48 @@ def test_uncompressed_oversized_body_rejected(client, monkeypatch):
     r = client.post("/submissions", content=b'{"x":"' + b"a" * 5000 + b'"}',
                     headers={"content-type": "application/json"})
     assert r.status_code == 413
+
+
+def test_summarize_parity_orm_vs_scoreboard():
+    """The API's _summarize (ORM rows) and engine.scoreboard.summarize_rows (bundle dicts) must
+    produce byte-identical axis dicts — they share the extracted math, and the TUI's offline board
+    relies on that equivalence. Exercise every axis + a sealed private row + contamination dates."""
+    from types import SimpleNamespace as NS
+    from peakstone.api.main import _summarize
+    from peakstone.engine import scoreboard
+
+    orm = [
+        NS(category="basic", verification="deterministic-tests", final=1.0, passed=1, total=1,
+           published_at="2020-01-01", private=False, revealed=False, tok_per_s=50.0, latency_s=2.0,
+           metrics={"loc": 12, "tokens_to_solve": 900, "gen_tokens": 300, "ctx_limited": 0,
+                    "cal_self_correct": 1.0, "cal_pre_confidence": 0.8, "repair_recovered": 1.0,
+                    "trunc_truncated": 0.0}),
+        NS(category="basic", verification="deterministic-tests", final=0.0, passed=0, total=1,
+           published_at="2030-01-01", private=False, revealed=False, tok_per_s=40.0, latency_s=3.0,
+           metrics={"trunc_truncated": 1.0}),
+        NS(category="math", verification="answer-match", final=0.5, passed=1, total=2,
+           published_at=None, private=False, revealed=False, tok_per_s=None, latency_s=1.0, metrics=None),
+        NS(category="basic", verification="goal-state-env", final=1.0, passed=1, total=1,
+           published_at=None, private=False, revealed=False, tok_per_s=None, latency_s=5.0, metrics=None),
+        NS(category="planner", verification="deterministic-tests", final=0.75, passed=3, total=4,
+           published_at=None, private=False, revealed=False, tok_per_s=None, latency_s=None, metrics=None),
+        NS(category="long-context", verification="deterministic-tests", final=0.25, passed=1, total=4,
+           published_at=None, private=False, revealed=False, tok_per_s=None, latency_s=None, metrics=None),
+        NS(category="refusal", verification="deterministic-tests", final=1.0, passed=1, total=1,
+           published_at=None, private=False, revealed=False, tok_per_s=None, latency_s=None, metrics=None),
+        NS(category="basic", verification="deterministic-tests", final=1.0, passed=1, total=1,
+           published_at="2030-06-06", private=True, revealed=False, tok_per_s=None, latency_s=None, metrics=None),
+    ]
+    fam = NS(release_date="2025-01-01", training_cutoff="2024-06-01")
+
+    dicts = [{"category": r.category, "verification": r.verification,
+              "score": {"final": r.final, "passed": r.passed, "total": r.total},
+              "published_at": r.published_at, "private": r.private, "revealed": r.revealed,
+              "tok_per_s": r.tok_per_s, "latency_s": r.latency_s, "metrics": r.metrics} for r in orm]
+
+    via_api = _summarize(NS(results=orm), fam)
+    via_engine = scoreboard.summarize_rows(dicts, release_date="2025-01-01", training_cutoff="2024-06-01")
+    assert via_api == via_engine
+    # spot-check the axis values are real, not both-None
+    assert via_api["code_score"] == 0.5 and via_api["agent_score"] == 1.0
+    assert via_api["n_committed"] == 1 and via_api["held_out"]["n_clean"] >= 1

@@ -29,7 +29,7 @@ from peakstone.engine import paths as eng_paths
 from peakstone.engine import versions as eng_versions
 
 from . import challenges as ch_browse
-from . import client, hardware, history, models, preflight, reproduce, wishlist
+from . import client, hardware, history, localboard, models, preflight, reproduce, wishlist
 
 # a short, fast challenge set for a reproduce run — enough to measure tok/s + a code score
 REPRODUCE_IDS = ["py-02-csv-groupby", "py-05-calc", "py-01-fizzbuzz"]
@@ -355,6 +355,8 @@ class Dashboard(App):
         ("r", "refresh", "Refresh"),
         ("f", "toggle_fit", "Fit filter"),
         ("s", "cycle_sort", "Sort axis"),
+        ("a", "toggle_suites", "All suites"),
+        ("S", "submit_local", "Submit run"),
         ("c", "challenges", "Challenges"),
         ("v", "quants", "Quants"),
         ("m", "models", "Models"),
@@ -370,6 +372,9 @@ class Dashboard(App):
         super().__init__()
         self.base_url = base_url
         self.fit = True          # filter to models that fit my VRAM
+        self.all_suites = False  # board scopes to the official standard suite; 'a' widens to all
+        self._board_scoped = True   # whether the current board is the default-suite subset (sortbar hint)
+        self._board_status: str | None = None   # offline / loading banner text
         self.sort_i = 0
         self._board_rows: list[dict] = []
         self._account_label = ""   # right side of the sort bar: @handle when the signing key is linked
@@ -752,19 +757,29 @@ class Dashboard(App):
         self._refresh_daemon_jobs()
         self.set_interval(3.0, self._refresh_daemon_jobs)
 
-    def _update_sortbar(self, max_vram: float | None = None) -> None:
+    def _update_sortbar(self, max_vram: float | None = None, *, scoped: bool | None = None,
+                        status: str | None = "") -> None:
         """The sort/filter bar under the hardware panel — the controls that shape the leaderboard below.
         Shows the active sort axis + the hardware-fit filter (keys live in the Footer: s sort · f fit)."""
         if max_vram is None:
             snap = hardware.snapshot()
             max_vram = snap.max_vram_gb if (self.fit and snap.max_vram_gb) else None
+        if scoped is not None:
+            self._board_scoped = scoped
+        if status != "":            # "" = "keep current"; None/str = set
+            self._board_status = status
         self.query_one("#sortbar", Static).update(self._sortbar_renderable(max_vram))
 
     def _sortbar_renderable(self, max_vram: float | None):
         """One line: sort/hardware controls on the left, the linked account on the right."""
         scope = f"fits ≤{max_vram:g} GB" if max_vram else "all hardware"
         sel = f"   ·   ▶ {len(self.selected_ids)} challenges selected" if self.selected_ids else ""
-        left = f"[b]sort[/] {self.SORTS[self.sort_i]}   ·   [b]hardware[/] {scope}{sel}"
+        suites = "all suites" if self.all_suites or not getattr(self, "_board_scoped", True) else "standard"
+        left = (f"[b]sort[/] {self.SORTS[self.sort_i]}   ·   [b]hardware[/] {scope}   ·   "
+                f"[b]suite[/] {suites}{sel}")
+        st = getattr(self, "_board_status", None)
+        if st and st != "loading":
+            left += f"   ·   [yellow]{st}[/]"
         from rich.table import Table
         grid = Table.grid(expand=True)
         grid.add_column(ratio=1)
@@ -914,10 +929,18 @@ class Dashboard(App):
         d = ev.node.data or {}
         if d.get("kind") == "quant" and not d.get("filled"):   # lazily load this run's per-challenge results
             d["filled"] = True
-            self.load_run_results(ev.node, (d.get("row") or {}).get("run", {}).get("bundle_hash"))
+            run = (d.get("row") or {}).get("run", {})
+            self.load_run_results(ev.node, run.get("bundle_hash"), run.get("path") if run.get("local") else None)
 
     @work(thread=True)
-    def load_run_results(self, node, bundle_hash) -> None:
+    def load_run_results(self, node, bundle_hash, local_path=None) -> None:
+        # a local run reads its own bundle from disk (works offline); fall back to the API when it's
+        # a published/server run or the local file can't be read.
+        if local_path:
+            res = localboard.read_run_results(local_path)
+            if res is not None:
+                self.call_from_thread(self._add_results, node, res, bundle_hash)
+                return
         if not bundle_hash:
             self.call_from_thread(self._add_results, node, [], None)
             return
@@ -996,48 +1019,80 @@ class Dashboard(App):
 
     @work(thread=True, exclusive=True)
     def load_board(self) -> None:
+        """Offline-first: build the board from LOCAL runs and paint it immediately, then merge in
+        the server rows once the API answers. One worker, two renders — no cancellation race."""
         snap = hardware.snapshot()
         max_vram = snap.max_vram_gb if (self.fit and snap.max_vram_gb) else None
-        try:   # collapse=quant so we get every quant run; the tree groups them under each model
+        sort = self.SORTS[self.sort_i]
+        try:
+            local, scoped = localboard.build_local_board(all_suites=self.all_suites)
+        except Exception:  # noqa: BLE001 — a broken results dir must never blank the board
+            local, scoped = [], True
+        # phase 1: local-only, instant
+        self.call_from_thread(self._render, localboard.merge_rows(local, [], sort=sort),
+                              max_vram, scoped, "loading")
+        # phase 2: pull the server board and merge (collapse=quant → every quant run)
+        try:
             data = client.get_leaderboard(self.base_url, max_vram_gb=max_vram,
-                                           sort=self.SORTS[self.sort_i], collapse="quant")
+                                           sort=sort, collapse="quant")
         except client.APIError as e:
-            self.call_from_thread(self._render_error, str(e))
+            if not local:
+                self.call_from_thread(self._render_error, str(e))
+            else:
+                self.call_from_thread(self._render, localboard.merge_rows(local, [], sort=sort),
+                                      max_vram, scoped, f"offline · local runs only ({str(e)[:40]})")
             return
-        self.call_from_thread(self._render, data, max_vram)
+        merged = localboard.merge_rows(local, data.get("leaderboard", []), sort=sort)
+        self.call_from_thread(self._render, merged, max_vram, scoped, None)
 
     def _quant_label(self, r: dict) -> str:
         """Key numbers only — the full per-run stats live in the bottom detail panel (highlight to see)."""
         run = r.get("run", {})
         cov = f"{r['n_total']}/{self.corpus_total()}" if r.get("n_total") else "—"
-        return (f"{run.get('artifact', '—'):16} "
+        tag = "⌂ " if run.get("local") and not run.get("published") else ""
+        pub = "  [green]✓ pub[/]" if (run.get("published") or run.get("submitted")) else ""
+        return (f"{tag}{run.get('artifact', '—'):16} "
                 f"held-out {_fmt(r.get('held_out_score'))}  code {_fmt(r.get('code_score'))}  "
-                f"{_fmt(r.get('tok_per_s'), '{:.0f}')} tps  cov {cov}")
+                f"{_fmt(r.get('tok_per_s'), '{:.0f}')} tps  cov {cov}{pub}")
 
-    def _render(self, data: dict, max_vram: float | None) -> None:
+    def _render(self, rows: list[dict], max_vram: float | None,
+                scoped: bool = True, status: str | None = "") -> None:
         tree = self.query_one("#board", BoardTree)
+        # preserve the cursor across the two-phase (local → merged) re-render
+        prev = None
+        cur = tree.cursor_node
+        if cur is not None and cur.data:
+            cd = cur.data
+            prev = (cd.get("family"), (cd.get("row") or {}).get("run", {}).get("bundle_hash"))
         tree.clear()
-        self._update_sortbar(max_vram)
-        rows = data.get("leaderboard", [])
+        self._update_sortbar(max_vram, scoped=scoped, status=status)
         self._board_rows = rows
+        restore_line = 0
+        line = 0
         fams: dict[str, list] = {}
         for r in rows:                                   # rows arrive sorted; group preserving order
             fams.setdefault(r.get("family", "?"), []).append(r)
         for rank, (fam, frows) in enumerate(fams.items(), 1):
             best = frows[0]
             repo = best.get("run", {}).get("hf_repo")
+            all_local = all(fr.get("run", {}).get("local") and not fr.get("run", {}).get("published")
+                            for fr in frows)
             node = tree.root.add(
-                f"[b]{rank}. {fam}[/]   held-out {_fmt(best.get('held_out_score'))}   "
+                f"[b]{'⌂ ' if all_local else ''}{rank}. {fam}[/]   held-out {_fmt(best.get('held_out_score'))}   "
                 f"code {_fmt(best.get('code_score'))}   {len(frows)} quant(s)",
                 data={"kind": "family", "family": fam, "repo": repo, "row": best})
+            line += 1
             for r in frows:   # expandable: drill in to see the per-challenge results of that run
+                if prev and prev == (fam, r.get("run", {}).get("bundle_hash")):
+                    restore_line = line
                 node.add(self._quant_label(r),
                          data={"kind": "quant", "family": fam, "row": r, "filled": False,
                                "repo": r.get("run", {}).get("hf_repo")})
+                line += 1
         if not rows:
-            tree.root.add_leaf("(no runs fit this filter)")
+            tree.root.add_leaf("(no local or server runs yet)")
         if tree.root.children:
-            tree.cursor_line = 0
+            tree.cursor_line = restore_line
         self._update_detail(tree.cursor_node)            # populate the bottom panel for the first row
 
     def _update_detail(self, node) -> None:
@@ -1070,7 +1125,12 @@ class Dashboard(App):
         perf = (f"{_fmt(r.get('tok_per_s'), '{:.0f}')} tok/s · {_fmt(r.get('sol_per_s'), '{:.2f}')} sol/s · "
                 f"{_fmt_dur(r.get('total_time_s'))} · {_fmt(r.get('score_per_1k_tokens'), '{:.2f}')}/1k tok · "
                 f"{mem} used · cov {cov}{ctxw}" + (f" · [dim]{hw}[/]" if hw else ""))
-        return "\n".join([head, scores, meta, perf])
+        lines = [head, scores, meta, perf]
+        if run.get("local"):     # provenance for a local run: where it lives + whether it's on the board
+            sub = ("[green]submitted ✓[/]" if run.get("published") or run.get("submitted")
+                   else "[yellow]not submitted — press S to publish[/]")
+            lines.append(f"[dim]local · {run.get('path', '?')} · {run.get('suite', '?')}[/] · {sub}")
+        return "\n".join(lines)
 
     def on_tree_node_highlighted(self, event) -> None:
         if getattr(event, "control", None) is not None and event.control.id == "board":
@@ -1079,8 +1139,56 @@ class Dashboard(App):
     def _render_error(self, msg: str) -> None:
         tree = self.query_one("#board", BoardTree)
         tree.clear()
-        self.sub_title = f"{self.base_url}  ·  API unreachable"
+        self.sub_title = f"{self.base_url}  ·  API unreachable · no local runs"
         tree.root.add_leaf(f"API unreachable — {msg[:60]}")
+        tree.root.add_leaf("[dim]run a benchmark (v · quants) to build a local board[/]")
+
+    def action_toggle_suites(self) -> None:
+        self.all_suites = not self.all_suites
+        self._update_sortbar()
+        self.load_board()
+
+    def action_submit_local(self) -> None:
+        """Publish the highlighted local run's bundle to the server (the offline board's on-ramp
+        to the shared leaderboard)."""
+        node = self.query_one("#board", BoardTree).cursor_node
+        run = ((node.data or {}).get("row") or {}).get("run", {}) if node else {}
+        if not run.get("local") or run.get("no_bundle"):
+            self.notify("Highlight a local run with a bundle to submit.", severity="warning")
+            return
+        if run.get("published") or run.get("submitted"):
+            self.notify("That run is already published.", severity="information")
+            return
+        self._submit_local(run.get("path"))
+
+    @work(thread=True)
+    def _submit_local(self, run_dir) -> None:
+        import json as _json
+        from pathlib import Path as _Path
+        bpath = None
+        for name in ("bundle.json", "combined.bundle.json"):
+            p = _Path(run_dir or "") / name
+            if p.is_file():
+                bpath = p
+                break
+        if bpath is None:
+            self.call_from_thread(self.notify, "No bundle.json found for that run.", severity="error")
+            return
+        try:
+            bundle = _json.loads(bpath.read_text())
+            status, detail = client.submit_bundle(self.base_url, bundle)
+        except client.APIError as e:
+            self.call_from_thread(self.notify, f"Submit failed: {e}", severity="error")
+            return
+        except (OSError, ValueError) as e:
+            self.call_from_thread(self.notify, f"Bad bundle: {e}", severity="error")
+            return
+        msg = ("submitted ✓" if status == 201 else "already on the server ✓" if status == 409
+               else f"rejected ({status}): {detail[:80]}")
+        sev = "information" if status in (201, 409) else "error"
+        self.call_from_thread(self.notify, msg, severity=sev)
+        if status in (201, 409):
+            self.call_from_thread(self.load_board)
 
 
 class ReproduceScreen(ModalScreen):

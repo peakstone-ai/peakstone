@@ -21,8 +21,9 @@ import json
 import sys
 from pathlib import Path
 
-# the same axis split the API's _summarize uses — keep in lockstep with api/main.py
-SAFETY = {"injection", "refusal", "hallucination", "security", "secure-code"}
+# the axis split is shared with the leaderboard + the offline TUI board — one definition
+from .scoreboard import SAFETY, axis_of as _axis_of  # noqa: F401 (re-exported for tests)
+
 GREEN = 0.999   # score.final >= GREEN counts as solved (the board's "solved" threshold)
 
 
@@ -42,22 +43,6 @@ def _load_bundle(path: str) -> dict:
     if not isinstance(b.get("results"), list) or "suite" not in b:
         raise ValueError(f"{p} is not a result bundle (missing results/suite)")
     return b
-
-
-def _axis_of(r: dict) -> str:
-    """The leaderboard axis this result row belongs to (mirrors api._summarize)."""
-    cat = r.get("category") or ""
-    if (r.get("verification") or "") == "goal-state-env":
-        return "agentic"
-    if cat == "planner":
-        return "planner"
-    if cat == "math":
-        return "math"
-    if cat == "long-context":
-        return "long_ctx"
-    if cat in SAFETY:
-        return "safety"
-    return "code"
 
 
 def _finals(bundle: dict) -> dict[str, float]:

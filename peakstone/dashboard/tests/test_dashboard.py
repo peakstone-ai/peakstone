@@ -87,6 +87,10 @@ def _no_hf_network(monkeypatch):
     monkeypatch.setattr(_client, "stream_job_log", lambda jid, **k: iter(()))
     from peakstone.gateway import launch as _launch
     monkeypatch.setattr(_launch, "ensure_running", lambda *a, **k: True)   # never spawn a real daemon
+    # The board now also scans local results/ for an offline scoreboard; keep it empty by default so
+    # these server-path tests stay deterministic (dedicated tests below drive the local/merge path).
+    from peakstone.dashboard import localboard as _lb
+    monkeypatch.setattr(_lb, "build_local_board", lambda **k: ([], True))
 
 _FAKE = {"count": 2, "leaderboard": [
     {"rank": 1, "family": "qwen3-coder", "code_score": 0.93, "agent_score": None,
@@ -1502,6 +1506,68 @@ def test_app_handles_api_down(monkeypatch):
             tree = app.query_one("#board", BoardTree)
             labels = [str(n.label) for n in tree.root.children]
             assert labels and "API unreachable" in labels[0]   # graceful, not a crash
+
+    asyncio.run(scenario())
+
+
+def _local_row(family, artifact="Q4", *, code=0.8, bundle_hash="LH", n_total=50):
+    from peakstone.dashboard import localboard as _lb
+
+    def build(**k):
+        return ([{"family": family, "held_out_status": "provisional", "held_out_score": None,
+                  "code_score": code, "n_total": n_total, "agent_score": None, "tok_per_s": 40.0,
+                  "run": {"artifact": artifact, "reasoning": None, "reasoning_budget": None,
+                          "bundle_hash": bundle_hash, "local": True, "path": "/runs/x",
+                          "suite": "level-standard@2026.08", "submitted": False}}], True)
+    return build
+
+
+def test_offline_board_shows_local_runs(monkeypatch):
+    """API down but local runs on disk → the board renders them (⌂) instead of an error."""
+    monkeypatch.setattr(client, "get_leaderboard",
+                        lambda *a, **k: (_ for _ in ()).throw(client.APIError("refused")))
+    from peakstone.dashboard import localboard as _lb
+    monkeypatch.setattr(_lb, "build_local_board", _local_row("qwen3-coder"))
+
+    async def scenario():
+        from peakstone.dashboard.app import BoardTree
+        app = Dashboard("http://down")
+        async with app.run_test() as pilot:
+            app._corpus = [None] * 1965
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            tree = app.query_one("#board", BoardTree)
+            fam = [str(n.label) for n in tree.root.children]
+            assert any("⌂" in l and "qwen3-coder" in l for l in fam)   # local badge, not an error
+            quant = str(tree.root.children[0].children[0].label)
+            assert "⌂" in quant
+            assert app._board_status and "offline" in app._board_status.lower()
+
+    asyncio.run(scenario())
+
+
+def test_merged_local_run_marked_published(monkeypatch):
+    """A local run whose bundle_hash is on the server shows once, badged published (not duplicated)."""
+    server = {"count": 1, "leaderboard": [
+        {"rank": 1, "family": "qwen3-coder", "code_score": 0.8, "n_total": 50, "agent_score": None,
+         "held_out_status": "ranked", "held_out_score": 0.77,
+         "run": {"artifact": "Q4", "bundle_hash": "LH", "trust_tier": "runner-verified",
+                 "reasoning": None, "reasoning_budget": None}}]}
+    monkeypatch.setattr(client, "get_leaderboard", lambda *a, **k: server)
+    from peakstone.dashboard import localboard as _lb
+    monkeypatch.setattr(_lb, "build_local_board", _local_row("qwen3-coder", bundle_hash="LH"))
+
+    async def scenario():
+        from peakstone.dashboard.app import BoardTree
+        app = Dashboard("http://ok")
+        async with app.run_test() as pilot:
+            app._corpus = [None] * 1965
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            tree = app.query_one("#board", BoardTree)
+            assert len(tree.root.children) == 1                    # deduped, not two rows
+            quant = str(tree.root.children[0].children[0].label)
+            assert "✓ pub" in quant and "⌂" not in quant          # published, local badge dropped
 
     asyncio.run(scenario())
 

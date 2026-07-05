@@ -58,7 +58,7 @@ def test_axes_split_mirrors_board():
                     "injection": [1.0], "env": [1.0], "planner": [0.75]})
     v = compare(_bundle(rows), _bundle(rows), max_drop=0.02, min_n=1)
     got = {k: a["current"] for k, a in v["axes"].items()}
-    assert got == {"code": 1.0, "math": 0.5, "long_ctx": 0.25,
+    assert got == {"code": 1.0, "math": 0.5, "long-context": 0.25,
                    "safety": 1.0, "agentic": 1.0, "planner": 0.75}
 
 
