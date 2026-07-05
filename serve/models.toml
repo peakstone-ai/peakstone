@@ -52,13 +52,16 @@ ctx   = 196608
 # tops out ~96-112K. q4 KV trades a little cache precision for 6x the window.)
 flags = "--temp 0.7 --top-p 0.8 --top-k 20 --repeat-penalty 1.05 -fa on --cache-type-k q4_0 --cache-type-v q4_0"
 
+# Mistral's coding model (24B dense). Weights are only 13.5GB, so KV cache is the whole ctx story:
+# f16 KV topped out ~48K; -fa + q8 KV gets 96K (measured on the 4090: 22.6GB, ~103 tok/s). The next
+# step up (112K) lands at ~24.0GB — no headroom — so 96K is the ceiling. Native window is 384K.
 ["devstral"]
 repo  = "unsloth/Devstral-Small-2-24B-Instruct-2512-GGUF"
 file  = "models/devstral/Devstral-Small-2-24B-Instruct-2512-UD-Q4_K_XL.gguf"
 port  = 8083
 release_date = "2025-12-09"   # Mistral Devstral 2 announcement; "2512" = 2025-12
-ctx   = 32768
-flags = "--temp 0.15"
+ctx   = 98304
+flags = "--temp 0.15 -fa on --cache-type-k q8_0 --cache-type-v q8_0"
 
 # Dolphin 3.0 on Mistral-Small-24B (cognitivecomputations / dphn): an uncensored, steerable general
 # instruct model (system-prompt driven). Same 24B base as devstral, so the VRAM fit matches — the
@@ -82,10 +85,13 @@ training_cutoff = "2024-06-01"   # stated on the model card ("June 2024"); the o
 ctx   = 32768
 flags = "--temp 0.2"
 
-# 27B dense (2026); multimodal but run TEXT-ONLY here. -fa + KV q8 keeps 32K ctx ~22GB — that's
-# right up against the 24GB card, so loading the ~0.9GB vision projector on top risks OOM. To enable
-# vision, add  mmproj = "models/qwen3.6-27b/mmproj-BF16.gguf"  (download it, then drop ctx so the
-# projector + image buffers fit). qwen3.5-9b-vl is the headroom-friendly vision model; this one is text.
+# 27B dense (2026); multimodal but run TEXT-ONLY here. KV is far cheaper than the dense-attention
+# math predicts (~40KiB/tok observed vs 136KiB estimated — hybrid attention: not every layer keeps a
+# full-window cache), so engine/vram.py's estimate (~40K) is a big undercount for this arch.
+# Measured on the 4090 with -fa + q8 KV: 128K -> 22.2GB, 46 tok/s (same speed as 32K); 160K would
+# land ~23.5GB — too tight. Vision: the ~0.9GB projector doesn't fit at 128K; to enable, add
+# mmproj = "models/qwen3.6-27b/mmproj-BF16.gguf" and drop ctx (qwen3.5-9b-vl is the headroom-friendly
+# vision model; this one is text).
 # For ~speedups, run speculative decoding with the same-vocab draft (kept at models/qwen3.5-4b):
 #   add  -md models/qwen3.5-4b/Qwen3.5-4B-Q4_K_M.gguf --draft-max 16 --draft-min 1  (use ctx 16384)
 ["qwen3.6-27b"]
@@ -93,24 +99,24 @@ repo  = "unsloth/Qwen3.6-27B-GGUF"
 file  = "models/qwen3.6-27b/Qwen3.6-27B-UD-Q4_K_XL.gguf"
 port  = 8089
 release_date = "2026-04-21"   # HF Qwen/Qwen3.6-27B createdAt
-ctx   = 32768
+ctx   = 131072
 flags = "--temp 0.6 --top-p 0.95 -fa on --cache-type-k q8_0 --cache-type-v q8_0 --reasoning-budget 0"
 
-# 35B-A3B MoE (3.6B active -> ~176 tok/s). Multimodal; run TEXT-ONLY here (vision available via
-# mmproj = "models/qwen3.6-35b-a3b/mmproj-BF16.gguf" — but at 22.3GB/64K the projector needs a ctx
-# cut to fit; use qwen3.5-9b-vl for vision). Fits fully in VRAM (21GB),
-# so unlike qwen3-coder-next it needs NO expert offload to run. Native ctx is 256K; 64K is free
-# (still 22.3GB / 176 tok/s all-GPU). To go LONGER, use the same --n-cpu-moe lever but in reverse
-# (offload experts to free VRAM for the bigger KV cache) — measured on the 4090, q8 KV:
-#   128K: add `-fit off --n-cpu-moe 8`  -> ~19.5GB, ~132 tok/s
-#   256K: add `-fit off --n-cpu-moe 12` -> ~20GB,   ~120 tok/s   (16 also works, slower)
+# 35B-A3B MoE (3.6B active). Multimodal; run TEXT-ONLY here (vision available via
+# mmproj = "models/qwen3.6-35b-a3b/mmproj-BF16.gguf" — the projector needs a ctx cut to fit;
+# use qwen3.5-9b-vl for vision). Served at its NATIVE 256K by offloading 12 layers of experts to
+# CPU (verified 2026-07: 19.5GB, ~117 tok/s). The --n-cpu-moe lever trades speed for KV room —
+# measured on the 4090, q8 KV:
+#    64K: no offload (drop `-fit off --n-cpu-moe 12`) -> 22.3GB, ~176 tok/s all-GPU
+#   128K: `-fit off --n-cpu-moe 8`  -> ~19.5GB, ~132 tok/s
+#   256K: `-fit off --n-cpu-moe 12` -> ~19.5GB, ~117 tok/s   (16 also works, slower)
 ["qwen3.6-35b-a3b"]
 repo  = "unsloth/Qwen3.6-35B-A3B-GGUF"
 file  = "models/qwen3.6-35b-a3b/Qwen3.6-35B-A3B-UD-Q4_K_XL.gguf"
 port  = 8091
 release_date = "2026-04-15"   # HF Qwen/Qwen3.6-35B-A3B createdAt
-ctx   = 65536
-flags = "--temp 0.6 --top-p 0.95 -fa on --cache-type-k q8_0 --cache-type-v q8_0 --reasoning-budget 0"
+ctx   = 262144
+flags = "-fit off --n-cpu-moe 12 --temp 0.6 --top-p 0.95 -fa on --cache-type-k q8_0 --cache-type-v q8_0 --reasoning-budget 0"
 
 # Best small model in the lab (0.786): fully agentic out of the box.
 # Only 9GB (Q6), so its FULL native 256K context fits ALL-GPU at ~101 tok/s / 13.5GB (q8 KV) —
