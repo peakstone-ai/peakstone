@@ -97,12 +97,25 @@ def _iface_exists(name: str) -> bool:
     return os.path.exists(f"/sys/class/net/{name}")
 
 
+def _tap_owner(name: str) -> int | None:
+    """uid that owns a tun/tap device (sysfs `owner`); None for a missing/non-tap interface."""
+    try:
+        with open(f"/sys/class/net/{name}/owner") as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return None
+
+
 def available_taps() -> list[str]:
-    """Pre-created, user-owned taps from the pool (fc-net-setup.sh), in order."""
+    """Pre-created taps from the pool (fc-net-setup.sh) that WE own, in order. Ownership is part of
+    the contract: Firecracker can open a pre-existing tap without CAP_NET_ADMIN only when this uid
+    owns it — a root-owned pool (e.g. from a systemd unit missing PEAKSTONE_FC_TAP_USER) makes every
+    networked boot die with EPERM, so such taps are excluded here (and host_prereqs names them)."""
     taps = []
     i = 0
     while _iface_exists(f"{FC_TAP_PREFIX}{i}"):
-        taps.append(f"{FC_TAP_PREFIX}{i}")
+        if _tap_owner(f"{FC_TAP_PREFIX}{i}") == os.geteuid():
+            taps.append(f"{FC_TAP_PREFIX}{i}")
         i += 1
     return taps
 
@@ -116,10 +129,16 @@ def host_prereqs(*, networking: bool = True) -> list[str]:
         missing.append(f"firecracker binary ({FC_BIN!r}) not found")
     if not _can_open_rw("/dev/kvm"):
         missing.append("/dev/kvm not accessible (join the 'kvm' group or run as root)")
+    setup = "peakstone/engine/env/firecracker_agent/fc-net-setup.sh"
     if networking and not _iface_exists(FC_BRIDGE):
-        missing.append(f"bridge {FC_BRIDGE!r} missing — run engine/env/firecracker_agent/fc-net-setup.sh")
+        missing.append(f"bridge {FC_BRIDGE!r} missing — run {setup}")
     if networking and not available_taps():
-        missing.append(f"no {FC_TAP_PREFIX}* taps — run engine/env/firecracker_agent/fc-net-setup.sh")
+        first = f"{FC_TAP_PREFIX}0"
+        if _iface_exists(first):
+            missing.append(f"{FC_TAP_PREFIX}* taps are owned by uid {_tap_owner(first)}, not "
+                           f"{os.geteuid()} — re-run {setup} (it repairs ownership)")
+        else:
+            missing.append(f"no {FC_TAP_PREFIX}* taps — run {setup}")
     return missing
 
 

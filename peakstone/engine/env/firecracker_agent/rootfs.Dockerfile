@@ -57,8 +57,10 @@ RUN python3.10 -m venv /opt/peakstone/bcb-venv \
     && rm -f /tmp/bcb.txt
 
 # the python runner invokes bare `python` (Ubuntu ships only python3); `time` backs guest peak-RSS.
+# `iproute2` backs the harness's in-guest network config (`ip link/addr/route` — networked
+# multi-node runs fail with "ip: not found" without it).
 # Kept as a late layer so the heavy toolchain layers above stay cached on rebuild.
-RUN apt-get update && apt-get install -y --no-install-recommends python-is-python3 time \
+RUN apt-get update && apt-get install -y --no-install-recommends python-is-python3 time iproute2 \
     && rm -rf /var/lib/apt/lists/*
 
 # --- declare the toolchain environment for the guest agent -----------------------------------

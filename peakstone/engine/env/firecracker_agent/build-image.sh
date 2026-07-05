@@ -62,4 +62,4 @@ rm -rf rootdir
 
 echo "==> done. artifacts in $FC_HOME:"
 ls -1 "$FC_HOME" | grep -E 'firecracker$|vmlinux|rootfs.ext4|ps-agent'
-echo "verify: python -m pytest engine/env/tests/test_firecracker.py -q"
+echo "verify: python -m pytest peakstone/engine/env/tests/test_firecracker.py -q"

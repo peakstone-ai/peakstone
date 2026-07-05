@@ -13,7 +13,12 @@
 #   sudo ./fc-net-setup.sh --down     # remove
 set -euo pipefail
 
-USER_NAME="${SUDO_USER:-$USER}"
+# The taps must be owned by the (non-root) user who runs the harness — Firecracker can only open a
+# pre-existing tap without CAP_NET_ADMIN if that uid owns it. Under `sudo` SUDO_USER is right; under
+# systemd there is no SUDO_USER, so the unit must pass PEAKSTONE_FC_TAP_USER explicitly (the unit
+# printed below does — a unit without it silently creates a root-owned pool and every networked
+# microVM boot dies with EPERM).
+USER_NAME="${PEAKSTONE_FC_TAP_USER:-${SUDO_USER:-$USER}}"
 BR="${PEAKSTONE_FC_BRIDGE:-psfc-br0}"
 PREFIX="${PEAKSTONE_FC_TAP_PREFIX:-psfc-tap}"
 SUBNET="${PEAKSTONE_FC_SUBNET:-172.30.0}"
@@ -28,11 +33,22 @@ if [ "${1:-}" = "--down" ]; then
   exit 0
 fi
 
+if ! WANT_UID="$(id -u "$USER_NAME" 2>/dev/null)" || [ "$WANT_UID" = "0" ]; then
+  echo "refusing to create a root-owned tap pool (resolved owner: '$USER_NAME')." >&2
+  echo "set PEAKSTONE_FC_TAP_USER=<the user that runs the harness> and re-run." >&2
+  exit 1
+fi
+
 ip link show "$BR" >/dev/null 2>&1 || ip link add "$BR" type bridge
 ip addr replace "${SUBNET}.1/24" dev "$BR"
 ip link set "$BR" up
 for i in $(seq 0 $((COUNT-1))); do
   TAP="${PREFIX}${i}"
+  # repair a wrong-owner tap (e.g. a root-owned pool from a unit without PEAKSTONE_FC_TAP_USER):
+  # tun ownership is fixed at creation (TUNSETOWNER), so delete + recreate
+  if [ -e "/sys/class/net/$TAP" ] && [ "$(cat "/sys/class/net/$TAP/owner" 2>/dev/null)" != "$WANT_UID" ]; then
+    ip link del "$TAP"
+  fi
   ip link show "$TAP" >/dev/null 2>&1 || ip tuntap add dev "$TAP" mode tap user "$USER_NAME"
   ip link set "$TAP" master "$BR"
   ip link set "$TAP" up
@@ -52,6 +68,7 @@ To persist across reboots, install a systemd unit:
   Type=oneshot
   RemainAfterExit=yes
   Environment=PEAKSTONE_FC_TAP_COUNT=${COUNT}
+  Environment=PEAKSTONE_FC_TAP_USER=${USER_NAME}
   ExecStart=$(readlink -f "$0")
   ExecStop=$(readlink -f "$0") --down
   [Install]

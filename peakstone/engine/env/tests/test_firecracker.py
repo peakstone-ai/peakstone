@@ -47,6 +47,22 @@ def test_multinode_provision_refuses_without_tap_setup():
     assert any("tap" in r or "bridge" in r or "fc-net-setup" in r for r in ei.value.reasons)
 
 
+def test_available_taps_excludes_taps_we_do_not_own(monkeypatch):
+    # a root-owned pool (systemd unit without PEAKSTONE_FC_TAP_USER) is unusable: Firecracker gets
+    # EPERM opening the tap. Such taps must not count as available, and the prereq must say why.
+    from peakstone.engine.env import firecracker as fc
+    pool = {"psfc-tap0": 0, "psfc-tap1": os.geteuid()}   # tap0 root-owned, tap1 ours
+    monkeypatch.setattr(fc, "FC_TAP_PREFIX", "psfc-tap")
+    monkeypatch.setattr(fc, "_iface_exists", lambda n: n in pool or n == fc.FC_BRIDGE)
+    monkeypatch.setattr(fc, "_tap_owner", lambda n: pool.get(n))
+    assert fc.available_taps() == ["psfc-tap1"]
+    pool["psfc-tap1"] = 0                                # now the whole pool is root-owned
+    assert fc.available_taps() == []
+    monkeypatch.setattr(fc, "_binary_ok", lambda: True)
+    monkeypatch.setattr(fc, "_can_open_rw", lambda p: True)
+    assert any("owned by uid 0" in r for r in fc.host_prereqs(networking=True))
+
+
 def test_vm_config_is_well_formed():
     cfg = vm_config(NodeSpec("server"), rootfs="/img/rootfs.ext4", kernel="/img/vmlinux",
                     uds_path="/tmp/server.vsock")
