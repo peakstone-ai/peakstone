@@ -52,7 +52,10 @@ temperature   = 0.2
 seed          = 42    # fixed RNG seed sent on every request → reproducible generations (recorded in
                       # the bundle's sampling). Reproducible only on the SAME stack (gpu/driver/llama.cpp/
                       # quant); a different seed is a different run. Models run at their configured temp.
-max_tokens    = 6144
+# max_tokens: leave unset for the official generous budgets (16384; 32768 on reasoning-heavy
+# tasks) — a truncated "fail" would mean "ran out of room", not "couldn't solve it". Setting a
+# value here (or --max-tokens) caps ALL tasks uniformly; the resolved budget is part of the run
+# identity and is recorded verbatim in meta + the signed bundle's sampling block.
 request_timeout = 600   # seconds per model call
 sandbox       = "subprocess"   # subprocess | docker
 node_bin      = "~/opt/node/bin"   # prepended to PATH for js/ts runners

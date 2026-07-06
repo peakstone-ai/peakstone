@@ -276,6 +276,8 @@ def _sampling(flags: str, run_cfg: dict) -> dict:
             s[key] = float(m.group(1)) if "." in m.group(1) else int(m.group(1))
     if run_cfg.get("max_tokens"):
         s["max_tokens"] = run_cfg["max_tokens"]
+    if run_cfg.get("max_tokens_reasoning"):
+        s["max_tokens_reasoning"] = run_cfg["max_tokens_reasoning"]   # reasoning-heavy rows' budget
     if run_cfg.get("seed") is not None:
         s["seed"] = run_cfg["seed"]   # fixed RNG seed → reproducible on this stack; part of run identity
     return s
@@ -442,14 +444,23 @@ def _result(row: dict, chash: dict, judge_model: str | None, cpub: dict | None =
     return r
 
 
-def produce_bundle(meta: dict, results: list[dict], *, harness_version: str = "0.1.0",
+def produce_bundle(meta: dict, results: list[dict], *, harness_version: str | None = None,
                    sign: bool = True) -> dict:
     """Assemble a schema-valid, content-addressed, (optionally) signed result bundle."""
+    if harness_version is None:
+        from .versions import pkg_version
+        harness_version = pkg_version()
     run_cfg = {}
     try:
         run_cfg = tomllib.loads(paths.config_path().read_text()).get("run", {})
     except Exception:  # noqa: BLE001
         pass
+    # Run identity: the budget recorded in sampling is the RESOLVED one the run actually used
+    # (carried in meta), never a re-read of whatever config is on disk now — a --max-tokens
+    # override must land in the signed bundle exactly as it was applied.
+    for key in ("max_tokens", "max_tokens_reasoning"):
+        if meta.get(key):
+            run_cfg[key] = meta[key]
 
     model_name = (meta.get("planner_model") or (meta.get("models") or ["unknown"])[0])
     chash = challenge_hashes(paths.challenges_dir())

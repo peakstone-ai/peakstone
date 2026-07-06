@@ -60,7 +60,17 @@ def _budget(args, run_cfg, *, reasoning_heavy: bool = False) -> int:
     run at 8k caps everything); 'default' means these sensible per-task defaults."""
     if args.max_tokens:
         return args.max_tokens
-    return run_cfg.get("max_tokens") or (REASONING_MAX_TOKENS if reasoning_heavy else DEFAULT_MAX_TOKENS)
+    if reasoning_heavy:
+        return run_cfg.get("max_tokens_reasoning") or run_cfg.get("max_tokens") or REASONING_MAX_TOKENS
+    return run_cfg.get("max_tokens") or DEFAULT_MAX_TOKENS
+
+
+def _freeze_budget(args, run_cfg) -> None:
+    """Resolve the token budget ONCE and pin it in run_cfg — every later consumer (per-challenge
+    requests, meta, the signed bundle's sampling block) reads the same numbers. Without this, a CLI
+    --max-tokens, the config value, and the meta default could describe one run three ways."""
+    run_cfg["max_tokens"], run_cfg["max_tokens_reasoning"] = (
+        _budget(args, run_cfg), _budget(args, run_cfg, reasoning_heavy=True))
 
 
 def update_loop_streak(family, *, won, looped, streaks, passed, abandoned, threshold):
@@ -365,6 +375,7 @@ def main(argv=None):
         pass
     ports.update(cfg.get("models", {}))
     run_cfg = cfg.get("run", {})
+    _freeze_budget(args, run_cfg)   # run identity: one resolved budget for requests + meta + bundle
     jcfg = cfg.get("judge", {})
     judge_model = args.judge_model or jcfg.get("model", "qwen3-coder")
     # global AGENTS.md output contract (--agents-md): appended to the system prompt and scored
@@ -1012,7 +1023,10 @@ def main(argv=None):
         "sandbox": effective_sandbox(run_cfg.get("sandbox")), "reference": args.reference,
         "gpu": _gpu_info(), "retries": args.retries,
         "agents_md": bool(agents_md), "mem_used": mem_used, "host_load": host_load,
-        "max_tokens": args.max_tokens or DEFAULT_MAX_TOKENS,   # the run's generation budget (run identity)
+        # the run's generation budget (run identity) — the SAME resolved numbers every request used
+        "max_tokens": run_cfg["max_tokens"],
+        "max_tokens_reasoning": run_cfg["max_tokens_reasoning"],
+        "gateway": bool(args.gateway),
         **level_meta,
     }
     # Negative data: categories abandoned to repetition loops, and a run-level verdict when the model
@@ -1069,7 +1083,7 @@ def run_planner(args, chs, host, ports, run_cfg):
     avg = sum(r["final_score"] for r in results) / len(results)
     meta = {"timestamp": stamp, "models": [planner], "n_challenges": len(results), "judge": None,
             "sandbox": effective_sandbox(run_cfg.get("sandbox")), "reference": False,
-            "gpu": _gpu_info(), "coder_model": coder}
+            "gpu": _gpu_info(), "coder_model": coder, "max_tokens": run_cfg.get("max_tokens")}
     print(f"\nPlanner {planner} (coder {coder}): mean downstream {avg:.3f} over {len(results)} tasks. "
           f"-> {outdir}")
     if args.bundle:
@@ -1147,7 +1161,8 @@ def run_env_agent(args, host, ports, run_cfg):
     outdir.mkdir(parents=True, exist_ok=True)
     (outdir / "env-results.json").write_text(json.dumps(results, indent=2))
     meta = {"timestamp": stamp, "models": models, "n_challenges": len(chs),
-            "judge": None, "sandbox": "env", "reference": False, "gpu": _gpu_info()}
+            "judge": None, "sandbox": "env", "reference": False, "gpu": _gpu_info(),
+            "max_tokens": run_cfg.get("max_tokens")}
     print(f"\n{sum(1 for r in results if r['final_score'] >= 0.999)}/{len(results)} reached goal state. "
           f"Results: {outdir / 'env-results.json'}")
     if args.bundle:
@@ -1424,6 +1439,7 @@ def run_exec_plans(args, chs, host, ports, run_cfg, use_judge, judge_model, judg
         "sandbox": effective_sandbox(run_cfg.get("sandbox")), "reference": False,
         "gpu": _gpu_info(), "retries": 0, "agents_md": False,
         "mode": "planner", "planner_model": planner, "coder_model": coder,
+        "max_tokens": run_cfg.get("max_tokens"),
     }
     write_report(results, outdir, meta)
     print(f"\nReport: {outdir / 'leaderboard.md'}")
