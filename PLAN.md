@@ -371,8 +371,9 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
 > status markers: ✅ done · ◐ partial · ☐ open.)
 
 **A. Trust-hardening sprint — do first; the moat is the product**
-1. ☐ **Run identity**: one `RunConfig` resolved once, recorded verbatim in meta + bundle (token
+1. ✅ **Run identity**: one `RunConfig` resolved once, recorded verbatim in meta + bundle (token
    budget, judge on/off, harness version). Today three different numbers can describe one run. [R1]
+   *(0feb575: _freeze_budget() + bundle takes the budget from meta + real pkg_version().)*
 2. ☐ **Server-side truth for submitter-supplied fields**: notarized first-seen `published_at`,
    trust-reconciled family metadata, suite content-hash actually compared at ingest,
    distinct-account provenance for community-verified. [R2–R5]
@@ -381,13 +382,17 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
 4. ◐ **Re-seed the official board through the daemon**, judge on, per the level definition; retire or
    provenance-label repack composites. [R8] *(board re-seeded on suite 2026.08 via the daemon;
    judge-on still to verify — daemon runs were subject to R13's silent no-judge until it's fixed.)*
-5. ☐ **Scoring honesty**: swebench post-run revert covers all non-source files; "no tests ran" is
+5. ◐ **Scoring honesty**: swebench post-run revert covers all non-source files; "no tests ran" is
    unscored, not 0.0; bidirectional partition probes; judge reachable (or loud) in gateway mode;
-   loop-streak/retry attribution fixes. [R9–R11, R13, R20]
-6. ◐ **Consent + safety defaults**: daemon auto-submit behind an explicit flag; agentic runs of
+   loop-streak/retry attribution fixes. [R9–R11, R13, R20] *(R13 done, ab5110e: judge rides the
+   gateway; judging stays judge-LAST by design (one GPU) — an unreachable judge defers loudly with
+   meta.judge_deferred/judge_errors instead of degrading silently. Daemon still doesn't auto-queue
+   the judge-last pass — that's the R8 re-seed piece. R9–R11/R20 open.)*
+6. ✅ **Consent + safety defaults**: daemon auto-submit behind an explicit flag; agentic runs of
    untrusted models never silently fall back to the non-isolating local provider. [R12, R14]
-   *(local provider hardened — pid-ns isolation 4ebb1be + RLIMIT caps 6957d8a — but the silent
-   fallback and the auto-submit default remain.)*
+   *(ab5110e: local provider = --env-provider local / PEAKSTONE_ALLOW_LOCAL_ENV=1 consent only;
+   c0ebbd2: [gateway].auto_submit / PEAKSTONE_AUTO_SUBMIT, off by default; plus the earlier
+   pid-ns 4ebb1be + RLIMIT 6957d8a hardening.)*
 
 **B. Funnel + web (cheap, high-visibility)**
 7. ☐ **Fix /submit**: public API base URL (split from the internal one) + current `peakstone` CLI
