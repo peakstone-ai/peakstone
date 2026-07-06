@@ -381,8 +381,12 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
    selected-set suite hash (engine) + suite_hash_match flag (ingest — flag→reject after the R8
    re-seed); repro_sig includes challenge content + account-age bar. Deliberately NOT done: a
    server-side model registry for release_date — trust reconciliation covers the threat for now.)*
-3. ☐ **Trust-gate every public aggregate** (challenge pages, pass-rates, provisional list, evolution
+3. ✅ **Trust-gate every public aggregate** (challenge pages, pass-rates, provisional list, evolution
    chart, landing stats) and persist env provider fidelity so it caps trust as designed. [R6–R7]
+   *(3d35f3d: stats/mini-boards join trusted-only, provisional ordered by recency, evolution +
+   landing count ranked rows; e14c3e0: env challenge ground truth hashed (env.toml/verify.py/
+   fixtures), Result.env persisted + backfilled, public agent_score counts isolating providers
+   only — the owner's local TUI board still counts consented local runs.)*
 4. ◐ **Re-seed the official board through the daemon**, judge on, per the level definition; retire or
    provenance-label repack composites. [R8] *(board re-seeded on suite 2026.08 via the daemon;
    judge-on still to verify — daemon runs were subject to R13's silent no-judge until it's fixed.)*
