@@ -31,6 +31,10 @@ class ModelFamily(Base):
     # Claimed knowledge cutoff (self-reported). Backs only the secondary "claimed-clean" held-out
     # view; the official held-out metric uses release_date (unforgeable). See engine/contamination.py.
     training_cutoff: Mapped[str | None] = mapped_column(String)
+    # Trust tier of the submission that last WROTE release_date/training_cutoff/vendor. Family
+    # metadata is reconciled highest-trust-wins at ingest (a name-squatter's self-reported
+    # release_date — the contamination boundary — must not stick once a trusted run arrives).
+    metadata_trust: Mapped[str | None] = mapped_column(String, default="self-reported")
     modality: Mapped[str] = mapped_column(String, default="text")
     # Capabilities OBSERVED across this family's submitted runs (positives only: e.g. it engaged tools
     # or resolved an agentic task). Lets others import a classification without re-testing.
@@ -168,10 +172,25 @@ class Submission(Base):
     # the same artifact+suite with the same repro_sig are reproductions of each other → the basis
     # of the community-verified trust tier (see ingest._recompute_trust).
     repro_sig: Mapped[str | None] = mapped_column(String, index=True)
+    # Does this bundle's suite.content_hash equal the suite's first-seen hash? None = no basis to
+    # compare (first submission for the suite, or a side missing the hash). False flags a run that
+    # scored a DIFFERENT challenge set than the board's — comparable-looking but not comparable.
+    suite_hash_match: Mapped[bool | None] = mapped_column(default=None)
     trust_tier: Mapped[str] = mapped_column(String, default="self-reported", index=True)
     submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     raw: Mapped[dict] = mapped_column(JSONv)               # full bundle, for audit / re-verification
     results: Mapped[list[Result]] = relationship(back_populates="submission", cascade="all, delete-orphan")
+
+
+class ChallengeSighting(Base):
+    """Server-side notarization of when a challenge's exact content was FIRST seen by the platform
+    (keyed by content_hash, so every version is its own sighting). A submitted `published_at` later
+    than first-seen is refuted by construction — the content demonstrably existed at first-seen —
+    so ingest clamps the effective date down to it (source 'platform-first-seen'). Earlier claims
+    are unfalsifiable but conservative for held-out scoring, so they're kept."""
+    __tablename__ = "challenge_sightings"
+    content_hash: Mapped[str] = mapped_column(String, primary_key=True)
+    first_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
 
 
 class Result(Base):

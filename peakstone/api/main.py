@@ -36,6 +36,12 @@ async def lifespan(app: FastAPI):
         n = ingest.reconcile_trusted_keys(db)
         if n:
             print(f"[startup] promoted {n} run(s) by trusted keys to runner-verified")
+        # re-derive repro_sigs from stored raw bundles (idempotent) — whenever the sig formula
+        # changes (e.g. challenge_hash joining the fingerprint), old rows must regroup or new
+        # submissions would never match them and community verification would silently stall.
+        n = ingest.recompute_repro_sigs(db)
+        if n:
+            print(f"[startup] recomputed repro_sig on {n} stored submission(s)")
     yield
 
 

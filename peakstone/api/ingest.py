@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 import os
+from datetime import datetime, timezone
 
 from sqlalchemy import select
 
@@ -25,6 +26,10 @@ TRUST_ORDER = {"self-reported": 0, "community-verified": 1, "runner-verified": 2
 # Distinct identities required to promote to community-verified (a bound account counts once even
 # across several of its keys; unbound keys each count once). Calibratable; 2 is the floor.
 COMMUNITY_MIN_IDENTITIES = int(os.environ.get("PEAKSTONE_COMMUNITY_MIN_IDENTITIES", "2"))
+# Minimum account age (days) for an identity to count toward community-verified. Fresh OAuth
+# accounts are cheap to mint in pairs; an age bar makes self-verification a slow, deliberate act
+# instead of a five-minute one. 0 = off (dev default); production sets this (see infra/.env.example).
+COMMUNITY_MIN_ACCOUNT_AGE_DAYS = float(os.environ.get("PEAKSTONE_COMMUNITY_MIN_ACCOUNT_AGE_DAYS", "0"))
 # Operator/runner keys trusted to seed the official board. A bundle signed by one of these is ingested
 # as runner-verified, so the operator's own seed runs qualify for the RANKED held-out tier — while an
 # anonymous self-reported submission cannot. Without this gate a single free keypair + forged
@@ -40,9 +45,13 @@ def _repro_sig(results: list[dict]) -> str | None:
     """Fingerprint the deterministic result vector — the thing a reproduction must match.
 
     Only deterministic-tests results count (llm-judge/human aren't reproducible). Scores are
-    rounded so floating-point noise doesn't split a genuine reproduction. None if nothing
-    deterministic ran (such a run can never be community-verified)."""
-    det = [(r["challenge_id"], round(float(r.get("score", {}).get("final", 0.0)), 4))
+    rounded so floating-point noise doesn't split a genuine reproduction. The challenge
+    content_hash is part of the fingerprint: "reproductions" must agree on the exact challenge
+    CONTENT scored, not just ids + scores (two runs of divergent challenge versions must never
+    verify each other). None if nothing deterministic ran (such a run can never be
+    community-verified)."""
+    det = [(r["challenge_id"], r.get("challenge_hash") or "",
+            round(float(r.get("score", {}).get("final", 0.0)), 4))
            for r in results if r.get("verification", "deterministic-tests") == "deterministic-tests"
            and not r.get("private")]   # private sets differ per submitter — they'd fragment
                                        # reproduction groups and break community verification
@@ -61,6 +70,21 @@ def _identity_of(db, sub: models.Submission) -> str:
     return f"key:{sub.key_id}"
 
 
+def _seasoned(db, identity: str) -> bool:
+    """Age bar (provenance): an identity counts toward community-verified only once its account is
+    COMMUNITY_MIN_ACCOUNT_AGE_DAYS old. OAuth accounts are cheap to mint in pairs; age makes
+    self-verification slow and deliberate instead of a five-minute act."""
+    if COMMUNITY_MIN_ACCOUNT_AGE_DAYS <= 0:
+        return True
+    user = db.get(models.User, int(identity.removeprefix("user:")))
+    if not user or user.created_at is None:
+        return False
+    created = user.created_at
+    if created.tzinfo is None:               # SQLite drops tzinfo; stored values are UTC
+        created = created.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - created).days >= COMMUNITY_MIN_ACCOUNT_AGE_DAYS
+
+
 def _recompute_trust(db, sub: models.Submission) -> None:
     """After inserting `sub`, promote every self-reported run in its reproduction group to
     community-verified once ≥ COMMUNITY_MIN_IDENTITIES distinct identities agree."""
@@ -74,13 +98,34 @@ def _recompute_trust(db, sub: models.Submission) -> None:
     )).all()
     # Sybil resistance: only ACCOUNT-BOUND identities count. Unbound keys are free to mint, so
     # counting them would let one actor self-promote with N throwaway keypairs. Community-verified
-    # therefore requires ≥N distinct bound accounts (bind a GitHub account to participate).
-    identities = {i for i in (_identity_of(db, s) for s in group) if i.startswith("user:")}
+    # therefore requires ≥N distinct bound accounts (bind a GitHub account to participate) that
+    # each clear the account-age bar.
+    identities = {i for i in (_identity_of(db, s) for s in group)
+                  if i.startswith("user:") and _seasoned(db, i)}
     if len(identities) < COMMUNITY_MIN_IDENTITIES:
         return
     for s in group:
         if TRUST_ORDER.get(s.trust_tier, 0) < TRUST_ORDER["community-verified"]:
             s.trust_tier = "community-verified"
+
+
+def recompute_repro_sigs(db) -> int:
+    """Re-derive every stored submission's repro_sig from its raw bundle (idempotent; run at
+    startup). Needed whenever the sig formula changes — e.g. challenge_hash joining the
+    fingerprint — so old rows regroup correctly instead of new submissions never matching them.
+    Never downgrades trust already granted; re-runs promotion for regrouped rows."""
+    changed = []
+    for s in db.scalars(select(models.Submission)).all():
+        new = _repro_sig((s.raw or {}).get("results", []))
+        if new != s.repro_sig:
+            s.repro_sig = new
+            changed.append(s)
+    if changed:
+        db.flush()
+        for s in changed:
+            _recompute_trust(db, s)
+        db.commit()
+    return len(changed)
 
 
 def reconcile_trusted_keys(db) -> int:
@@ -104,6 +149,43 @@ def reconcile_trusted_keys(db) -> int:
     if subs:
         db.commit()
     return len(subs)
+
+
+def _reconcile_family(family: models.ModelFamily, m: dict, tier: str) -> None:
+    """Family metadata (release_date — the contamination boundary — training_cutoff, vendor) is
+    reconciled by trust, not first-writer-wins: a higher-trust submission overwrites what a
+    lower-trust one set (name-squatting a family with a bogus release_date must not stick), an
+    equal-trust one only fills gaps, a lower-trust one never touches it."""
+    incoming = {k: m.get(k) for k in ("release_date", "training_cutoff", "vendor")}
+    have, new = TRUST_ORDER.get(family.metadata_trust or "self-reported", 0), TRUST_ORDER.get(tier, 0)
+    if new > have:
+        for k, v in incoming.items():
+            if v is not None:
+                setattr(family, k, str(v) if k != "vendor" else v)
+        family.metadata_trust = tier
+    elif new == have:
+        for k, v in incoming.items():
+            if v is not None and getattr(family, k) is None:
+                setattr(family, k, str(v) if k != "vendor" else v)
+
+
+def _notarize_published_at(db, row: models.Result) -> None:
+    """Server-side truth for `published_at` (the contamination clock): record when this exact
+    challenge content (content_hash) was FIRST seen by the platform, and clamp any later claim
+    down to it — the content demonstrably existed at first-seen, so a later date is refuted.
+    Earlier claims are unfalsifiable but conservative for held-out scoring (they count the
+    challenge as held-out for FEWER models), so they're kept."""
+    h = row.challenge_hash
+    if not h or h.startswith("("):        # no hash / "(private)" sentinel — nothing to notarize
+        return
+    sighting = _get_or_create(db, models.ChallengeSighting, content_hash=h)
+    first_seen = sighting.first_seen_at
+    if first_seen.tzinfo is None:          # SQLite drops tzinfo; stored values are UTC
+        first_seen = first_seen.replace(tzinfo=timezone.utc)
+    first_seen_date = first_seen.date().isoformat()
+    if row.published_at is None or row.published_at > first_seen_date:
+        row.published_at = first_seen_date
+        row.published_at_source = "platform-first-seen"
 
 
 def _get_or_create(db, model, defaults=None, **filters):
@@ -181,15 +263,31 @@ def ingest_bundle(db, b: dict) -> models.Submission:
 
     # 5) upserts
     m, suite, env = b["model"], b["suite"], b["environment"]
+    # a bundle signed by a trusted operator key is runner-verified (qualifies to rank); everyone
+    # else starts self-reported and is promoted only by independent reproduction.
+    trust_tier = "runner-verified" if pub in TRUSTED_PUBKEYS else "self-reported"
     family = _get_or_create(db, models.ModelFamily,
                             defaults={"release_date": m.get("release_date"),
                                       "training_cutoff": m.get("training_cutoff"),
-                                      "vendor": m.get("vendor")},
+                                      "vendor": m.get("vendor"),
+                                      "metadata_trust": trust_tier},
                             name=m["family"])
+    _reconcile_family(family, m, trust_tier)
     artifact = _get_artifact(db, family, m)
     key = _get_or_create(db, models.Key, pubkey=pub)
-    _get_or_create(db, models.Suite, defaults={"content_hash": suite.get("content_hash")},
-                   name=suite["id"], version=suite["version"])
+    # Comparability check: the suite's content_hash is fixed by its first-seen bundle; a later
+    # bundle claiming the same (suite, version) over a DIFFERENT challenge set is flagged, not
+    # trusted-by-name. None = no basis (this bundle IS the first sighting, or a hash is missing).
+    # (Flag rather than reject while pre-fix bundles — hashed over executed rows instead of the
+    # selected set — are still on the board; the ranked tier can exclude False.)
+    suite_row = db.scalar(select(models.Suite).filter_by(name=suite["id"], version=suite["version"]))
+    suite_hash_match = None
+    if suite_row is None:
+        suite_row = _get_or_create(db, models.Suite,
+                                   defaults={"content_hash": suite.get("content_hash")},
+                                   name=suite["id"], version=suite["version"])
+    elif suite_row.content_hash and suite.get("content_hash"):
+        suite_hash_match = suite.get("content_hash") == suite_row.content_hash
 
     submission = models.Submission(
         bundle_hash=claimed, key_id=key.id, artifact_id=artifact.id,
@@ -198,9 +296,8 @@ def ingest_bundle(db, b: dict) -> models.Submission:
         serve_flags=m.get("serve_flags"), context=m.get("context"),
         env=env, vram_gb=env.get("vram_gb"), harness_version=b.get("harness", {}).get("version"),
         repro_sig=_repro_sig(b["results"]),
-        # a bundle signed by a trusted operator key is runner-verified (qualifies to rank); everyone
-        # else starts self-reported and is promoted only by independent reproduction.
-        trust_tier=("runner-verified" if pub in TRUSTED_PUBKEYS else "self-reported"),
+        suite_hash_match=suite_hash_match,
+        trust_tier=trust_tier,
         raw=b,
     )
     db.add(submission)
@@ -227,17 +324,22 @@ def ingest_bundle(db, b: dict) -> models.Submission:
                 row.challenge_id = rev.challenge_id
                 row.published_at = rev.revealed_at.date().isoformat()
                 row.published_at_source = "private-reveal"
+        if not private:
+            _notarize_published_at(db, row)   # server first-seen clamps a too-late claimed date
         db.add(row)
         # lazily register the challenge in the corpus — but NEVER from a sealed private row: its
         # challenge_id is an author-chosen slug that must not create (or be confused with) a
-        # public corpus entry until reveal.
+        # public corpus entry until reveal. Registration from an untrusted submission is
+        # 'observed', not 'published': submitter-declared ids/categories/difficulties must not
+        # mint canonical corpus entries (those come from the corpus/proposal flow or trusted runs).
         if not private or row.revealed:
             ch = db.get(models.Challenge, row.challenge_id)
             if not ch:
                 db.add(models.Challenge(
                     id=row.challenge_id, category=r.get("category"),
                     verification=r.get("verification"), seed_difficulty=r.get("difficulty"),
-                    content_hash=r.get("challenge_hash")))
+                    content_hash=r.get("challenge_hash"),
+                    status=("published" if trust_tier == "runner-verified" else "observed")))
 
     # observed capabilities (positives) from this run -> union into the family (so others can import
     # a classification without re-testing). Mirrors engine.capabilities.observe on bundle-shaped rows.
