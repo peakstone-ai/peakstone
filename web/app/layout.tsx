@@ -3,9 +3,9 @@ import Link from "next/link";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Peakstone — open-model capability benchmark",
+  title: "Peakstone — the verifiable leaderboard for open & local LLMs",
   description:
-    "A public, reproducible benchmark tracking the capability frontier of open models — high-water-mark stones for AI coding.",
+    "Every score is a signed, content-addressed run anyone can reproduce; every challenge is committed before it's revealed. A leaderboard you verify, not trust.",
 };
 
 export default function RootLayout({
@@ -30,7 +30,7 @@ export default function RootLayout({
         </header>
         {children}
         <footer className="mx-auto max-w-5xl px-4 py-10 text-xs text-stone-600">
-          Peakstone · reproducible, community-run · code Apache-2.0, data CC-BY-4.0
+          Peakstone · verified, not trusted · community-run · code Apache-2.0, data CC-BY-4.0
         </footer>
       </body>
     </html>

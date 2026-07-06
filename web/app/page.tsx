@@ -88,13 +88,16 @@ function Hero() {
   return (
     <section className="text-center">
       <h1 className="text-3xl font-semibold tracking-tight text-stone-100">
-        The reproducible leaderboard for open &amp; local LLMs
+        The leaderboard you don&apos;t have to trust
       </h1>
       <p className="mx-auto mt-3 max-w-2xl text-stone-400">
-        Peakstone ranks open and locally-runnable models on coding, math, agentic and safety tasks by
-        their <em>held-out</em> score — only challenges published <em>after</em> a model&apos;s release,
-        so it couldn&apos;t have trained on them. Every result is a{" "}
-        <strong className="text-stone-200">signed, content-addressed run</strong> anyone can reproduce.
+        A benchmark score you can&apos;t re-run is a press release. Peakstone ranks open &amp; local
+        models on coding, math, agentic and safety tasks by their <em>held-out</em> score — only
+        challenges published <em>after</em> a model&apos;s release, so it couldn&apos;t have trained
+        on them — and every result is a{" "}
+        <strong className="text-stone-200">signed, content-addressed run</strong>. Reproduce one on
+        your own GPU and it counts toward the{" "}
+        <strong className="text-stone-200">community-verified tier — the tier that ranks</strong>.
       </p>
       <div className="mx-auto mt-6 w-full max-w-md text-left">
         <Terminal />

@@ -1,21 +1,57 @@
 # Peakstone
 
-**A public, reproducible benchmark platform for the capabilities of open models** — from solving
-simple verifiable assignments to (eventually) iterating their way through complex, multi-machine
-projects. Community-run, community-authored, independently reproducible.
+**The verifiable leaderboard for open & local LLMs.** A benchmark score you can't re-run is a
+press release. On Peakstone, every score is a **signed, content-addressed run** anyone can
+reproduce on their own GPU, and every new challenge is **committed (salted hash) before it is
+revealed** — so training on the test set is detectable, not just discouraged. Community-run,
+community-authored, independently verified.
 
 > *Tsunami "high-water-mark" stones record how far the wave reached. Peakstone records how far the
 > open-model capability frontier has reached — permanent, reproducible markers ("set in stone") of a
 > moving peak.*
 
+Three properties that, together, no other benchmark has:
+
+1. **Scores are verified, not trusted.** A result is a signed bundle (ed25519, a published
+   JSON-Schema contract, content-addressed challenges). When other accounts independently
+   reproduce a run's deterministic result vector, the run is promoted to the
+   **community-verified tier — the tier that ranks**. The board is a ledger of confirmed
+   measurements, not a table of claims.
+2. **Contamination defense is cryptographic, not editorial.** The default score is **held-out**:
+   only challenges published *after* a model's release count toward its rank. New challenges
+   enter the corpus as salted commitments and are revealed later (`peakstone reveal`), so "the
+   test set leaked into the training data" is a checkable event, not a rumor.
+3. **It's a tool, not a spectator sport.** `peakstone check` gates your fine-tune / re-quant CI on
+   "did any capability axis regress?" — entirely local, against your own baseline. The TUI shows
+   the board filtered to models that fit *your* GPU. And `peakstone serve` is a llama-swap-style
+   OpenAI-compatible gateway you'll keep using between runs.
+
+**Why not lm-eval-harness / LiveBench / EvalPlus?** They're good tools; the gap is the
+verification protocol, not quality. lm-eval-harness is a *harness* — the numbers you read in
+papers and model cards aren't attached to artifacts anyone can re-run. LiveBench fights
+contamination editorially (fresh questions each month) but is centrally run: you can't reproduce
+its numbers or gate your own CI on it. EvalPlus / Aider-style boards are maintainer-run and
+single-axis. Peakstone's bet is that the *protocol* — sign, publish, independently reproduce,
+**then** rank — matters more than any particular question set.
+
 See **[PLAN.md](./PLAN.md)** for the full vision, architecture, and roadmap.
+
+## Try it in 60 seconds
+
+```bash
+pipx install peakstone && peakstone corpus sync            # client + self-contained challenge corpus
+peakstone bench --level standard --models <your-model>    # score any local GGUF → a signed bundle
+peakstone                                                  # TUI: the board filtered to *your* GPU
+```
 
 ## Status
 
-Early. **P1 (reproducible coding leaderboard)** is in progress. What exists today:
+Early. **P1 (reproducible coding leaderboard)** is in progress.
+
+## What's in the repo
 
 - **`engine/`** — the test harness: serves a model over an OpenAI-compatible API, runs a suite of
-  **verifiable** challenges (deterministic tests), scores them, and (soon) emits a signed
+  **verifiable** challenges (deterministic tests), scores them, and emits a signed
   **result bundle**. Also supports LLM-judge grading, self-repair (`--retries`), a global-rules
   output contract (`--agents-md`), tool-calling/agentic/injection modes, and a planner eval. Ships
   the **result-bundle JSON Schema** (the reproducibility contract) + capability taxonomy as packaged
