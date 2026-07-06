@@ -92,10 +92,16 @@ def _model_file_hash(file_path: Path) -> tuple[str, bool]:
 
 
 def _hash_challenge_dir(d: Path) -> str:
-    """Content hash of a challenge: meta.toml + spec.md + every file under tests/ (sorted)."""
+    """Content hash of a challenge: everything that DEFINES the task and its ground truth —
+    meta.toml + spec.md + tests/**, and for goal-state-env challenges also env.toml (topology),
+    verify.py (the ground truth), and fixtures/** (the environment's contents). Without those an
+    env challenge's verifier could change without the hash surfacing, so agentic rows would pin
+    nothing. reference/ is deliberately excluded (same as code challenges): it demonstrates a
+    solution, it doesn't define correctness."""
     h = hashlib.sha256()
-    files = [d / "meta.toml", d / "spec.md"]
-    files += sorted((d / "tests").rglob("*")) if (d / "tests").is_dir() else []
+    files = [d / "meta.toml", d / "spec.md", d / "env.toml", d / "verify.py"]
+    for sub in ("tests", "fixtures"):
+        files += sorted((d / sub).rglob("*")) if (d / sub).is_dir() else []
     for f in files:
         if f.is_file():
             h.update(f.relative_to(d).as_posix().encode())

@@ -210,9 +210,16 @@ def _total_time(rs) -> float | None:
 
 
 def summarize_rows(rows: list[dict], release_date: str | None = None,
-                   training_cutoff: str | None = None) -> dict:
+                   training_cutoff: str | None = None, *,
+                   agent_isolating_only: bool = False) -> dict:
     """One run's result rows → the full leaderboard axis dict (the row shape GET /leaderboard
-    serves, minus family/run info). Byte-identical to the API's historical `_summarize`."""
+    serves, minus family/run info). Byte-identical to the API's historical `_summarize`.
+
+    `agent_isolating_only` (the PUBLIC board sets it): agent_score counts only goal-state-env rows
+    whose recorded provenance shows an isolating provider (docker/microvm/firecracker). A
+    local-provider run executes on the submitter's host with no network conditions applied — fine
+    for their own local board, but on the public board it must not be indistinguishable from a
+    faithful environment. Rows with no provenance at all are excluded too (can't be told apart)."""
     # Commit-and-reveal: a sealed private row is a timestamped CLAIM, not evidence — it earns no
     # credit on any axis until revealed. Committed/revealed counts are surfaced so selective
     # reveal (the file-drawer) stays visible rather than hidden.
@@ -225,6 +232,9 @@ def summarize_rows(rows: list[dict], release_date: str | None = None,
     # (verbatim from the API) — only `code` excludes goal-state-env; `axis_of` is the EXCLUSIVE
     # variant used by `peakstone check`'s split.
     agent_rs = [r for r in rs if (r.get("verification") or "") == "goal-state-env"]
+    if agent_isolating_only:
+        agent_rs = [r for r in agent_rs
+                    if (r.get("env") or {}).get("provider") not in (None, "local")]
     agent = [_final(r) for r in agent_rs]
     planner = [_final(r) for r in rs if (r.get("category") or "") == "planner"]
     math_rs = [r for r in rs if (r.get("category") or "") == "math"]   # answer-match — its own axis

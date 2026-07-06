@@ -188,6 +188,25 @@ def _notarize_published_at(db, row: models.Result) -> None:
         row.published_at_source = "platform-first-seen"
 
 
+def backfill_result_env(db) -> int:
+    """Copy goal-state-env provenance from stored raw bundles onto Result.env for rows ingested
+    before the column existed (idempotent; run at startup). Without it the public agent_score —
+    which counts isolating providers only — would silently empty for pre-existing runs."""
+    n = 0
+    for sub in db.scalars(select(models.Submission)).all():
+        raw_env = {r["challenge_id"]: r.get("env") for r in (sub.raw or {}).get("results", [])
+                   if r.get("env")}
+        if not raw_env:
+            continue
+        for row in sub.results:
+            if row.env is None and row.challenge_id in raw_env:
+                row.env = raw_env[row.challenge_id]
+                n += 1
+    if n:
+        db.commit()
+    return n
+
+
 def _get_or_create(db, model, defaults=None, **filters):
     obj = db.scalar(select(model).filter_by(**filters))
     if obj:
@@ -313,6 +332,7 @@ def ingest_bundle(db, b: dict) -> models.Submission:
             final=float(sc.get("final", 0.0)), passed=sc.get("passed"), total=sc.get("total"),
             tok_per_s=r.get("tok_per_s"), latency_s=r.get("latency_s"), metrics=r.get("metrics"),
             transcript=r.get("transcript"),   # solution + execution output (raw_output/stdout/stderr/plan)
+            env=r.get("env"),                 # goal-state-env provider provenance (fidelity gating)
             published_at=r.get("published_at"), published_at_source=r.get("published_at_source"),
             private=private, commitment=r.get("commitment"),
         )

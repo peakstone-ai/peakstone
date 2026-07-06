@@ -209,6 +209,10 @@ class Result(Base):
     latency_s: Mapped[float | None] = mapped_column(Float)
     transcript: Mapped[dict | None] = mapped_column(JSONv)  # solution + output: raw_output/stdout/stderr/plan
     metrics: Mapped[dict | None] = mapped_column(JSONv)    # P2: size/perf/memory efficiency axes
+    # goal-state-env provenance: provider, image digests, network_fidelity, applied conditions,
+    # checks, turns. Persisted so a local-provider agentic run is distinguishable from a faithful
+    # (docker/microvm) one — the public agent_score axis counts isolating providers only.
+    env: Mapped[dict | None] = mapped_column(JSONv)
     # When this challenge's content first became public + where that date came from. Compared
     # against the model's release_date to decide contamination (engine/contamination.py).
     published_at: Mapped[str | None] = mapped_column(String)
