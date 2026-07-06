@@ -65,6 +65,20 @@ def _budget(args, run_cfg, *, reasoning_heavy: bool = False) -> int:
     return run_cfg.get("max_tokens") or DEFAULT_MAX_TOKENS
 
 
+def _judge_client(args, jcfg, host, ports, judge_model):
+    """The judge's endpoint: explicit [judge].base_url > the swapping gateway (when --gateway —
+    the per-port client would point at a llama-server that doesn't exist in gateway mode, so every
+    judge call errored and both/judge challenges silently degraded to tests-only) > per-model port."""
+    if jcfg.get("base_url"):
+        return LLMClient(jcfg["base_url"], jcfg.get("api_key", ""))
+    if args.gateway:
+        return LLMClient(args.gateway, api_key=args.gateway_key or "")
+    if judge_model not in ports:
+        print(f"!! judge model '{judge_model}' not in config [models]", file=sys.stderr)
+        return None
+    return LLMClient(f"http://{host}:{ports[judge_model]}")
+
+
 def _freeze_budget(args, run_cfg) -> None:
     """Resolve the token budget ONCE and pin it in run_cfg — every later consumer (per-challenge
     requests, meta, the signed bundle's sampling block) reads the same numbers. Without this, a CLI
@@ -384,12 +398,7 @@ def main(argv=None):
     tests_system = SYSTEM_PROMPT + ("\n\n" + agents_md if agents_md else "")
 
     def make_judge_client():
-        if jcfg.get("base_url"):
-            return LLMClient(jcfg["base_url"], jcfg.get("api_key", ""))
-        if judge_model not in ports:
-            print(f"!! judge model '{judge_model}' not in config [models]", file=sys.stderr)
-            return None
-        return LLMClient(f"http://{host}:{ports[judge_model]}")
+        return _judge_client(args, jcfg, host, ports, judge_model)
 
     if args.list_levels:
         version, lv = load_levels()
@@ -531,6 +540,22 @@ def main(argv=None):
         return run_planner(args, chs, host, ports, run_cfg)
 
     judge_client = make_judge_client() if use_judge else None
+    # Judging is optional and judge-LAST by design: a one-GPU box can't hold the bench model and a
+    # decent judge at once, so grading normally happens as a separate `--judge-only` pass over the
+    # finished run. What must never happen is *silent* degradation — judge/both rows scored
+    # tests-only while the output looks judged. Unreachable judge → proceed tests-only, but say so
+    # loudly and record the deferral so the bundle can't pass for a judged run.
+    judge_deferred = False
+    if use_judge and any(ch.scoring in ("judge", "both") for ch in chs):
+        if judge_client is None or not judge_client.health():
+            where = jcfg.get("base_url") or args.gateway or f"config [models] port for '{judge_model}'"
+            print(f"!! judge '{judge_model}' unreachable ({where}) — judge/both rows will be scored "
+                  f"tests-only for now.\n"
+                  f"!! Grade them afterwards with a judge-last pass: --judge-only <outdir> "
+                  f"(recorded in meta.judge_deferred; pass --no-judge to choose tests-only scoring).",
+                  file=sys.stderr)
+            use_judge, judge_deferred = False, True
+    judge_errors = 0   # judge calls that errored mid-run (loud accounting at the end)
 
     models = _csv(args.models)
     results = []
@@ -922,6 +947,8 @@ def main(argv=None):
                 summary = f"{run.passed}/{run.total} tests passed (rc={run.returncode})"
                 sol_text = "\n\n".join(f"// {p}\n{c}" for p, c in files.items())
                 judge_res = judge_solution(judge_client, judge_model, ch, sol_text, summary)
+                if judge_res.get("error"):
+                    judge_errors += 1
 
             sc = compute_score(ch, run, judge_res)
             extra = {}
@@ -996,7 +1023,9 @@ def main(argv=None):
                     print(f"{label}  → agent loop [goal-state-env] …")
                     prov = _select_env_provider(args, ch)
                     if prov is None:
-                        print(f"{label}  SKIP (no available provider satisfies its requirements)")
+                        print(f"{label}  SKIP (no isolating env provider available — start docker, "
+                              f"or consent to host execution: --env-provider local / "
+                              f"PEAKSTONE_ALLOW_LOCAL_ENV=1)")
                         continue
                     try:
                         res = run_env_task(client, model, ch, prov)
@@ -1029,6 +1058,15 @@ def main(argv=None):
         "gateway": bool(args.gateway),
         **level_meta,
     }
+    if judge_deferred:
+        meta["judge_deferred"] = True   # judge/both rows are tests-only until a --judge-only pass
+    if judge_errors:
+        # Loud, and recorded: these rows silently degraded to tests-only scoring (scoring.py falls
+        # back when the judge didn't run), so the run is NOT compliant with a judge=true level.
+        meta["judge_errors"] = judge_errors
+        print(f"!! {judge_errors} judge call(s) errored — affected judge/both rows were scored "
+              f"tests-only; grade them with a --judge-only pass (recorded in meta.judge_errors)",
+              file=sys.stderr)
     # Negative data: categories abandoned to repetition loops, and a run-level verdict when the model
     # never passed anything yet looped out of a category — i.e. this (quant, ctx, reasoning) config is
     # not worth testing. Recorded in the bundle and faceted on the leaderboard.
@@ -1092,19 +1130,28 @@ def run_planner(args, chs, host, ports, run_cfg):
 
 
 def _select_env_provider(args, ch):
-    """Pick the provider for a goal-state-env challenge: explicit override, else the cheapest that
-    satisfies its network requirements and is actually available (falling back to local)."""
+    """Pick the provider for a goal-state-env challenge: explicit override, else the cheapest
+    ISOLATING provider (docker/microvm) that satisfies its network requirements and is available.
+    The local provider executes model-generated shell on the host (pid-ns + rlimit hardened, but
+    your uid, full fs read) — benchmarking an untrusted GGUF with it is host code execution, so
+    auto NEVER falls back to it silently: consent is an explicit `--env-provider local` or
+    PEAKSTONE_ALLOW_LOCAL_ENV=1 (e.g. for a daemon whose queue only runs your own models)."""
     from .env import get_provider, select_provider
+    from .env.capabilities import PROVIDER_CAPS
     if args.env_provider and args.env_provider != "auto":
-        return get_provider(args.env_provider)
-    m = select_provider(ch.env.requirements)
-    if m is None:
-        return None
-    prov = get_provider(m.provider)
-    if prov.available():
-        return prov
-    local = get_provider("local")
-    return local if ch.env.requirements.empty else None   # local can't supply network conditions
+        return get_provider(args.env_provider)      # an explicit pick — including 'local' — is consent
+    allow_local = (os.environ.get("PEAKSTONE_ALLOW_LOCAL_ENV") or "").strip().lower() \
+        not in ("", "0", "false", "no")
+    allowed = [k for k in PROVIDER_CAPS if allow_local or k != "local"]
+    while allowed:
+        m = select_provider(ch.env.requirements, allowed=allowed)
+        if m is None:
+            return None
+        prov = get_provider(m.provider)
+        if prov.available():
+            return prov
+        allowed.remove(m.provider)                  # try the next-cheapest qualifying provider
+    return None
 
 
 def run_env_agent(args, host, ports, run_cfg):
@@ -1135,7 +1182,8 @@ def run_env_agent(args, host, ports, run_cfg):
         for ch in chs:
             prov = _select_env_provider(args, ch)
             if prov is None:
-                print(f"  {model}  --  {ch.id}: no available provider satisfies its requirements")
+                print(f"  {model}  --  {ch.id}: no isolating env provider available (start docker, "
+                      f"or consent to host execution: --env-provider local / PEAKSTONE_ALLOW_LOCAL_ENV=1)")
                 continue
             try:
                 res = run_env_task(client, model, ch, prov)
