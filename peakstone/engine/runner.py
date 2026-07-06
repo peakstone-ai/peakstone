@@ -559,6 +559,9 @@ def main(argv=None):
 
     models = _csv(args.models)
     results = []
+    # Why each SELECTED challenge produced no row (gated / ctx / abandoned / env-skip). Recorded in
+    # the bundle so "selected set" stays the comparable unit while the executed set varies per model.
+    skip_reasons: dict[str, str] = {}
     mem_used: dict = {}   # the loaded model's measured footprint (VRAM + host RAM), for the bundle env
     # Non-viability guard: a model stuck in degenerate repetition loops shouldn't grind the whole suite.
     # Skip the rest of a category (family) after this many CONSECUTIVE repetition-loop failures with no
@@ -611,14 +614,17 @@ def main(argv=None):
             label = f"{model:>18} | {ch.id:<28}"
             if ch.family in abandoned:         # category given up on after a repetition-loop streak
                 print(f"{label}  SKIP (category '{ch.family}' abandoned — repetition loops)")
+                skip_reasons[ch.id] = "category-abandoned (repetition loops)"
                 continue
             print(f"{label}  → solving [{ch.scoring}] …")   # live progress: what's running now
 
             if not relevant(ch.family, caps):
                 print(f"{label}  SKIP (model lacks '{GATED_CAP.get(ch.family)}')")
+                skip_reasons[ch.id] = f"gated: model lacks '{GATED_CAP.get(ch.family)}'"
                 continue
             if ch.min_ctx and served_ctx is not None and ch.min_ctx > served_ctx:
                 print(f"{label}  SKIP (needs ctx {ch.min_ctx}, served {served_ctx})")
+                skip_reasons[ch.id] = f"ctx: needs {ch.min_ctx}, served {served_ctx}"
                 continue
 
             if ch.scoring in ("tool_calls", "injection"):
@@ -1014,6 +1020,8 @@ def main(argv=None):
             if not relevant("env", caps):
                 print(f"{model:>18} | env: SKIP {len(env_chs)} env challenge(s) "
                       f"(model lacks '{GATED_CAP['env']}')")
+                for ch in env_chs:
+                    skip_reasons[ch.id] = f"gated: model lacks '{GATED_CAP['env']}'"
             else:
                 from .env import env_result_row
                 from .env.agent import run_env_task
@@ -1026,6 +1034,7 @@ def main(argv=None):
                         print(f"{label}  SKIP (no isolating env provider available — start docker, "
                               f"or consent to host execution: --env-provider local / "
                               f"PEAKSTONE_ALLOW_LOCAL_ENV=1)")
+                        skip_reasons[ch.id] = "no isolating env provider available"
                         continue
                     try:
                         res = run_env_task(client, model, ch, prov)
@@ -1033,6 +1042,7 @@ def main(argv=None):
                         # must not take down the whole standard run
                         kind = "provider" if isinstance(e, (UnsupportedHost, RuntimeError)) else type(e).__name__
                         print(f"{label}  ERROR {kind}: {e}")
+                        skip_reasons[ch.id] = f"env error: {kind}"
                         continue
                     results.append(env_result_row(ch, res, model=model,
                                                   turns_to_green=res.get("turns_to_green"),
@@ -1056,6 +1066,10 @@ def main(argv=None):
         "max_tokens": run_cfg["max_tokens"],
         "max_tokens_reasoning": run_cfg["max_tokens_reasoning"],
         "gateway": bool(args.gateway),
+        # The SELECTED set (level-pinned, pre-gating) — the comparable unit the bundle's suite
+        # content_hash is computed over; skip_reasons explains selected-but-not-executed ids.
+        "selected_ids": [c.id for c in chs] + [c.id for c in env_chs],
+        "skip_reasons": skip_reasons,
         **level_meta,
     }
     if judge_deferred:

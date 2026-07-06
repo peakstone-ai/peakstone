@@ -38,7 +38,8 @@
       "properties": {
         "id": { "type": "string", "description": "e.g. 'core-coding' or 'corpus-subset'." },
         "version": { "type": "string", "description": "Suite version, e.g. '2026.06'. Leaderboards are scoped per (suite, version)." },
-        "content_hash": { "type": "string", "description": "sha256 over the concatenated challenge content-hashes in the suite — pins the exact challenge set scored." }
+        "content_hash": { "type": "string", "description": "sha256 over the sorted challenge content-hashes of the SELECTED (level-pinned) set — pins the exact challenge set the run was asked to score, independent of per-model gating. Runs are comparable iff this matches." },
+        "skipped": { "type": "object", "additionalProperties": { "type": "string" }, "description": "Selected-but-not-executed challenge ids -> reason (capability/ctx gating, category abandonment, env provider unavailable). Documents why the executed rows are a subset of the selected set." }
       }
     },
     "results": {

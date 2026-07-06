@@ -476,8 +476,22 @@ def produce_bundle(meta: dict, results: list[dict], *, harness_version: str | No
     # hash the sorted list as canonical JSON (self-delimiting) — bare concatenation is ambiguous
     # (["ab","c"] and ["a","bc"] would collide) for a value that pins the exact challenge set.
     # Private rows pin by their salted commitment (their challenge_hash is a "(private)" sentinel).
-    suite_hash = _sha256_bytes(canonical_bytes(sorted(
-        r.get("commitment") or r["challenge_hash"] for r in bundle_results)))
+    #
+    # The set that's hashed is the SELECTED set (level-pinned, pre-gating) when the runner recorded
+    # one — capability/ctx gating and abandonment make the *executed* set model-dependent, so
+    # hashing executed rows broke "comparable iff same content_hash" exactly for gated models.
+    # Selected-but-not-executed ids are documented in suite.skipped with the runner's reason.
+    skipped: dict[str, str] = {}
+    if meta.get("selected_ids"):
+        pins = [cpriv.get(cid) or chash.get(cid) for cid in meta["selected_ids"]]
+        suite_hash = _sha256_bytes(canonical_bytes(sorted(p for p in pins if p)))
+        executed = {r["challenge_id"] for r in bundle_results}
+        reasons = meta.get("skip_reasons") or {}
+        skipped = {cid: reasons.get(cid, "not-executed")
+                   for cid in meta["selected_ids"] if cid not in executed}
+    else:   # ad-hoc run with no recorded selection: fall back to hashing the executed rows
+        suite_hash = _sha256_bytes(canonical_bytes(sorted(
+            r.get("commitment") or r["challenge_hash"] for r in bundle_results)))
 
     bundle: dict = {
         "bundle_version": BUNDLE_VERSION,
@@ -487,7 +501,8 @@ def produce_bundle(meta: dict, results: list[dict], *, harness_version: str | No
         "environment": capture_env(meta.get("gpu"), meta.get("mem_used"), meta.get("host_load")),
         "suite": {"id": meta.get("suite_id", "adhoc"),
                   "version": meta.get("suite_version", meta.get("timestamp", "unversioned")),
-                  "content_hash": suite_hash},
+                  "content_hash": suite_hash,
+                  **({"skipped": skipped} if skipped else {})},
         "results": bundle_results,
     }
     if meta.get("coder_model"):

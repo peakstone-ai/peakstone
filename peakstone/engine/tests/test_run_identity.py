@@ -60,3 +60,20 @@ def test_bundle_harness_version_is_real():
     meta = {"timestamp": "t", "models": ["m"], "judge": None, "gpu": None, "mem_used": {}}
     b = B.produce_bundle(meta, ROWS, sign=False)
     assert b["harness"]["version"] == pkg_version()      # not the frozen "0.1.0" literal
+
+
+def test_suite_hash_pins_selected_set_not_executed_rows():
+    """R4: two runs of the same level selection must share a suite content_hash even when gating
+    or abandonment shrinks one's executed set — the skipped ids are documented instead."""
+    from peakstone.engine import paths
+    chash = B.challenge_hashes(paths.challenges_dir())
+    ids = sorted(chash)[:3]
+    meta = {"timestamp": "t", "models": ["m"], "judge": None, "gpu": None, "mem_used": {},
+            "selected_ids": ids, "skip_reasons": {ids[1]: "gated: model lacks 'tools'"}}
+    gated = B.produce_bundle(meta, [dict(ROWS[0], challenge=ids[0])], sign=False)
+    full = B.produce_bundle(dict(meta, skip_reasons={}),
+                            [dict(ROWS[0], challenge=i) for i in ids], sign=False)
+    assert gated["suite"]["content_hash"] == full["suite"]["content_hash"]
+    assert gated["suite"]["skipped"][ids[1]].startswith("gated")
+    assert gated["suite"]["skipped"][ids[2]] == "not-executed"
+    assert "skipped" not in full["suite"]
