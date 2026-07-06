@@ -374,9 +374,13 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
 1. ✅ **Run identity**: one `RunConfig` resolved once, recorded verbatim in meta + bundle (token
    budget, judge on/off, harness version). Today three different numbers can describe one run. [R1]
    *(0feb575: _freeze_budget() + bundle takes the budget from meta + real pkg_version().)*
-2. ☐ **Server-side truth for submitter-supplied fields**: notarized first-seen `published_at`,
+2. ✅ **Server-side truth for submitter-supplied fields**: notarized first-seen `published_at`,
    trust-reconciled family metadata, suite content-hash actually compared at ingest,
    distinct-account provenance for community-verified. [R2–R5]
+   *(c3514b3 + b970ca6: challenge_sightings first-seen clamp; highest-trust-wins family metadata;
+   selected-set suite hash (engine) + suite_hash_match flag (ingest — flag→reject after the R8
+   re-seed); repro_sig includes challenge content + account-age bar. Deliberately NOT done: a
+   server-side model registry for release_date — trust reconciliation covers the threat for now.)*
 3. ☐ **Trust-gate every public aggregate** (challenge pages, pass-rates, provisional list, evolution
    chart, landing stats) and persist env provider fidelity so it caps trust as designed. [R6–R7]
 4. ◐ **Re-seed the official board through the daemon**, judge on, per the level definition; retire or
