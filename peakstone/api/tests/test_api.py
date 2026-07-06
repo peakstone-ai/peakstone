@@ -528,12 +528,12 @@ def test_proposal_reject(client):
     assert not any(c["id"] == "py-reject" for c in client.get("/challenges").json()["challenges"])
 
 
-def _env_bundle(model, passed, priv, pub):
+def _env_bundle(model, passed, priv, pub, provider="docker"):
     rows = [{"model": "m", "challenge": f"env-{i}", "type": "goal-state-env",
              "verification": "goal-state-env", "scoring": "goal-state", "difficulty": 3,
              "final_score": 1.0 if passed else 0.0, "passed": int(passed), "total": 1,
              "response": "x", "stdout": "",
-             "env": {"provider": "local", "checks": [{"name": "goal", "ok": passed}]}}
+             "env": {"provider": provider, "checks": [{"name": "goal", "ok": passed}]}}
             for i in range(2)]
     b = bundle.produce_bundle({"models": [model], "judge": None, "timestamp": "AG",
                               "gpu": {"name": "RTX 4090", "driver_version": "595"}}, rows, sign=False)
@@ -541,9 +541,12 @@ def _env_bundle(model, passed, priv, pub):
     return b
 
 
-def test_agentic_axis_is_separate_from_coding(client):
+def test_agentic_axis_is_separate_from_coding(client, monkeypatch):
+    from peakstone.api import ingest
     cp, c = _newkey(); ap, a = _newkey()
     client.post("/submissions", json=_bundle("coderOnly", [0.8, 0.8], 24, cp, c, "AX"))
+    # trusted run: its env challenges register as corpus entries and its rows feed public stats
+    monkeypatch.setattr(ingest, "TRUSTED_PUBKEYS", {a})
     assert client.post("/submissions", json=_env_bundle("agentOnly", True, ap, a)).status_code == 201
 
     # goal-state-env results land in their OWN axis, not folded into code_score
@@ -561,6 +564,15 @@ def test_agentic_axis_is_separate_from_coding(client):
     # the env challenges were registered in the corpus with goal-state-env verification
     chs = {c["id"]: c for c in client.get("/challenges").json()["challenges"]}
     assert chs["env-0"]["verification"] == "goal-state-env"
+
+    # R7: a local-provider agentic run (host shell, no network conditions) never charts on the
+    # public agent axis — only isolating providers (docker/microvm) count there
+    lp, l = _newkey()
+    monkeypatch.setattr(ingest, "TRUSTED_PUBKEYS", set())
+    assert client.post("/submissions",
+                       json=_env_bundle("agentLocal", True, lp, l, provider="local")).status_code == 201
+    board = client.get("/leaderboard", params={"sort": "agent_score"}).json()["leaderboard"]
+    assert not any(r["family"] == "agentLocal" for r in board)
 
 
 def _planner_bundle(model, score, priv, pub):
@@ -707,7 +719,8 @@ def test_summarize_parity_orm_vs_scoreboard():
         NS(category="math", verification="answer-match", final=0.5, passed=1, total=2,
            published_at=None, private=False, revealed=False, tok_per_s=None, latency_s=1.0, metrics=None),
         NS(category="basic", verification="goal-state-env", final=1.0, passed=1, total=1,
-           published_at=None, private=False, revealed=False, tok_per_s=None, latency_s=5.0, metrics=None),
+           published_at=None, private=False, revealed=False, tok_per_s=None, latency_s=5.0, metrics=None,
+           env={"provider": "docker"}),   # isolating provenance: counts on the public agent axis
         NS(category="planner", verification="deterministic-tests", final=0.75, passed=3, total=4,
            published_at=None, private=False, revealed=False, tok_per_s=None, latency_s=None, metrics=None),
         NS(category="long-context", verification="deterministic-tests", final=0.25, passed=1, total=4,
@@ -722,10 +735,12 @@ def test_summarize_parity_orm_vs_scoreboard():
     dicts = [{"category": r.category, "verification": r.verification,
               "score": {"final": r.final, "passed": r.passed, "total": r.total},
               "published_at": r.published_at, "private": r.private, "revealed": r.revealed,
-              "tok_per_s": r.tok_per_s, "latency_s": r.latency_s, "metrics": r.metrics} for r in orm]
+              "tok_per_s": r.tok_per_s, "latency_s": r.latency_s, "metrics": r.metrics,
+              "env": getattr(r, "env", None)} for r in orm]
 
     via_api = _summarize(NS(results=orm), fam)
-    via_engine = scoreboard.summarize_rows(dicts, release_date="2025-01-01", training_cutoff="2024-06-01")
+    via_engine = scoreboard.summarize_rows(dicts, release_date="2025-01-01", training_cutoff="2024-06-01",
+                                           agent_isolating_only=True)   # the API's public-board setting
     assert via_api == via_engine
     # spot-check the axis values are real, not both-None
     assert via_api["code_score"] == 0.5 and via_api["agent_score"] == 1.0

@@ -42,7 +42,10 @@ function Stat({ label, value }: { label: string; value: number }) {
 export default async function Home() {
   // Cheap live stats; both fetchers return null when the API is unreachable.
   const [board, challenges] = await Promise.all([getLeaderboard({}), getChallenges()]);
-  // total scored (run, challenge) results across the corpus
+  // verified numbers only: "Models ranked" counts the ranked tier (not provisional claims), and
+  // challenge n_runs is already trusted-runs-only server-side — a forged bundle moves nothing here
+  const nRanked =
+    board?.leaderboard.filter((r) => r.held_out_status === "ranked").length ?? 0;
   const nResults = challenges?.challenges.reduce((n, ch) => n + ch.n_runs, 0) ?? 0;
   const apiUp = board !== null && challenges !== null;
 
@@ -55,7 +58,7 @@ export default async function Home() {
           <ApiDown />
         ) : (
           <div className="grid grid-cols-3 gap-4">
-            <Stat label="Models ranked" value={board.count} />
+            <Stat label="Models ranked" value={nRanked} />
             <Stat label="Challenges" value={challenges.count} />
             <Stat label="Scored results" value={nResults} />
           </div>

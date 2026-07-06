@@ -193,6 +193,68 @@ def test_past_published_at_is_kept(client):
         assert all(x.published_at_source == "author" for x in rows)
 
 
+# --- R6: public aggregates are trusted-runs-only ------------------------------------------------
+
+def test_forged_bundle_moves_no_public_aggregate(client, monkeypatch):
+    """One self-signed bundle must not appear in corpus stats, the challenge mini-leaderboard, or
+    the corpus list (its lazily-registered challenge is 'observed', not a corpus entry)."""
+    p, pub = _newkey()
+    r = client.post("/submissions", json=_mk("forgeM", p, pub, ts="agg1"))
+    assert r.status_code == 201
+    corpus = client.get("/challenges").json()["challenges"]
+    assert not any(c["id"].startswith("forgeM-") for c in corpus)     # not listed as corpus entries
+    # a trusted run for the same suite DOES surface, and the mini-board shows only trusted families
+    tp, tk = _newkey()
+    monkeypatch.setattr(ingest, "TRUSTED_PUBKEYS", {tk})
+    assert client.post("/submissions", json=_mk("trustM", tp, tk, ts="agg2")).status_code == 201
+    p2, k2 = _newkey()
+    monkeypatch.setattr(ingest, "TRUSTED_PUBKEYS", set())
+    b = _mk("selfM", p2, k2, ts="agg3")
+    b["results"][0]["challenge_id"] = "trustM-c1"                     # self-reported hit on the same challenge
+    bundle.sign_inplace(b, p2, k2)
+    assert client.post("/submissions", json=b).status_code == 201
+    by_id = {c["id"]: c for c in client.get("/challenges").json()["challenges"]}
+    assert by_id["trustM-c1"]["n_runs"] == 1                          # the self-reported hit doesn't count
+    mini = client.get("/challenges/trustM-c1").json()
+    assert [x["family"] for x in mini["results"]] == ["trustM"]       # forged family never tops the board
+
+
+def test_provisional_list_is_ordered_by_recency_not_claimed_score(client):
+    pa, ka = _newkey()
+    ra = client.post("/submissions", json=_mk("provHi", pa, ka, ts="prov"))   # claims perfect scores
+    assert ra.status_code == 201
+    pb, kb = _newkey()
+    b = bundle.produce_bundle(
+        {"models": ["provLo"], "judge": None, "timestamp": "prov",
+         "gpu": {"name": "RTX 4090", "driver_version": "595"}},
+        [_row("provLo-c1", 0.1), _row("provLo-c2", 0.1)], sign=False)
+    b["environment"]["vram_gb"] = 25
+    bundle.sign_inplace(b, pb, kb)
+    assert client.post("/submissions", json=b).status_code == 201             # lower score, newer
+    rows = client.get("/leaderboard", params={"suite": "adhoc", "version": "prov"}).json()["leaderboard"]
+    fams = [r["family"] for r in rows if r["held_out_status"] == "provisional"]
+    assert fams == ["provLo", "provHi"]           # newest first — a forged 0.99 buys no position
+
+
+# --- R7: env provenance persists and gates the public agent axis --------------------------------
+
+def test_env_provenance_persisted_and_backfilled(client):
+    p, pub = _newkey()
+    b = _mk("envM", p, pub, ts="envp", ids=("c1",))
+    b["results"][0]["verification"] = "goal-state-env"
+    b["results"][0]["env"] = {"provider": "docker", "network_fidelity": "real"}
+    bundle.sign_inplace(b, p, pub)
+    assert client.post("/submissions", json=b).status_code == 201
+    with SessionLocal() as db:
+        row = db.scalar(select(models.Result).where(models.Result.challenge_id == "envM-c1"))
+        assert row.env == {"provider": "docker", "network_fidelity": "real"}   # persisted (was dropped)
+        row.env = None                                                          # simulate a pre-column row
+        db.commit()
+        assert ingest.backfill_result_env(db) >= 1
+        db.refresh(row)
+        assert row.env == {"provider": "docker", "network_fidelity": "real"}   # restored from raw
+
+
 # --- R4: suite content-hash is compared at ingest ----------------------------------------------
 
 def test_suite_hash_mismatch_is_flagged(client):

@@ -112,7 +112,11 @@ def test_reveal_flow_unlocks_results(client):
     assert run["n_revealed"] == 1
     assert run["code_score"] == round((0.5 + 0.5 + 1.0) / 3, 3)   # the revealed 1.0 now counts
     ch = {c["id"]: c for c in client.get("/challenges").json()["challenges"]}["priv-rev-01"]
-    assert ch["n_runs"] == 1 and ch["pass_rate"] == 1.0            # joined the corpus with stats
+    # the challenge joined the corpus, but its aggregate stats are TRUSTED-runs-only (review R6):
+    # a reveal proves the challenge content predates the scores, it does not verify the SCORES —
+    # this submitter is self-reported, so the revealed 1.0 counts on their run, not in the
+    # public difficulty signal.
+    assert ch["n_runs"] == 0 and ch["pass_rate"] is None
 
 
 def test_reveal_twice_is_409(client):
@@ -142,10 +146,23 @@ def test_reveal_id_collision_is_409(client):
     assert r.status_code == 409 and "already exists" in r.text
 
 
-def test_private_rows_never_pollute_public_challenge_stats(client):
+def test_private_rows_never_pollute_public_challenge_stats(client, monkeypatch):
+    """A sealed 1.0 must never surface on a public mini-board — and (review R6) neither does any
+    self-reported row at all: the board is trusted-runs-only."""
+    from peakstone.api import ingest
+    priv, pub = _newkey()
+    monkeypatch.setattr(ingest, "TRUSTED_PUBKEYS", {pub})
+    salt3 = "cc" * 32
+    files = _files(cid="priv-pol-01")
+    com = eng_private.commitment_from_files(files, salt3)
+    r = _submit(client, priv, pub, publics=(0.1,),
+                private_rows=[_priv_result(com, f=1.0, cid="priv-pol-01")],
+                model="polluter", suite_ts="20260704-000003", vram=8)
+    assert r.status_code == 201, r.text
     detail = client.get("/challenges/arch-0").json()
     best = {row["family"]: row["score"] for row in detail["results"]}
-    assert best["clash"] == 0.1               # its PUBLIC arch-0 row shows; the sealed 1.0 does not
+    assert best["polluter"] == 0.1            # its PUBLIC arch-0 row shows; the sealed 1.0 does not
+    assert "clash" not in best                # R6: self-reported rows are gated off the mini-board
 
 
 def test_ingest_rejects_malformed_private_rows(client):

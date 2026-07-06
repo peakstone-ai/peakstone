@@ -42,6 +42,11 @@ async def lifespan(app: FastAPI):
         n = ingest.recompute_repro_sigs(db)
         if n:
             print(f"[startup] recomputed repro_sig on {n} stored submission(s)")
+        # backfill goal-state-env provenance onto Result rows ingested before the env column
+        # existed (the public agent_score gates on it — see scoreboard.summarize_rows).
+        n = ingest.backfill_result_env(db)
+        if n:
+            print(f"[startup] backfilled env provenance on {n} result row(s)")
     yield
 
 
@@ -194,7 +199,8 @@ def _row_dict(r) -> dict:
             "published_at": getattr(r, "published_at", None),
             "private": getattr(r, "private", False), "revealed": getattr(r, "revealed", False),
             "tok_per_s": getattr(r, "tok_per_s", None), "latency_s": getattr(r, "latency_s", None),
-            "metrics": getattr(r, "metrics", None)}
+            "metrics": getattr(r, "metrics", None),
+            "env": getattr(r, "env", None)}   # goal-state-env provenance (provider fidelity gating)
 
 
 # Thin wrappers kept at their historical names/signatures: test_api.py imports these and feeds
@@ -232,7 +238,11 @@ def _summarize(sub: models.Submission, fam: models.ModelFamily | None = None) ->
     return scoreboard.summarize_rows(
         [_row_dict(r) for r in sub.results],
         release_date=fam.release_date if fam else None,
-        training_cutoff=fam.training_cutoff if fam else None)
+        training_cutoff=fam.training_cutoff if fam else None,
+        # public board: agent_score counts only isolating-provider rows — a local-provider run
+        # (host shell, no network conditions) must not look like a faithful environment here.
+        # The offline TUI board keeps counting the owner's consented local runs.
+        agent_isolating_only=True)
 
 
 def _submitter_handle(db, sub: models.Submission) -> str | None:
@@ -264,6 +274,7 @@ def _run_info(db, sub: models.Submission, art: models.ModelArtifact) -> dict:
             "vram_gb": sub.vram_gb, "ram_gb": env.get("ram_gb"),                 # machine totals
             "vram_used_gb": env.get("vram_used_gb"), "ram_used_gb": env.get("ram_used_gb"),  # model footprint
             "context": sub.context, "engine": sub.engine, "trust_tier": sub.trust_tier,
+            "submitted_at": str(sub.submitted_at) if getattr(sub, "submitted_at", None) else None,
             "reasoning": _submission_reasoning(sub),     # run condition: chain-of-thought on/off (or None)
             "reasoning_budget": _submission_reasoning_budget(sub),   # thinking budget served (0/-1/N)
             # negative data: a non-viable config (looped out of every category, passed nothing). Tied to
@@ -370,8 +381,10 @@ def leaderboard(db: Session = Depends(get_session), suite: str | None = None,
                                     else "provisional")
         ranked = sorted((r for r in rows if r["held_out_status"] == "ranked"),
                         key=lambda r: r["held_out_score"], reverse=True)
+        # provisional = unverified claims, so NEVER ordered by the claimed score (a forged 0.99
+        # would top the list — review R6). Recency is neutral: newest submissions first.
         prov = sorted((r for r in rows if r["held_out_status"] == "provisional"),
-                      key=lambda r: (r.get("code_score") or 0), reverse=True)
+                      key=lambda r: (r.get("run", {}).get("submitted_at") or ""), reverse=True)
         rows = ranked + prov
     else:
         rows = sorted(rows, key=lambda r: r["_v"], reverse=(order == "desc"))
@@ -465,19 +478,25 @@ def facets(db: Session = Depends(get_session)):
 
 @app.get("/challenges")
 def challenges(db: Session = Depends(get_session)):
-    """The challenge corpus with aggregate difficulty signal (pass-rate is the empirical tier)."""
+    """The challenge corpus with aggregate difficulty signal (pass-rate is the empirical tier).
+    Both are TRUSTED-RUNS-ONLY: one self-signed forged bundle must not move the public difficulty
+    calibration (review R6). Challenges lazily registered by untrusted submissions ('observed')
+    are likewise not listed as corpus entries."""
     rows = db.execute(
         select(models.Result.challenge_id,
                func.count(models.Result.id).label("n"),
                func.avg(models.Result.final).label("avg"),
                func.sum(case((models.Result.final >= 0.999, 1), else_=0)).label("solved"))
+        .join(models.Submission, models.Result.submission_id == models.Submission.id)
+        .where(models.Submission.trust_tier != "self-reported")
         # sealed private rows never aggregate — their author-chosen slug must not pollute (or
         # collide with) a public challenge's stats; revealed rows count under the revealed id.
         .where((models.Result.private.is_(False)) | (models.Result.revealed.is_(True)))
         .group_by(models.Result.challenge_id)).all()
     stats = {r.challenge_id: r for r in rows}
     out = []
-    for ch in db.scalars(select(models.Challenge).order_by(models.Challenge.id)).all():
+    for ch in db.scalars(select(models.Challenge).where(models.Challenge.status != "observed")
+                         .order_by(models.Challenge.id)).all():
         s = stats.get(ch.id)
         n = s.n if s else 0
         out.append({"id": ch.id, "title": ch.title, "language": ch.language,
@@ -497,7 +516,12 @@ def challenge_detail(challenge_id: str, db: Session = Depends(get_session)):
         raise HTTPException(404, f"unknown challenge {challenge_id!r}")
     best: dict[str, dict] = {}
     for r in db.scalars(select(models.Result)
-                        .where(models.Result.challenge_id == challenge_id,
+                        .join(models.Submission,
+                              models.Result.submission_id == models.Submission.id)
+                        # trusted runs only: a forged self-reported bundle must not top a
+                        # challenge's mini-leaderboard (review R6)
+                        .where(models.Submission.trust_tier != "self-reported",
+                               models.Result.challenge_id == challenge_id,
                                (models.Result.private.is_(False))
                                | (models.Result.revealed.is_(True)))).all():
         sub = db.get(models.Submission, r.submission_id)
