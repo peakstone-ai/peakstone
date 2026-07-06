@@ -41,6 +41,9 @@ def load_gateway_config() -> dict:
         "port": int(g.get("port", 12434)),
         "idle_timeout_s": float(g.get("idle_timeout_s", 0)),
         "open": bool(g.get("open", False)),   # TUI auto-spawn disables auth when true (trusted LAN)
+        # publishing finished runs to the public board is consent, not a default — the box owner's
+        # signing key is on the line, and loopback job queueing is auth-exempt
+        "auto_submit": bool(g.get("auto_submit", False)),
     }
 
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 import secrets
 from contextlib import asynccontextmanager
@@ -57,13 +58,29 @@ def _default_submit(bundle: dict) -> tuple[int, str]:
     return submit_bundle(API_DEFAULT, bundle)
 
 
+_SUBMIT_FROM_CONFIG = object()   # sentinel: resolve auto-submit from config/env (None = explicitly off)
+
+
+def _resolve_auto_submit():
+    """Auto-submitting a finished run publishes it to the public board under the box owner's
+    signing key; loopback job queueing is auth-exempt, so a queued job is NOT that consent.
+    Off unless opted into via PEAKSTONE_AUTO_SUBMIT=1 (wins) or [gateway].auto_submit."""
+    env = os.environ.get("PEAKSTONE_AUTO_SUBMIT")
+    if env is not None:
+        return _default_submit if env.strip().lower() not in ("", "0", "false", "no") else None
+    return _default_submit if load_gateway_config()["auto_submit"] else None
+
+
 def build_app(*, manager: ModelManager | None = None, idle_timeout: float = 0.0,
               client: httpx.AsyncClient | None = None, token: str | None = None,
-              self_url: str | None = None, store: JobStore | None = None, submit=_default_submit,
+              self_url: str | None = None, store: JobStore | None = None,
+              submit=_SUBMIT_FROM_CONFIG,
               present=None, start_worker: bool = True) -> FastAPI:
     """Construct the gateway app. Pass `manager`/`client`/`store`/`token` to inject them (tests stub
     them so no real llama-server or runner is launched); otherwise defaults are created on startup. An
     injected client is left for the caller to close. `token` empty string disables auth."""
+    if submit is _SUBMIT_FROM_CONFIG:
+        submit = _resolve_auto_submit()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):

@@ -11,6 +11,10 @@ host = "127.0.0.1"
 host = "127.0.0.1"   # local-only by default; set "0.0.0.0" to expose on the LAN (see override note below)
 port = 12434   # default front port (11434 is Ollama's; keep them distinct so both can run)
 idle_timeout_s = 0   # unload the model after this many idle seconds to free VRAM; 0 = never
+# Publish every finished job's signed bundle to the public leaderboard automatically. OFF by
+# default: submission publishes under YOUR signing key, and loopback job queueing needs no auth —
+# queueing a run is not consent to publish it. Opt in here or with PEAKSTONE_AUTO_SUBMIT=1.
+auto_submit = false
 # When the TUI auto-spawns the gateway, `open = true` starts it with auth disabled (like
 # `serve --open`) so LAN devices reach /chat + /v1 without a bearer token. Off here by default.
 open = false
