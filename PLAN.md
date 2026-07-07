@@ -395,10 +395,10 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
    lack selected_ids, so suite_hash_match stays a FLAG until the next full fresh seed.)*
 5. ◐ **Scoring honesty**: swebench post-run revert covers all non-source files; "no tests ran" is
    unscored, not 0.0; bidirectional partition probes; judge reachable (or loud) in gateway mode;
-   loop-streak/retry attribution fixes. [R9–R11, R13, R20] *(R13 done, ab5110e: judge rides the
-   gateway; judging stays judge-LAST by design (one GPU) — an unreachable judge defers loudly with
-   meta.judge_deferred/judge_errors instead of degrading silently. Daemon still doesn't auto-queue
-   the judge-last pass — that's the R8 re-seed piece. R9–R11/R20 open.)*
+   loop-streak/retry attribution fixes. [R9–R11, R13, R20] *(R13 ab5110e: judge rides the gateway,
+   defers loudly. R9–R11 8aae6e4: test-infra tamper revert (edits + created files), env failures
+   unscored→documented skips, both-direction partition probes + hard abort on failed apply.
+   ONLY R20 (loop-streak/retry attribution nuances) remains — folded into the C10 runner split.)*
 6. ✅ **Consent + safety defaults**: daemon auto-submit behind an explicit flag; agentic runs of
    untrusted models never silently fall back to the non-isolating local provider. [R12, R14]
    *(ab5110e: local provider = --env-provider local / PEAKSTONE_ALLOW_LOCAL_ENV=1 consent only;
