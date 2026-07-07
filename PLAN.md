@@ -414,13 +414,19 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
 8. ✅ **`peakstone check`** — the CI regression gate (vision §7 Idea 1, the ignition play): compare
    against the user's own previous bundle, exit non-zero on regression; GH Action wrapper.
    *(725d8ff, in README with a GH Actions example.)*
-9. ◐ Web hygiene: discriminated fetch result + real 404s, single filter-param list, `revalidate`
+9. ✅ Web hygiene: discriminated fetch result + real 404s, single filter-param list, `revalidate`
    instead of `force-dynamic`, fetch timeouts, rate limiting at the proxy, leaderboard aggregation
    moved into SQL. Explain seed tiers + tier migration on /challenges; show which suite the board
-   is scoped to. [R15, R23–R25, R27, R32–R33] *(R15 done, 70b6dd8: app-level rate limit + per-key
-   quota + 30s response cache; web fetches revalidate 30s + 5s timeout — SQL aggregation deferred,
-   the cache removes the per-view cost. R16 done too (account trim, timestamped admin sigs,
-   capped transcripts). Remaining: R23–R25/R27 web errors/types/dedup + R32–R33 naming/content.)*
+   is scoped to. [R15, R23–R25, R27, R32–R33] *(R15 70b6dd8: app-level rate limit + per-key quota
+   + 30s response cache; fetches revalidate 30s + 5s timeout — SQL aggregation deferred, the cache
+   removes the per-view cost. R16 too. 6bce503 R23–R24: ApiResult discrimination, notFound() on
+   API 404s (verified live), not-found/error boundaries, one param list. 3323b9b R25: contract
+   test pins web types to emitted keys (caught 6 more drifted fields). 03068d2 R27: shared
+   CodeBlock/DataTable, ScoreBar clamp, generateMetadata, leaderboard split, eslint, real README,
+   placeholder assets gone. 420a198 R32–R33: board scope line + all-suites toggle, Artifact
+   naming, /challenges tier story, level vocabulary on /submit. NOT done from R32: renaming the
+   run/submission/bundle vocabulary API-wide and splitting ?sort= into board+lens params — API
+   contract churn, revisit with the reproduce-verb work.)*
 
 **C. Engine/daemon refactors**
 10. ✅ `runner.main()` → per-scoring-mode handlers returning a typed result row (the 750-line
