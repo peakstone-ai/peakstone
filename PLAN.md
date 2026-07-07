@@ -423,8 +423,10 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
    capped transcripts). Remaining: R23–R25/R27 web errors/types/dedup + R32–R33 naming/content.)*
 
 **C. Engine/daemon refactors**
-10. ☐ `runner.main()` → per-scoring-mode handlers returning a typed result row (the 750-line
-    god-function; fixes several attribution bugs on the way). [R20]
+10. ◐ `runner.main()` → per-scoring-mode handlers returning a typed result row (the 750-line
+    god-function; fixes several attribution bugs on the way). [R20] *(27daf0c: the R20 attribution
+    bugs are fixed in place — all-branch loop streaks, first-attempt loop labels, _PipeSafe on
+    every entry point, docs truthed. The structural split into typed handlers remains.)*
 11. ✅ Daemon lifecycle: shutdown kills the in-flight runner; drain deadline + proxy read timeout;
     `interrupted` jobs re-queueable; orphan llama-server reconciliation at startup. [R17–R19]
     *(7cb83fe: aclose kills the runner first; 60s drain deadline + 600s proxy read timeout;
@@ -437,8 +439,9 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
     agentic rows can be verified and held-out-dated) and wire `resolve_env` into
     `--level standard` — the planned env-in-standard work. [R7, R28] *(wiring done — 7b70e8f,
     99a47a5, merged 59092a9; unification + env content-hashing open.)*
-14. ☐ `importers/_common.py` (fetch/slug/meta/stdin-shim dedupe); one axis-taxonomy module shared by
+14. ◐ `importers/_common.py` (fetch/slug/meta/stdin-shim dedupe); one axis-taxonomy module shared by
     report/bundle/API; config overlay honored uniformly; env-provider cleanup leaks. [R22, R29–R31]
+    *(R22 done, 27daf0c: docker/fc/swebench teardown-leak sweep. R29–R31 remain.)*
 
 **D. Then build the vision**
 15. ◐ P5 self-feeding corpus, stage 1 (authoring modifier + local gates + `challenges/private/` +
