@@ -425,8 +425,12 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
 **C. Engine/daemon refactors**
 10. ☐ `runner.main()` → per-scoring-mode handlers returning a typed result row (the 750-line
     god-function; fixes several attribution bugs on the way). [R20]
-11. ☐ Daemon lifecycle: shutdown kills the in-flight runner; drain deadline + proxy read timeout;
+11. ✅ Daemon lifecycle: shutdown kills the in-flight runner; drain deadline + proxy read timeout;
     `interrupted` jobs re-queueable; orphan llama-server reconciliation at startup. [R17–R19]
+    *(7cb83fe: aclose kills the runner first; 60s drain deadline + 600s proxy read timeout;
+    running jobs re-queue on startup; /props identity check refuses foreign servers. Bonus:
+    `peakstone serve --stop|--restart`, POST /admin/shutdown, and a `d` restart binding on the
+    TUI queue screen — verified live on this box.)*
 12. ☐ Shared runner↔TUI stream-protocol module (JSON lines, not `" | "` parsing); split
     `dashboard/app.py`; remove the disconnected preflight free-GPU path. [R21]
 13. ◐ Unify `EnvChallenge` with `Challenge` (one base + `kind`; content-hash env challenge dirs so
