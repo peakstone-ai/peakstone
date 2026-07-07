@@ -388,8 +388,11 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
    fixtures), Result.env persisted + backfilled, public agent_score counts isolating providers
    only — the owner's local TUI board still counts consented local runs.)*
 4. ◐ **Re-seed the official board through the daemon**, judge on, per the level definition; retire or
-   provenance-label repack composites. [R8] *(board re-seeded on suite 2026.08 via the daemon;
-   judge-on still to verify — daemon runs were subject to R13's silent no-judge until it's fixed.)*
+   provenance-label repack composites. [R8] *(c8a3673: judge-LAST automation — level runs
+   auto-chain a judge job and submit the JUDGED bundle; judge = qwen3.6-35b-a3b with model+params
+   recorded per row; --overlay retired. REMAINING (operator): run `serve/reseed_judge.sh
+   <seed-run-dirs>` on the seed box, then retire the superseded gen-only submissions. Old runs
+   lack selected_ids, so suite_hash_match stays a FLAG until the next full fresh seed.)*
 5. ◐ **Scoring honesty**: swebench post-run revert covers all non-source files; "no tests ran" is
    unscored, not 0.0; bidirectional partition probes; judge reachable (or loud) in gateway mode;
    loop-streak/retry attribution fixes. [R9–R11, R13, R20] *(R13 done, ab5110e: judge rides the
