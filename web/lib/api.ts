@@ -82,9 +82,14 @@ export type LeaderRow = {
   n_committed: number;           // sealed private (commit-and-reveal) claims — no credit until revealed
   n_revealed: number;            // of those, opened + counting
   by_category: Record<string, number>;
+  n_ctx_limited: number;                        // rows skipped because the served ctx couldn't fit them
   tok_per_s: number | null;
   sol_per_s: number | null;
   total_time_s: number | null;
+  gen_tokens: number | null;                    // completion tokens spent across the run
+  reasoning_tokens: number | null;              // …of which chain-of-thought
+  tokens_to_solve: number | null;               // efficiency: tokens per solved challenge
+  score_per_1k_tokens: number | null;           // efficiency: score yield per 1k generated tokens
   metrics: Record<string, number>;
   run: Run;
 };
@@ -101,6 +106,7 @@ export type ModelPage = {
   family: string;
   vendor: string | null;
   release_date: string | null;
+  observed_capabilities: string[];
   n_runs: number;
   runs: ModelRun[];
 };
