@@ -6,7 +6,8 @@ export const dynamic = "force-dynamic";
 export const metadata = { title: "Capability evolution — Peakstone" };
 
 export default async function EvolutionPage() {
-  const data = await getLeaderboard({});
+  const res = await getLeaderboard({});
+  const data = res.ok ? res.data : null;
   const points: Point[] = (data?.leaderboard ?? [])
     // ranked rows only: the frontier chart is a claim about the field, so it plots verified
     // (runner/community-verified) runs — a self-signed bundle with forged dates never lands here

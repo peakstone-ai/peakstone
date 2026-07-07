@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { getRunChallenge, getChallengeSource } from "@/lib/api";
 import { ApiDown, ScoreBar } from "@/components/ui";
 
@@ -47,17 +48,21 @@ export default async function SolutionPage({
   params: Promise<{ hash: string; challenge: string }>;
 }) {
   const { hash, challenge } = await params;
-  const [data, source] = await Promise.all([
+  const [res, sourceRes] = await Promise.all([
     getRunChallenge(decodeURIComponent(hash), decodeURIComponent(challenge)),
     getChallengeSource(decodeURIComponent(challenge)),
   ]);
-  if (!data) {
+  if (!res.ok) {
+    if (res.notFound) notFound(); // unknown run/challenge → a real 404 (R23)
     return (
       <main className="mx-auto max-w-5xl px-4 py-8">
         <ApiDown />
       </main>
     );
   }
+  const data = res.data;
+  // a source 404 is EXPECTED content (non-public corpus), not an error — render the explainer
+  const source = sourceRes.ok ? sourceRes.data : null;
   const t = data.transcript;
   const attempts = t?.attempts && t.attempts.length ? JSON.stringify(t.attempts, null, 2) : undefined;
 

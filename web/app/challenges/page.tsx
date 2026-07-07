@@ -6,14 +6,15 @@ export const dynamic = "force-dynamic";
 export const metadata = { title: "Challenges — Peakstone" };
 
 export default async function ChallengesPage() {
-  const data = await getChallenges();
-  if (!data) {
+  const res = await getChallenges();
+  if (!res.ok) {
     return (
       <main className="mx-auto max-w-5xl px-4 py-8">
         <ApiDown />
       </main>
     );
   }
+  const data = res.data;
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-8">

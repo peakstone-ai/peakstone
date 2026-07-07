@@ -40,8 +40,10 @@ function Stat({ label, value }: { label: string; value: number }) {
 }
 
 export default async function Home() {
-  // Cheap live stats; both fetchers return null when the API is unreachable.
-  const [board, challenges] = await Promise.all([getLeaderboard({}), getChallenges()]);
+  // Cheap live stats; render the graceful card when the API is unreachable.
+  const [boardRes, challengesRes] = await Promise.all([getLeaderboard({}), getChallenges()]);
+  const board = boardRes.ok ? boardRes.data : null;
+  const challenges = challengesRes.ok ? challengesRes.data : null;
   // verified numbers only: "Models ranked" counts the ranked tier (not provisional claims), and
   // challenge n_runs is already trusted-runs-only server-side — a forged bundle moves nothing here
   const nRanked =

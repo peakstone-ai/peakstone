@@ -11,17 +11,16 @@ export default async function ModelPage({
   params: Promise<{ family: string }>;
 }) {
   const { family } = await params;
-  const data = await getModel(decodeURIComponent(family));
-  if (data === null) {
-    // distinguish "API down" from "unknown family" isn't possible from null alone; show API-down
-    // card, but a 404-style page if the API returned 404 is handled by getModel returning null too.
+  const res = await getModel(decodeURIComponent(family));
+  if (!res.ok) {
+    if (res.notFound) notFound(); // unknown family → a real 404, not an "API down" card (R23)
     return (
       <main className="mx-auto max-w-5xl px-4 py-8">
         <ApiDown />
       </main>
     );
   }
-  if (!data.family) notFound();
+  const data = res.data;
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-8">

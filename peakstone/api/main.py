@@ -343,7 +343,7 @@ def _run_info(db, sub: models.Submission, art: models.ModelArtifact) -> dict:
             # THIS run's (quant, ctx, reasoning), so it shows which configs aren't worth testing.
             "run_status": (sub.raw or {}).get("run_status"),
             "abandoned_categories": (sub.raw or {}).get("abandoned_categories"),
-            "submitted_at": str(sub.submitted_at), "submitter": _submitter_handle(db, sub),
+            "submitter": _submitter_handle(db, sub),
             "bundle_hash": sub.bundle_hash}
 
 

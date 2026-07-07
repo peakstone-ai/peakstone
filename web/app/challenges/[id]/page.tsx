@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { getChallenge } from "@/lib/api";
 import { ApiDown, ScoreBar, Trust } from "@/components/ui";
 
@@ -10,14 +11,16 @@ export default async function ChallengePage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const data = await getChallenge(decodeURIComponent(id));
-  if (!data) {
+  const res = await getChallenge(decodeURIComponent(id));
+  if (!res.ok) {
+    if (res.notFound) notFound(); // unknown challenge id → a real 404 (R23)
     return (
       <main className="mx-auto max-w-5xl px-4 py-8">
         <ApiDown />
       </main>
     );
   }
+  const data = res.data;
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-8">

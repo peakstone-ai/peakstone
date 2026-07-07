@@ -23,7 +23,8 @@ function StatusBadge({ s }: { s: string }) {
 }
 
 export default async function ProposalsPage() {
-  const data = await getProposals("all");
+  const res = await getProposals("all");
+  const data = res.ok ? res.data : null;
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-8">

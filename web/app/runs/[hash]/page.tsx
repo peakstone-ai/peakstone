@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { getRun } from "@/lib/api";
 import { ApiDown, ScoreBar, Trust } from "@/components/ui";
 
@@ -10,14 +11,16 @@ export default async function RunPage({
   params: Promise<{ hash: string }>;
 }) {
   const { hash } = await params;
-  const data = await getRun(decodeURIComponent(hash));
-  if (!data) {
+  const res = await getRun(decodeURIComponent(hash));
+  if (!res.ok) {
+    if (res.notFound) notFound(); // unknown bundle hash → a real 404 (R23)
     return (
       <main className="mx-auto max-w-5xl px-4 py-8">
         <ApiDown />
       </main>
     );
   }
+  const data = res.data;
   const short = data.bundle_hash.slice(0, 12);
 
   return (

@@ -1,5 +1,8 @@
-// Client for the Peakstone API. Server-side fetches; returns null on any error so pages can render
-// a graceful "API unreachable" state (and the build never depends on a live backend).
+// Client for the Peakstone API. Server-side fetches returning a discriminated ApiResult so pages
+// can tell "the API said 404" (render a real 404) from "the API is unreachable" (graceful card,
+// and the build never depends on a live backend) — review R23.
+import { LEADERBOARD_PARAMS } from "./params";
+
 export const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 // The PUBLIC API base — what a visitor's own tools can reach (Caddy serves it at /api on the site
@@ -8,9 +11,22 @@ export const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 export const PUBLIC_API =
   process.env.NEXT_PUBLIC_API_PUBLIC_URL ?? "https://peakstone.ai/api";
 
+// What one fetch produced. `notFound` is true ONLY for an API 404 (the resource doesn't exist —
+// callers should render a real 404 page); every other failure (network, timeout, 5xx) is the
+// "API unreachable" state.
+export type ApiResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; notFound: boolean };
+
 export type Run = {
   artifact: string;
-  vram_gb: number | null;
+  hf_repo: string | null;
+  gpu: string | null;              // hardware the run used (the VRAM facet's provenance)
+  cpu: string | null;
+  vram_gb: number | null;          // machine totals…
+  ram_gb: number | null;
+  vram_used_gb: number | null;     // …and the model's measured footprint
+  ram_used_gb: number | null;
   context: number | null;
   engine: { name?: string; version?: string };
   trust_tier: string;
@@ -18,7 +34,7 @@ export type Run = {
   reasoning_budget: number | null; // thinking budget served: 0=off, -1=full, N=capped at N tokens
   run_status?: string | null;            // "not_capable" = non-viable config (looped out everywhere)
   abandoned_categories?: string[] | null; // categories skipped after a repetition-loop streak
-  submitted_at: string;
+  submitted_at: string | null;
   submitter: string | null;
   bundle_hash: string;
 };
@@ -37,12 +53,16 @@ export type LeaderRow = {
   rank: number;
   family: string;
   release_date: string | null;
+  observed_capabilities: string[];              // capabilities the family has demonstrated (tools/agentic/…)
   code_score: number | null;
   held_out_score: number | null;
   held_out: HeldOut;
   held_out_status?: "ranked" | "provisional";  // on the default held-out board
   math_score: number | null;                    // competition math (AIME) — a distinct axis from code
+  math_held_out: number | null;
   n_math: number;
+  long_ctx_score: number | null;                // long-context retrieval/needle axis
+  n_long_ctx: number;
   self_verify_accuracy: number | null;          // calibration: does it know when it's right?
   confidence_score: number | null;              // calibration: pre-hoc confidence vs outcome (1 - Brier)
   n_calibration: number;
@@ -52,15 +72,19 @@ export type LeaderRow = {
   n_generated: number;
   safety_score: number | null;
   agent_score: number | null;
+  agent_held_out: number | null;
   planner_score: number | null;
   solved: number;
   n_code: number;
   n_agent: number;
   n_planner: number;
+  n_total: number;               // every scored row in the run (the coverage tie-breaker)
   n_committed: number;           // sealed private (commit-and-reveal) claims — no credit until revealed
   n_revealed: number;            // of those, opened + counting
   by_category: Record<string, number>;
   tok_per_s: number | null;
+  sol_per_s: number | null;
+  total_time_s: number | null;
   metrics: Record<string, number>;
   run: Run;
 };
@@ -68,6 +92,7 @@ export type LeaderRow = {
 export type Leaderboard = {
   count: number;
   filters: Record<string, unknown>;
+  thresholds: { held_out_min_clean?: number; held_out_min_coverage?: number };
   leaderboard: LeaderRow[];
 };
 
@@ -80,7 +105,7 @@ export type ModelPage = {
   runs: ModelRun[];
 };
 
-async function getJSON<T>(path: string): Promise<T | null> {
+async function getJSON<T>(path: string): Promise<ApiResult<T>> {
   try {
     const r = await fetch(`${API}${path}`, {
       // Pages stay dynamic, but the DATA is served from the fetch cache for 30s — the API is hit
@@ -89,17 +114,17 @@ async function getJSON<T>(path: string): Promise<T | null> {
       // A wedged API must fail one render fast, not hang every request behind it.
       signal: AbortSignal.timeout(5000),
     });
-    if (!r.ok) return null;
-    return (await r.json()) as T;
+    if (r.status === 404) return { ok: false, notFound: true };
+    if (!r.ok) return { ok: false, notFound: false };
+    return { ok: true, data: (await r.json()) as T };
   } catch {
-    return null;
+    return { ok: false, notFound: false };
   }
 }
 
 export function getLeaderboard(sp: Record<string, string | undefined>) {
   const qs = new URLSearchParams();
-  for (const k of ["suite", "version", "max_vram_gb", "quant", "trust", "reasoning",
-                   "reasoning_budget", "verdict", "sort", "order"]) {
+  for (const k of LEADERBOARD_PARAMS) {
     if (sp[k]) qs.set(k, sp[k] as string);
   }
   return getJSON<Leaderboard>(`/leaderboard?${qs.toString()}`);
@@ -216,8 +241,8 @@ export function getChallenge(id: string) {
   return getJSON<ChallengeDetail>(`/challenges/${encodeURIComponent(id)}`);
 }
 
-// The public challenge source (spec + tests) for the solution viewer. null (404) for challenges not
-// in the public corpus — copyright-encumbered/private sets are never served.
+// The public challenge source (spec + tests) for the solution viewer. A 404 here is EXPECTED
+// content, not an error: copyright-encumbered/private sets are never served.
 export type ChallengeSource = {
   id: string;
   title: string | null;

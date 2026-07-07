@@ -1,6 +1,7 @@
 import { Fragment } from "react";
 import Link from "next/link";
 import { getFacets, getLeaderboard } from "@/lib/api";
+import { LEADERBOARD_PARAMS } from "@/lib/params";
 import { ApiDown, ScoreBar, Trust } from "@/components/ui";
 import { SelectFilter } from "@/components/Filters";
 
@@ -55,7 +56,9 @@ export default async function LeaderboardPage({
     : isAllCorpus
     ? "Coder leaderboard (all challenges)"
     : "Leaderboard";
-  const [data, facets] = await Promise.all([getLeaderboard(sp), getFacets()]);
+  const [boardRes, facetsRes] = await Promise.all([getLeaderboard(sp), getFacets()]);
+  const data = boardRes.ok ? boardRes.data : null;
+  const facets = facetsRes.ok ? facetsRes.data : null;
 
   return (
     <main className="mx-auto max-w-[1600px] px-4 py-8">
@@ -93,9 +96,11 @@ export default async function LeaderboardPage({
         <span className="text-sm text-stone-500">Fits my hardware:</span>
         {VRAM_PRESETS.map(([label, val]) => {
           const active = vram === val;
+          // rebuild the link from the ONE param list (review R24 — a hand-copy here once dropped
+          // `verdict`, so pill clicks silently cleared an active verdict filter)
           const params = new URLSearchParams();
-          for (const k of ["quant", "trust", "reasoning", "reasoning_budget", "suite", "version", "sort", "order"]) {
-            if (sp[k]) params.set(k, sp[k] as string);
+          for (const k of LEADERBOARD_PARAMS) {
+            if (k !== "max_vram_gb" && sp[k]) params.set(k, sp[k] as string);
           }
           if (val) params.set("max_vram_gb", val);
           const qs = params.toString();
