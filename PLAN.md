@@ -433,15 +433,21 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
     running jobs re-queue on startup; /props identity check refuses foreign servers. Bonus:
     `peakstone serve --stop|--restart`, POST /admin/shutdown, and a `d` restart binding on the
     TUI queue screen — verified live on this box.)*
-12. ☐ Shared runner↔TUI stream-protocol module (JSON lines, not `" | "` parsing); split
+12. ◐ Shared runner↔TUI stream-protocol module (JSON lines, not `" | "` parsing); split
     `dashboard/app.py`; remove the disconnected preflight free-GPU path. [R21]
+    *(75f80ea: engine/streamproto.py is the one GEN_* declaration; SSE tail emits whole lines only;
+    GET /jobs/{id}/bundle + client fetch (remote-daemon safe); preflight kill lever removed.
+    Remaining: the dashboard/app.py file split — cosmetic, fold into the C10 session.)*
 13. ◐ Unify `EnvChallenge` with `Challenge` (one base + `kind`; content-hash env challenge dirs so
     agentic rows can be verified and held-out-dated) and wire `resolve_env` into
-    `--level standard` — the planned env-in-standard work. [R7, R28] *(wiring done — 7b70e8f,
-    99a47a5, merged 59092a9; unification + env content-hashing open.)*
-14. ◐ `importers/_common.py` (fetch/slug/meta/stdin-shim dedupe); one axis-taxonomy module shared by
+    `--level standard` — the planned env-in-standard work. [R7, R28] *(FUNCTIONAL halves all done
+    and verified on the re-seeded bundles: wiring 7b70e8f/99a47a5, env content-hash e14c3e0, and
+    env rows carry published_at (all 8 env metas dated) → agentic held-out computes. Remaining:
+    the structural one-Challenge-base merge — same surgery class as C10, do them together.)*
+14. ✅ `importers/_common.py` (fetch/slug/meta/stdin-shim dedupe); one axis-taxonomy module shared by
     report/bundle/API; config overlay honored uniformly; env-provider cleanup leaks. [R22, R29–R31]
-    *(R22 done, 27daf0c: docker/fc/swebench teardown-leak sweep. R29–R31 remain.)*
+    *(27daf0c R22 leak sweep; 05ff865 R29 one-taxonomy + R31 overlay/locked-caches/merge-identity;
+    db85ea4 R30 importer dedupe with byte-identity verified against HEAD.)*
 
 **D. Then build the vision**
 15. ◐ P5 self-feeding corpus, stage 1 (authoring modifier + local gates + `challenges/private/` +
