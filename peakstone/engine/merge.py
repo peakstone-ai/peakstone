@@ -43,6 +43,14 @@ def main(argv=None):
         "coder_model": next((mt.get("coder_model") for mt in metas if mt.get("coder_model")), None),
         "merged_from": args.inputs,
     }
+    # RUN IDENTITY carries through the merge (review R31: suite_id/max_tokens were dropped, so a
+    # bundle produced from merged results re-stamped as 'adhoc' with the wrong recorded budget).
+    # Set only when found: a present-but-None key would defeat produce_bundle's defaults.
+    for k in ("suite_id", "suite_version", "max_tokens", "max_tokens_reasoning",
+              "selected_ids", "judge_params"):
+        v = next((mt.get(k) for mt in metas if mt.get(k)), None)
+        if v is not None:
+            meta[k] = v
     out = write_report(all_results, Path(args.out), meta)
     print(f"Combined report: {out / 'leaderboard.md'}")
     return 0

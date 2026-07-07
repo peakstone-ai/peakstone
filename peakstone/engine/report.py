@@ -333,22 +333,21 @@ def _leaderboard_md(results, meta) -> str:
         by_model = defaultdict(list)
         for r in coder_rows:
             by_model[r["model"]].append(r)
-        # "Code score" excludes the safety/honesty challenges (injection/refusal/hallucination/
-        # secure-code): those go in the Safety column + Shared axes, not blended into coding
-        # ability. A strong agentic coder can be a weak injection-resister (e.g. qwen3-coder-next) —
-        # don't let that drag down — or inflate — the headline coding number.
-        SAFETY = {"injection", "refusal", "hallucination", "secure-code"}
-        # answer-match (math) + repo-patch/goal-state (agentic) are their own axes, not coding.
-        NONCODE = SAFETY | {"answer-match", "repo-patch", "goal-state"}
-        code_rows = lambda rs: [r for r in rs if r.get("scoring") not in NONCODE]
-        safety_rows = lambda rs: [r for r in rs if r.get("scoring") in SAFETY]
+        # "Code score" excludes the safety/honesty challenges: those go in the Safety column +
+        # Shared axes, not blended into coding ability. A strong agentic coder can be a weak
+        # injection-resister — don't let that drag down (or inflate) the headline coding number.
+        # Membership comes from the ONE shared taxonomy (scoreboard.py, review R29) — this
+        # function used to carry a drifted local copy.
+        from .scoreboard import NONCODE_SCORINGS, SAFETY_SCORINGS
+        code_rows = lambda rs: [r for r in rs if r.get("scoring") not in NONCODE_SCORINGS]
+        safety_rows = lambda rs: [r for r in rs if r.get("scoring") in SAFETY_SCORINGS]
         ranked = sorted(by_model.items(),
                         key=lambda kv: _avg([r["final_score"] for r in code_rows(kv[1])]),
                         reverse=True)
         coder_models = [m for m, _ in ranked]
 
         show_repair, show_adh = bool(meta.get("retries")), bool(meta.get("agents_md"))
-        has_safety = any(r.get("scoring") in SAFETY for r in coder_rows)
+        has_safety = any(r.get("scoring") in SAFETY_SCORINGS for r in coder_rows)
         head = ["Rank", "Model", "Code score", "Solved"]
         if show_repair:
             head.append("Self-repair")

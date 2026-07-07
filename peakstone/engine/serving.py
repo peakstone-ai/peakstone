@@ -273,7 +273,7 @@ def judge_model_name() -> str | None:
     """The configured local judge ([judge] in engine/config.toml): its registry name when judging
     is enabled, else None (no judge pass is chained)."""
     try:
-        jcfg = tomllib.loads(paths.config_path().read_text()).get("judge", {})
+        jcfg = paths.load_config().get("judge", {})   # packaged + ~/.peakstone overlay (R31)
     except Exception:  # noqa: BLE001
         return None
     if not jcfg.get("enabled", True):

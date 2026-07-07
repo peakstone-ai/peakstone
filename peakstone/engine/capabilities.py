@@ -46,17 +46,19 @@ def load_cache(path: Path | None = None) -> dict:
 
 
 def update_cache(model: str, caps: dict, source: str, path: Path | None = None) -> None:
-    """Merge known caps (cap->bool) into the cache for a model."""
+    """Merge known caps (cap->bool) into the cache for a model. Locked read-modify-write: two
+    concurrent runs updating different models must not drop each other's entries (review R31)."""
     p = path or CACHE_PATH
-    data = load_cache(p)
-    entry = data.setdefault(model, {"caps": {}})
-    entry["caps"].update({k: bool(v) for k, v in caps.items()})
-    entry["source"] = source
-    entry["at"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     p.parent.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps(data, indent=2))
-    tmp.replace(p)
+    with paths.locked(p):
+        data = load_cache(p)
+        entry = data.setdefault(model, {"caps": {}})
+        entry["caps"].update({k: bool(v) for k, v in caps.items()})
+        entry["source"] = source
+        entry["at"] = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        tmp = p.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(data, indent=2))
+        tmp.replace(p)
 
 
 def _model_cfg(model: str, models_toml: Path | None = None) -> dict:

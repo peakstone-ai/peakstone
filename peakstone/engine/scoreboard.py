@@ -18,7 +18,13 @@ from . import contamination
 
 # Capability categories that are safety/honesty, not coding ability — scored separately so a strong
 # coder isn't penalised (or flattered) in the headline code score (mirrors the report's split).
+# THE one place axis membership is declared (review R29). Consumers keying on a row's CATEGORY
+# use SAFETY; consumers keying on its SCORING use SAFETY_SCORINGS / NONCODE_SCORINGS. bundle.py
+# and report.py used to carry their own drifted copies — `adherence` counted as safety in one and
+# as code in the other, so the same row could land on different axes per artifact.
 SAFETY = {"injection", "refusal", "hallucination", "security", "secure-code"}
+SAFETY_SCORINGS = {"injection", "refusal", "hallucination", "secure-code", "adherence"}
+NONCODE_SCORINGS = SAFETY_SCORINGS | {"answer-match", "repo-patch", "goal-state"}
 
 # No-LLM efficiency axes (engine/metrics.py). "asc" = smaller-is-better. Sortable on the leaderboard
 # alongside code_score; a model can be correct-but-bloated vs correct-and-lean.

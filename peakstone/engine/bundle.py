@@ -31,7 +31,8 @@ from . import keys, paths
 
 SCHEMA_PATH = paths.schema_path()
 BUNDLE_VERSION = "1.0"
-SAFETY_SCORINGS = {"injection", "refusal", "hallucination", "secure-code", "adherence"}
+# axis taxonomy (SAFETY/SAFETY_SCORINGS/NONCODE_SCORINGS) lives in scoreboard.py — one shared
+# declaration for every consumer (review R29); the drifted local copy that lived here was unused
 
 
 # --------------------------------------------------------------------------- #
@@ -65,11 +66,19 @@ def _sha256_file_cached(path: Path) -> str:
         for chunk in iter(lambda: f.read(8 << 20), b""):
             h.update(chunk)
     digest = h.hexdigest()
-    cache[key] = digest
     keys.KEY_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = cache_file.with_suffix(".json.tmp")     # atomic write — concurrent runs can't corrupt it
-    tmp.write_text(json.dumps(cache))
-    tmp.replace(cache_file)
+    # lock + RE-READ before writing: the atomic rename alone was non-corrupting but
+    # last-writer-wins — two concurrent runs hashing different models dropped each other's
+    # freshly-computed entries (review R31)
+    with paths.locked(cache_file):
+        try:
+            cache = json.loads(cache_file.read_text()) if cache_file.exists() else {}
+        except Exception:  # noqa: BLE001
+            cache = {}
+        cache[key] = digest
+        tmp = cache_file.with_suffix(".json.tmp")     # atomic write — a crash can't corrupt it
+        tmp.write_text(json.dumps(cache))
+        tmp.replace(cache_file)
     return digest
 
 
@@ -461,7 +470,7 @@ def produce_bundle(meta: dict, results: list[dict], *, harness_version: str | No
         harness_version = pkg_version()
     run_cfg = {}
     try:
-        run_cfg = tomllib.loads(paths.config_path().read_text()).get("run", {})
+        run_cfg = paths.load_config().get("run", {})   # packaged + ~/.peakstone overlay (R31)
     except Exception:  # noqa: BLE001
         pass
     # Run identity: the budget recorded in sampling is the RESOLVED one the run actually used

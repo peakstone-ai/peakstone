@@ -35,13 +35,9 @@ from .scoring import compute_score
 
 ROOT = paths.repo_root()   # results land here; data files resolve via engine.paths
 
-# --stream-output protocol: generation deltas go to stdout one chunk per line, prefixed with GEN_MARK
-# (so the dashboard can split them from progress lines); real newlines are escaped to GEN_NL since each
-# delta is one stdout line. Plain control chars → invisible/harmless if a CLI user ever sees them.
-GEN_MARK = "\x01"
-GEN_NL = "\x02"
-GEN_PHASE = "\x03"   # a line GEN_PHASE+"thinking"|"answering": the model's current generation channel
-GEN_ATTEMPT = "\x04" # a line GEN_ATTEMPT+"N": a self-repair retry began (so the viewer can section it)
+# --stream-output protocol constants live in streamproto.py (ONE declaration shared with the
+# dashboard — review R21); re-exported here so existing imports keep working.
+from .streamproto import GEN_ATTEMPT, GEN_MARK, GEN_NL, GEN_PHASE  # noqa: F401
 
 # Generation token budget. Generous by default so a reasoning model isn't truncated mid-thought —
 # truncation makes a "fail" mean "ran out of room", not "couldn't solve it" (and unfairly penalizes
@@ -383,7 +379,10 @@ def main(argv=None):
         from peakstone.dashboard.update import update_main
         return update_main([])
 
-    cfg = tomllib.loads(Path(args.config).read_text())
+    # default config = packaged file + the ~/.peakstone overlay (same rule as gateway/api, R31);
+    # an explicit --config path is taken verbatim (the caller chose exactly that file)
+    cfg = (paths.load_config() if args.config == str(paths.config_path())
+           else tomllib.loads(Path(args.config).read_text()))
     host = cfg["server"]["host"]
     # model -> port: serve/models.toml is the source of truth; config [models] can override.
     ports = {}

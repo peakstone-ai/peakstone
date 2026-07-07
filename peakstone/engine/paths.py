@@ -63,6 +63,44 @@ def user_config_path() -> Path:
     return home_dir() / "config.toml"
 
 
+def load_config() -> dict:
+    """The engine config with the per-machine override applied: engine/config.toml overlaid
+    section-wise by ~/.peakstone/config.toml (overlay keys win). This is the SAME override rule
+    the gateway and API already honor — the engine used to read only the packaged file, so a
+    user's [run]/[judge] override changed the daemon's behavior but silently not the runner's
+    (review R31)."""
+    import tomllib
+    cfg: dict = {}
+    for p in (config_path(), user_config_path()):
+        try:
+            for section, block in tomllib.loads(p.read_text()).items():
+                if isinstance(block, dict):
+                    cfg.setdefault(section, {}).update(block)
+        except (OSError, tomllib.TOMLDecodeError):
+            pass
+    return cfg
+
+
+def locked(path: Path):
+    """An exclusive advisory lock (fcntl) scoped to `path` — serializes read-modify-write of the
+    small JSON caches so concurrent runs can't drop each other's entries (review R31: atomic
+    rename made writes non-corrupting, but last-writer-wins still lost merges)."""
+    import fcntl
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _cm():
+        lock = path.with_name(path.name + ".lock")
+        lock.parent.mkdir(parents=True, exist_ok=True)
+        with open(lock, "w") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+    return _cm()
+
+
 # --- repo data (the benchmark workspace; needs a checkout) --------------------------------------
 
 def repo_root() -> Path:
