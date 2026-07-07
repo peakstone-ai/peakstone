@@ -387,12 +387,13 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
    landing count ranked rows; e14c3e0: env challenge ground truth hashed (env.toml/verify.py/
    fixtures), Result.env persisted + backfilled, public agent_score counts isolating providers
    only — the owner's local TUI board still counts consented local runs.)*
-4. ◐ **Re-seed the official board through the daemon**, judge on, per the level definition; retire or
-   provenance-label repack composites. [R8] *(c8a3673: judge-LAST automation — level runs
-   auto-chain a judge job and submit the JUDGED bundle; judge = qwen3.6-35b-a3b with model+params
-   recorded per row; --overlay retired. REMAINING (operator): run `serve/reseed_judge.sh
-   <seed-run-dirs>` on the seed box, then retire the superseded gen-only submissions. Old runs
-   lack selected_ids, so suite_hash_match stays a FLAG until the next full fresh seed.)*
+4. ✅ **Re-seed the official board through the daemon**, judge on, per the level definition; retire or
+   provenance-label repack composites. [R8] *(c8a3673 automation + re-seed executed 2026-07-07:
+   9 judged bundles live (judge qwen3.6-35b-a3b, params recorded), 7 gen-only submissions retired,
+   suite content_hash re-anchored to the selected-set hash — identical across all 9 models, so
+   ingest can flip flag→reject for this suite. Follow-ups: agentic axis empty on the public board
+   until env challenges re-run under docker (local rows correctly fidelity-gated); cross-judge
+   qwen3.6-35b-a3b (it self-judged) when convenient.)*
 5. ◐ **Scoring honesty**: swebench post-run revert covers all non-source files; "no tests ran" is
    unscored, not 0.0; bidirectional partition probes; judge reachable (or loud) in gateway mode;
    loop-streak/retry attribution fixes. [R9–R11, R13, R20] *(R13 ab5110e: judge rides the gateway,
