@@ -170,6 +170,13 @@ def get_job(jid: str, *, base_url: str = GATEWAY_DEFAULT, timeout: float = 10) -
     return body if status == 200 else None
 
 
+def get_job_bundle(jid: str, *, base_url: str = GATEWAY_DEFAULT, timeout: float = 30) -> dict | None:
+    """A finished job's signed bundle, over HTTP — works against a REMOTE daemon too (the TUI used
+    to read it off the daemon's local disk, which silently broke off-host — review R21)."""
+    status, body = _gw_request("GET", base_url, f"/jobs/{jid}/bundle", timeout=timeout)
+    return body if status == 200 else None
+
+
 def cancel_job(jid: str, *, base_url: str = GATEWAY_DEFAULT, timeout: float = 10) -> bool:
     return _gw_request("DELETE", base_url, f"/jobs/{jid}", timeout=timeout)[0] == 200
 

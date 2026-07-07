@@ -217,11 +217,9 @@ def _hw(run: dict) -> str:
     return " · ".join(parts)
 
 
-# Live-generation stream protocol — must match peakstone.engine.runner (GEN_MARK / GEN_NL).
-GEN_MARK = "\x01"
-GEN_NL = "\x02"
-GEN_PHASE = "\x03"         # a line GEN_PHASE+"thinking"|"answering": the model's current channel
-GEN_ATTEMPT = "\x04"       # a line GEN_ATTEMPT+"N": a self-repair retry began
+# Live-generation stream protocol — the ONE shared declaration (engine/streamproto.py, review
+# R21): this file used to carry a hand-duplicated copy that could silently drift from the runner.
+from peakstone.engine.streamproto import GEN_ATTEMPT, GEN_MARK, GEN_NL, GEN_PHASE  # noqa: E402
 _RUN_LOG_MAX = 8000        # bounded ring of streamed run lines (caps memory under a token flood)
 
 # Render the runner's per-challenge progress markers as checkmarks in the live run log.
@@ -444,11 +442,10 @@ class Dashboard(App):
             pass
 
     def start_run(self, name: str, *, published_tps=None, challenge_ids=None, level=None,
-                  free_procs=None, ctx=None, reasoning=None, budget=None, download_only=False):
+                  ctx=None, reasoning=None, budget=None, download_only=False):
         """Enqueue a benchmark on the DAEMON's run queue (the single source of truth) and return its
         job id (None if the daemon is unreachable). The daemon serializes runs on the GPU and
-        auto-downloads a missing model first; this app just mirrors whatever it's running. free_procs
-        is unused now that the daemon owns serving (it swaps models itself)."""
+        auto-downloads a missing model first; this app just mirrors whatever it's running."""
         if download_only:
             return self.start_download(name)
         self._ensure_gateway()
@@ -569,15 +566,20 @@ class Dashboard(App):
                                              note="job not found")
         summary = job.get("summary") or {}
         self._run_submitted = summary.get("submitted")
-        # The daemon already auto-submits, but it runs on this same host, so read its bundle off disk
-        # to enable manual re-submit ('s' in the viewer) and keep the result line's submit state.
+        # Fetch the job's bundle from the DAEMON over HTTP (works against a remote gateway too —
+        # review R21: reading it off local disk silently broke off-host); disk is the fallback.
         bundle = None
-        bpath = eng_paths.repo_root() / "results" / f"job-{jid}" / "bundle.json"
         try:
-            if bpath.exists():
-                bundle = json.loads(bpath.read_text())
-        except (OSError, ValueError):
+            bundle = client.get_job_bundle(jid)
+        except client.APIError:
             pass
+        if bundle is None:
+            bpath = eng_paths.repo_root() / "results" / f"job-{jid}" / "bundle.json"
+            try:
+                if bpath.exists():
+                    bundle = json.loads(bpath.read_text())
+            except (OSError, ValueError):
+                pass
         note = job.get("status") or "?"
         if summary.get("run_status") == "not_capable":   # non-viable config — surface the verdict
             cats = ", ".join(summary.get("abandoned_categories") or []) or "every category"
@@ -1829,8 +1831,11 @@ class AddModelScreen(ModalScreen):
 
 
 class PreflightScreen(ModalScreen):
-    """Shown before serving when free accelerator memory looks too small for the model. Offers to free
-    our own llama-server processes (Linux: GPU VRAM; macOS: unified RAM) or run anyway."""
+    """Shown before queueing when free accelerator memory looks too small for the model.
+    INFORMATIONAL ONLY (review R21): the old 'free & run' lever SIGKILLed processes by pgrep —
+    which would have killed the daemon's own llama-server — and was wired to a parameter nothing
+    read. The daemon owns serving and swaps/unloads models itself; if it's wedged, `d` on the
+    queue screen restarts it."""
     CSS = """
     PreflightScreen { align: center middle; }
     #preflight { width: 76; height: auto; border: thick $warning; background: $surface; padding: 1; }
@@ -1840,7 +1845,7 @@ class PreflightScreen(ModalScreen):
         super().__init__()
         self.model_name = model_name
         self.pf = pf
-        self._on_proceed = on_proceed   # on_proceed(free_first: bool)
+        self._on_proceed = on_proceed   # zero-arg: queue the run
 
     def compose(self) -> ComposeResult:
         pf = self.pf
@@ -1849,27 +1854,19 @@ class PreflightScreen(ModalScreen):
         if pf.freeable:
             lines.append(f"\n{len(pf.freeable)} llama-server process(es) holding {pf.freeable_gb} GB:")
             lines += [f"  · pid {p.pid} ({p.name})  {p.used_gb} GB" for p in pf.freeable]
-            verdict = "→ freeing them should make room." if pf.fits_after_free \
-                else "→ may still not fit even after freeing."
-            lines.append(verdict)
-            lines.append("\n[b]f[/] free & run   ·   [b]r[/] run anyway   ·   [b]Esc[/] cancel")
+            lines.append("→ the daemon swaps its own model out when the run starts; if one of "
+                         "these is wedged, restart the daemon ([b]d[/] on the queue screen).")
         else:
-            lines.append("\nNo llama-servers of ours to free — close other GPU apps, or:")
-            lines.append("[b]r[/] run anyway   ·   [b]Esc[/] cancel")
+            lines.append("\nNo llama-servers of ours are holding memory — close other GPU apps, or:")
+        lines.append("\n[b]r[/] run anyway   ·   [b]Esc[/] cancel")
         with Vertical(id="preflight"):
             yield Static("\n".join(lines))
 
-    BINDINGS = [("escape", "cancel", "Cancel"), ("f", "free_run", "Free & run"),
-                ("r", "run_anyway", "Run anyway")]
-
-    def action_free_run(self) -> None:
-        if self.pf.freeable:
-            self.dismiss()
-            self._on_proceed(True)
+    BINDINGS = [("escape", "cancel", "Cancel"), ("r", "run_anyway", "Run anyway")]
 
     def action_run_anyway(self) -> None:
         self.dismiss()
-        self._on_proceed(False)
+        self._on_proceed()
 
     def action_cancel(self) -> None:
         self.dismiss()
@@ -1883,10 +1880,9 @@ def run_with_preflight(screen, name: str, *, challenge_ids=None, level=None, pub
     entry = models.load_registry().get(name)
     pf = preflight.check(entry) if entry else None
 
-    def launch(free_first: bool) -> None:
-        procs = pf.freeable if (free_first and pf) else None
+    def launch() -> None:
         started = app.start_run(name, published_tps=published_tps, challenge_ids=challenge_ids,
-                                level=level, free_procs=procs, ctx=app.ctx_for(name),
+                                level=level, ctx=app.ctx_for(name),
                                 reasoning=app.reasoning_for(name), budget=app.budget_for(name))
         if started:
             app.push_screen(ReproduceScreen())
@@ -1896,7 +1892,7 @@ def run_with_preflight(screen, name: str, *, challenge_ids=None, level=None, pub
     if pf and not pf.fits_now and not app.run_active:
         app.push_screen(PreflightScreen(name, pf, on_proceed=launch))
     else:
-        launch(False)
+        launch()
 
 
 class CtxScreen(ModalScreen):

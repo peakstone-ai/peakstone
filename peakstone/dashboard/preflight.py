@@ -8,9 +8,6 @@ pure decision logic — and tested by injecting free_gb / procs.
 """
 from __future__ import annotations
 
-import os
-import signal
-import time
 from dataclasses import dataclass, field
 
 from . import hardware
@@ -61,33 +58,7 @@ def check(entry, *, free_gb: float | None = None, procs=None) -> Preflight | Non
     return Preflight(free_gb=free, need_gb=need, freeable=list(fr))
 
 
-def _alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError:
-        return False
-
-
-def free(procs, *, timeout: float = 8.0) -> int:
-    """Terminate the given processes and wait for the memory to actually release (SIGTERM, then
-    SIGKILL stragglers). Returns how many were signalled. POSIX signals → works on Linux and macOS.
-    Blocking, so callers run it off the UI thread."""
-    pids = [p.pid for p in procs]
-    for pid in pids:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except OSError:
-            pass
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        if not any(_alive(pid) for pid in pids):
-            break
-        time.sleep(0.3)
-    for pid in pids:
-        if _alive(pid):
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except OSError:
-                pass
-    return len(pids)
+# The old _alive()/free() kill lever was REMOVED (review R21): it SIGTERM/SIGKILLed
+# llama-servers by pid — including the daemon's own — and the parameter that was
+# supposed to receive its plan was never read. The daemon owns serving now; preflight
+# is purely informational (the Preflight dataclass above).

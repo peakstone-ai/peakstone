@@ -1051,6 +1051,9 @@ def test_preflight_decision():
 
 
 def test_preflight_screen_actions():
+    """The screen is informational now (review R21): 'r' proceeds; the old 'f' free-and-run kill
+    lever is GONE — it SIGKILLed by pgrep (would hit the daemon's own llama-server) and fed a
+    parameter nothing read."""
     from peakstone.dashboard import preflight, hardware
     from peakstone.dashboard.app import Dashboard, PreflightScreen
     pf = preflight.Preflight(free_gb=2.0, need_gb=4.3, freeable=[hardware.GpuProc(111, 22000)])
@@ -1059,14 +1062,14 @@ def test_preflight_screen_actions():
     async def scenario(key):
         app = Dashboard("http://x")
         async with app.run_test() as pilot:
-            await app.push_screen(PreflightScreen("m", pf, on_proceed=calls.append))
+            await app.push_screen(PreflightScreen("m", pf, on_proceed=lambda: calls.append(key)))
             await pilot.pause()
             await pilot.press(key)
             await pilot.pause()
 
     asyncio.run(scenario("f"))
     asyncio.run(scenario("r"))
-    assert calls == [True, False]   # f -> free first, r -> run anyway
+    assert calls == ["r"]   # r -> run anyway; f is no longer a lever
 
 
 def test_run_with_preflight_routing(monkeypatch):

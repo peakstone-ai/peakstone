@@ -281,6 +281,17 @@ def build_app(*, manager: ModelManager | None = None, idle_timeout: float = 0.0,
             raise HTTPException(status_code=409, detail=str(e))
         return {"unloaded": unloaded}
 
+    @app.get("/jobs/{jid}/bundle", dependencies=auth_dep)
+    def job_bundle(jid: str):
+        """A finished job's signed bundle — served over HTTP so a REMOTE TUI can fetch and
+        re-submit it (review R21: it was read off the daemon's local disk, same-host only)."""
+        if app.state.jobs.get(jid) is None:
+            raise HTTPException(status_code=404, detail=f"no job {jid!r}")
+        p = paths.repo_root() / "results" / f"job-{jid}" / "bundle.json"
+        if not p.exists():
+            raise HTTPException(status_code=404, detail="no bundle (job unfinished, or it failed)")
+        return FileResponse(p, media_type="application/json")
+
     @app.get("/jobs/{jid}/log", dependencies=auth_dep)
     async def job_log(jid: str, request: Request):
         """Tail a job's log as Server-Sent Events: replay what's written, then follow until the job
@@ -292,18 +303,37 @@ def build_app(*, manager: ModelManager | None = None, idle_timeout: float = 0.0,
         async def events():
             path = paths.repo_root() / "results" / f"job-{jid}" / "run.log"
             pos = 0
+
+            def complete_lines() -> list[str]:
+                """Read from pos and return only COMPLETE lines. A read boundary mid-line used to
+                split one protocol line (e.g. a GEN_MARK delta) into two SSE events and corrupt
+                the viewer's parse (review R21) — the partial tail now stays unread until its
+                newline lands. Binary mode: byte offsets are honest (text-mode tell() is opaque)."""
+                nonlocal pos
+                if not path.exists():
+                    return []
+                with open(path, "rb") as f:
+                    f.seek(pos)
+                    chunk = f.read()
+                nl = chunk.rfind(b"\n")
+                if nl < 0:
+                    return []
+                pos += nl + 1
+                return chunk[:nl].decode(errors="replace").splitlines()
+
             while True:
                 if await request.is_disconnected():
                     return
-                if path.exists():
-                    with open(path) as f:
-                        f.seek(pos)
-                        chunk = f.read()
-                        pos = f.tell()
-                    for line in chunk.splitlines():
-                        yield f"data: {line}\n\n"
+                for line in complete_lines():
+                    yield f"data: {line}\n\n"
                 cur = app.state.jobs.get(jid)
                 if cur is None or cur["status"] not in ("queued", "running"):
+                    if path.exists():          # flush a final unterminated line, if any
+                        with open(path, "rb") as f:
+                            f.seek(pos)
+                            rest = f.read().decode(errors="replace").strip("\n")
+                        if rest:
+                            yield f"data: {rest}\n\n"
                     yield "event: done\ndata: {}\n\n"
                     return
                 await asyncio.sleep(0.5)
