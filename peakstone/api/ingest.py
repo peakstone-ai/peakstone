@@ -6,8 +6,6 @@ Trust chain at ingest: (1) JSON Schema valid, (2) re-derived bundle_hash matches
 """
 from __future__ import annotations
 
-import hashlib
-import json
 import math
 import os
 from datetime import datetime, timezone
@@ -16,6 +14,7 @@ from sqlalchemy import select
 
 from peakstone.engine import bundle as eng_bundle  # the engine is the source of truth for hashing/validation
 from peakstone.engine import keys
+from peakstone.engine import repro as eng_repro
 
 from . import models
 
@@ -46,23 +45,10 @@ class IngestError(ValueError):
 
 
 def _repro_sig(results: list[dict]) -> str | None:
-    """Fingerprint the deterministic result vector — the thing a reproduction must match.
-
-    Only deterministic-tests results count (llm-judge/human aren't reproducible). Scores are
-    rounded so floating-point noise doesn't split a genuine reproduction. The challenge
-    content_hash is part of the fingerprint: "reproductions" must agree on the exact challenge
-    CONTENT scored, not just ids + scores (two runs of divergent challenge versions must never
-    verify each other). None if nothing deterministic ran (such a run can never be
-    community-verified)."""
-    det = [(r["challenge_id"], r.get("challenge_hash") or "",
-            round(float(r.get("score", {}).get("final", 0.0)), 4))
-           for r in results if r.get("verification", "deterministic-tests") == "deterministic-tests"
-           and not r.get("private")]   # private sets differ per submitter — they'd fragment
-                                       # reproduction groups and break community verification
-    if not det:
-        return None
-    payload = json.dumps(sorted(det), separators=(",", ":"), ensure_ascii=False)
-    return hashlib.sha256(payload.encode()).hexdigest()
+    """Fingerprint of the deterministic result vector — the thing a reproduction must match.
+    The vector definition lives in engine.repro (the ONE declaration `peakstone reproduce`
+    verifies against), so the client's MATCH verdict and this grouping can never drift apart."""
+    return eng_repro.repro_sig(results)
 
 
 def _identity_of(db, sub: models.Submission) -> str:
