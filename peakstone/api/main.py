@@ -9,7 +9,8 @@ from __future__ import annotations
 import lzma
 import os
 import re
-from collections import defaultdict
+import time
+from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query
@@ -133,7 +134,67 @@ class _XzBody:
         return await self.app(scope, receive2, send)
 
 
+class _RateLimit:
+    """Per-client sliding-window rate limit (review R15) — two buckets, since writes are where the
+    storage/DoS exposure lives. In-process (per worker): coarse, but it kills the trivial flood;
+    put a real limiter at the proxy for distributed abuse. Set a limit to 0 to disable it."""
+    READS_PER_MIN = int(os.environ.get("PEAKSTONE_RATE_READS_PER_MIN", "600"))
+    WRITES_PER_MIN = int(os.environ.get("PEAKSTONE_RATE_WRITES_PER_MIN", "120"))
+
+    def __init__(self, app):
+        self.app = app
+        self._hits: dict[tuple, deque] = defaultdict(deque)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            return await self.app(scope, receive, send)
+        write = scope.get("method", "GET") in ("POST", "PUT", "PATCH", "DELETE")
+        limit = self.WRITES_PER_MIN if write else self.READS_PER_MIN
+        if limit > 0:
+            key = ((scope.get("client") or ("?",))[0], write)
+            q, now = self._hits[key], time.monotonic()
+            while q and now - q[0] > 60:
+                q.popleft()
+            if len(q) >= limit:
+                await send({"type": "http.response.start", "status": 429,
+                            "headers": [(b"content-type", b"application/json"),
+                                        (b"retry-after", b"60")]})
+                await send({"type": "http.response.body",
+                            "body": b'{"detail":"rate limit exceeded; retry in a minute"}'})
+                return
+            q.append(now)
+            if len(self._hits) > 4096:            # bound memory under an address-spray
+                self._hits = defaultdict(deque, {k: v for k, v in self._hits.items() if v})
+        return await self.app(scope, receive, send)
+
+
 app.add_middleware(_XzBody)
+app.add_middleware(_RateLimit)
+
+
+# Response cache for the two hot, expensive aggregates (review R15: /leaderboard re-summarizes
+# every submission per request; the web hits it on every page view). TTL-bounded and cleared on
+# any board-mutating write, so tests and freshly-submitted runs always see current data.
+_CACHE_TTL_S = float(os.environ.get("PEAKSTONE_CACHE_TTL_S", "30"))
+_response_cache: dict[tuple, tuple[float, dict]] = {}
+
+
+def _cached(key: tuple, build):
+    if _CACHE_TTL_S <= 0:
+        return build()
+    hit = _response_cache.get(key)
+    now = time.monotonic()
+    if hit and now - hit[0] < _CACHE_TTL_S:
+        return hit[1]
+    val = build()
+    if len(_response_cache) > 512:                # bound memory under key-spray (vram filter etc.)
+        _response_cache.clear()
+    _response_cache[key] = (now, val)
+    return val
+
+
+def _cache_clear():
+    _response_cache.clear()
 
 
 @app.get("/healthz")
@@ -163,6 +224,7 @@ def post_submission(bundle: dict = Body(...), db: Session = Depends(get_session)
     except ingest.IngestError as e:
         msg = str(e)
         raise HTTPException(status_code=409 if "already submitted" in msg else 400, detail=msg)
+    _cache_clear()   # the board changed — cached aggregates must not outlive it
     return {"id": sub.id, "bundle_hash": sub.bundle_hash, "trust_tier": sub.trust_tier,
             "n_results": len(sub.results), "suite": f"{sub.suite_name}@{sub.suite_version}"}
 
@@ -312,6 +374,15 @@ def leaderboard(db: Session = Depends(get_session), suite: str | None = None,
     if suite is None and version is None and OFFICIAL_SUITE:
         name, _, ver = OFFICIAL_SUITE.partition("@")
         suite, version = name, (ver or None)
+    key = ("leaderboard", suite, version, max_vram_gb, quant, trust, reasoning,
+           reasoning_budget, verdict, sort, order, collapse)
+    return _cached(key, lambda: _build_leaderboard(db, suite, version, max_vram_gb, quant, trust,
+                                                   reasoning, reasoning_budget, verdict, sort,
+                                                   order, collapse))
+
+
+def _build_leaderboard(db, suite, version, max_vram_gb, quant, trust, reasoning,
+                       reasoning_budget, verdict, sort, order, collapse):
     q = select(models.Submission)
     if suite and suite != "all":
         q = q.where(models.Submission.suite_name == suite)
@@ -432,7 +503,27 @@ def run_challenge(bundle_hash: str, challenge_id: str, db: Session = Depends(get
     if not r:
         raise HTTPException(404, "unknown challenge in this run")
     return {"challenge": r.challenge_id, "final": r.final, "passed": r.passed, "total": r.total,
-            "category": r.category, "transcript": r.transcript}
+            "category": r.category, "transcript": _capped_transcript(r.transcript)}
+
+
+def _capped_transcript(tr, cap: int = 200_000):
+    """Transcripts are stored unbounded (full attempts logs); SERVE them capped so one multi-MB
+    row can't turn a solution view into a multi-MB response/page (review R16). Per-string cap,
+    applied one level into the attempts list too — generous enough for any honest read."""
+    def _cut(v):
+        if isinstance(v, str) and len(v) > cap:
+            return v[:cap] + f"\n… [truncated {len(v) - cap} chars]"
+        return v
+    if not isinstance(tr, dict):
+        return _cut(tr)
+    out = {}
+    for k, v in tr.items():
+        if k == "attempts" and isinstance(v, list):
+            out[k] = [{ak: _cut(av) for ak, av in a.items()} if isinstance(a, dict) else _cut(a)
+                      for a in v]
+        else:
+            out[k] = _cut(v)
+    return out
 
 
 @app.get("/models/{family}")
@@ -458,6 +549,10 @@ def model_page(family: str, db: Session = Depends(get_session)):
 @app.get("/facets")
 def facets(db: Session = Depends(get_session)):
     """Distinct filterable values for the leaderboard UI (quant pills, suite picker, trust filter)."""
+    return _cached(("facets",), lambda: _build_facets(db))
+
+
+def _build_facets(db):
     quants = db.scalars(select(distinct(models.ModelArtifact.artifact))
                         .order_by(models.ModelArtifact.artifact)).all()
     suites = db.execute(select(models.Submission.suite_name, models.Submission.suite_version)
@@ -637,11 +732,13 @@ def get_proposal(proposal_id: int, db: Session = Depends(get_session)):
 
 @app.post("/proposals/{proposal_id}/review")
 def review_proposal(proposal_id: int, body: dict = Body(...), db: Session = Depends(get_session)):
-    """Admin-signed approve/reject. Sign the message `<decision>:<content_hash>` with an admin key."""
+    """Admin-signed approve/reject. Sign `<decision>:<content_hash>:<unix-ts>` with an admin key
+    and pass `ts` in the body — the timestamp keeps a captured signature from being replayed
+    later (e.g. an old approve after a reject)."""
     try:
         p = proposals.review(db, proposal_id, pubkey=body.get("pubkey", ""),
                              signature=body.get("signature", ""), decision=body.get("decision", ""),
-                             note=body.get("note"))
+                             note=body.get("note"), ts=body.get("ts"))
     except proposals.AdminError as e:
         raise HTTPException(403, str(e))
     except proposals.ProposalError as e:
@@ -740,5 +837,6 @@ def reveal(body: dict = Body(...), db: Session = Depends(get_session)):
         r.published_at = today
         r.published_at_source = "private-reveal"
     db.commit()
+    _cache_clear()   # revealed rows start counting — cached boards must not outlive them
     return {"challenge_id": cid, "commitment": com, "n_results_revealed": len(rows),
             "published_at": today}

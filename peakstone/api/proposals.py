@@ -7,6 +7,8 @@ reference code — `validation` is the author's self-reported local run, which a
 """
 from __future__ import annotations
 
+import time
+
 from sqlalchemy import select
 
 from peakstone.engine.bundle import _sha256_bytes, canonical_bytes
@@ -95,15 +97,27 @@ def propose(db, p: dict) -> models.ChallengeProposal:
     return prop
 
 
+# A signed admin decision is only fresh for this long — without it, an old captured "approve"
+# signature could be replayed after the admin later rejected the same content (review R16).
+REVIEW_SIG_TTL_S = 600
+
+
 def review(db, proposal_id: int, *, pubkey: str, signature: str, decision: str,
-           note: str | None = None) -> models.ChallengeProposal:
+           note: str | None = None, ts: int | str | None = None) -> models.ChallengeProposal:
     if decision not in ("approve", "reject"):
         raise ProposalError("decision must be 'approve' or 'reject'")
     prop = db.get(models.ChallengeProposal, proposal_id)
     if not prop:
         raise ProposalError(f"unknown proposal {proposal_id}")
-    # admin signs "<decision>:<content_hash>" so the signature can't be replayed for another action
-    if not identity.verify_admin_action(pubkey, signature, f"{decision}:{prop.content_hash}"):
+    # admin signs "<decision>:<content_hash>:<unix-ts>" — action-bound (no cross-action replay)
+    # AND fresh (no approve-after-reject replay of an old capture)
+    try:
+        ts = int(ts)
+    except (TypeError, ValueError):
+        raise ProposalError("missing/invalid ts (unix seconds; part of the signed message)")
+    if abs(time.time() - ts) > REVIEW_SIG_TTL_S:
+        raise AdminError(f"stale review signature (ts is > {REVIEW_SIG_TTL_S}s from now)")
+    if not identity.verify_admin_action(pubkey, signature, f"{decision}:{prop.content_hash}:{ts}"):
         raise AdminError("not authorized: action must be signed by an admin key")
     if prop.status != "proposed":
         raise ProposalError(f"proposal already {prop.status}")

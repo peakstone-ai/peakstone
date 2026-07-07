@@ -255,6 +255,50 @@ def test_env_provenance_persisted_and_backfilled(client):
         assert row.env == {"provider": "docker", "network_fidelity": "real"}   # restored from raw
 
 
+# --- R15: DoS/scale guards -----------------------------------------------------------------------
+
+def test_rate_limit_trips_and_recovers(client, monkeypatch):
+    from peakstone.api import main as api_main
+    monkeypatch.setattr(api_main._RateLimit, "READS_PER_MIN", 1)
+    client.get("/healthz")
+    assert client.get("/healthz").status_code == 429            # over the (tiny) window
+    monkeypatch.setattr(api_main._RateLimit, "READS_PER_MIN", 100000)
+    assert client.get("/healthz").status_code == 200            # generous limit → flows again
+
+
+def test_per_key_submission_quota(client, monkeypatch):
+    monkeypatch.setattr(ingest, "MAX_SUBMISSIONS_PER_KEY_PER_DAY", 2)
+    p, pub = _newkey()
+    assert client.post("/submissions", json=_mk("quotaM", p, pub, ts="q1")).status_code == 201
+    assert client.post("/submissions", json=_mk("quotaM", p, pub, ts="q2", vram=25)).status_code == 201
+    r = client.post("/submissions", json=_mk("quotaM", p, pub, ts="q3", vram=26))
+    assert r.status_code == 400 and "quota" in r.json()["detail"]
+
+
+def test_leaderboard_cache_populated_and_cleared_on_write(client):
+    from peakstone.api import main as api_main
+    client.get("/leaderboard")
+    assert any(k[0] == "leaderboard" for k in api_main._response_cache)   # hot path is cached
+    p, pub = _newkey()
+    assert client.post("/submissions", json=_mk("cclrM", p, pub, ts="cclr")).status_code == 201
+    assert not api_main._response_cache          # a board-mutating write clears it (never stale)
+
+
+# --- R16: leak caps --------------------------------------------------------------------------------
+
+def test_transcript_served_capped(client):
+    p, pub = _newkey()
+    b = _mk("bigT", p, pub, ts="bigt", ids=("c1",))
+    b["results"][0]["transcript"] = {"raw_output": "x" * 300_000, "stdout": "ok"}
+    bundle.sign_inplace(b, p, pub)
+    r = client.post("/submissions", json=b)
+    assert r.status_code == 201
+    got = client.get(f"/runs/{r.json()['bundle_hash']}/challenge/bigT-c1").json()
+    raw = got["transcript"]["raw_output"]
+    assert len(raw) < 250_000 and "truncated" in raw            # stored whole, served capped
+    assert got["transcript"]["stdout"] == "ok"                  # small fields untouched
+
+
 # --- R4: suite content-hash is compared at ingest ----------------------------------------------
 
 def test_suite_hash_mismatch_is_flagged(client):

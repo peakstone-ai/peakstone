@@ -486,15 +486,24 @@ def test_challenge_moderation_flow(client):
     assert "tests/test_x.py" in detail["files"] and detail["spec"].startswith("# py-moderate")
 
     # non-admin review -> 403
+    import time as _time
+    ts = int(_time.time())
     _as_admin(admin)
     nonadmin = client.post(f"/proposals/{pid}/review", json={
-        "pubkey": author, "signature": keys.sign(author_p, f"approve:{r.json()['content_hash']}".encode()),
+        "pubkey": author, "ts": ts,
+        "signature": keys.sign(author_p, f"approve:{r.json()['content_hash']}:{ts}".encode()),
         "decision": "approve"})
     assert nonadmin.status_code == 403
-    # admin approves (signs "<decision>:<content_hash>")
     chash = r.json()["content_hash"]
+    # a stale timestamp is refused even with a valid admin signature (replay window, review R16)
+    old = ts - 3600
+    stale = client.post(f"/proposals/{pid}/review", json={
+        "pubkey": admin, "ts": old,
+        "signature": keys.sign(admin_p, f"approve:{chash}:{old}".encode()), "decision": "approve"})
+    assert stale.status_code == 403 and "stale" in stale.json()["detail"]
+    # admin approves (signs "<decision>:<content_hash>:<ts>")
     ok = client.post(f"/proposals/{pid}/review", json={
-        "pubkey": admin, "signature": keys.sign(admin_p, f"approve:{chash}".encode()),
+        "pubkey": admin, "ts": ts, "signature": keys.sign(admin_p, f"approve:{chash}:{ts}".encode()),
         "decision": "approve", "note": "lgtm"})
     assert ok.status_code == 200 and ok.json()["status"] == "approved"
     # a published, attributed Challenge now exists
@@ -502,7 +511,7 @@ def test_challenge_moderation_flow(client):
     assert ch["status"] == "published" and ch["title"] == "PY-MODERATE" and ch["version"] == 1
     # re-reviewing the same proposal -> 409
     assert client.post(f"/proposals/{pid}/review", json={
-        "pubkey": admin, "signature": keys.sign(admin_p, f"approve:{chash}".encode()),
+        "pubkey": admin, "ts": ts, "signature": keys.sign(admin_p, f"approve:{chash}:{ts}".encode()),
         "decision": "approve"}).status_code == 409
 
     # deprecate (admin-signed, version-bound) flips status; non-admin can't
@@ -520,8 +529,11 @@ def test_proposal_reject(client):
     _as_admin(admin)
     r = client.post("/proposals", json=_proposal("py-reject", author_p, author))
     pid, chash = r.json()["id"], r.json()["content_hash"]
+    import time as _time
+    ts = int(_time.time())
     rej = client.post(f"/proposals/{pid}/review", json={
-        "pubkey": admin, "signature": keys.sign(admin_p, f"reject:{chash}".encode()),
+        "pubkey": admin, "ts": ts,
+        "signature": keys.sign(admin_p, f"reject:{chash}:{ts}".encode()),
         "decision": "reject", "note": "off topic"})
     assert rej.status_code == 200 and rej.json()["status"] == "rejected"
     # rejection does NOT publish a challenge

@@ -180,8 +180,10 @@ def account_summary(db, pubkey: str) -> dict | None:
     user = db.get(models.User, key.user_id)
     links = db.scalars(select(models.IdentityLink)
                        .where(models.IdentityLink.user_id == user.id)).all()
+    # Deliberately narrow (review R16): listing every pubkey bound to the account (or provider
+    # account ids) would let anyone who knows ONE key enumerate and link a user's other
+    # identities. The handle + provider names + a key count serve every legitimate caller.
+    n_keys = len(db.scalars(select(models.Key).where(models.Key.user_id == user.id)).all())
     return {"user_id": user.id, "handle": user.handle,
-            "providers": [{"provider": l.provider, "account_id": l.provider_account_id}
-                          for l in links],
-            "keys": [k.pubkey for k in db.scalars(
-                select(models.Key).where(models.Key.user_id == user.id)).all()]}
+            "providers": [{"provider": l.provider} for l in links],
+            "n_keys": n_keys}

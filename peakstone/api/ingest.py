@@ -30,6 +30,10 @@ COMMUNITY_MIN_IDENTITIES = int(os.environ.get("PEAKSTONE_COMMUNITY_MIN_IDENTITIE
 # accounts are cheap to mint in pairs; an age bar makes self-verification a slow, deliberate act
 # instead of a five-minute one. 0 = off (dev default); production sets this (see infra/.env.example).
 COMMUNITY_MIN_ACCOUNT_AGE_DAYS = float(os.environ.get("PEAKSTONE_COMMUNITY_MIN_ACCOUNT_AGE_DAYS", "0"))
+# Per-key storage quota: submissions are unauthenticated (a keypair is free) and stored whole,
+# so one key spraying bundles is a storage-exhaustion vector (review R15). Generous — an honest
+# submitter never gets near it. 0 = off.
+MAX_SUBMISSIONS_PER_KEY_PER_DAY = int(os.environ.get("PEAKSTONE_MAX_SUBMISSIONS_PER_KEY_PER_DAY", "200"))
 # Operator/runner keys trusted to seed the official board. A bundle signed by one of these is ingested
 # as runner-verified, so the operator's own seed runs qualify for the RANKED held-out tier — while an
 # anonymous self-reported submission cannot. Without this gate a single free keypair + forged
@@ -294,6 +298,15 @@ def ingest_bundle(db, b: dict) -> models.Submission:
     _reconcile_family(family, m, trust_tier)
     artifact = _get_artifact(db, family, m)
     key = _get_or_create(db, models.Key, pubkey=pub)
+    if MAX_SUBMISSIONS_PER_KEY_PER_DAY > 0:
+        from datetime import timedelta
+        from sqlalchemy import func as _func
+        since = datetime.now(timezone.utc) - timedelta(days=1)
+        n_today = db.scalar(select(_func.count(models.Submission.id)).where(
+            models.Submission.key_id == key.id, models.Submission.submitted_at >= since)) or 0
+        if n_today >= MAX_SUBMISSIONS_PER_KEY_PER_DAY:
+            raise IngestError(f"submission quota exceeded for this key "
+                              f"({MAX_SUBMISSIONS_PER_KEY_PER_DAY}/day) — try again later")
     # Comparability check: the suite's content_hash is fixed by its first-seen bundle; a later
     # bundle claiming the same (suite, version) over a DIFFERENT challenge set is flagged, not
     # trusted-by-name. None = no basis (this bundle IS the first sighting, or a hash is missing).
