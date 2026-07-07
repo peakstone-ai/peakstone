@@ -815,6 +815,12 @@ def main(argv=None):
                                                    reference=args.reference, agent=args.agent,
                                                    prebuilt=args.prebuilt, prune=args.prune_images,
                                                    max_turns=args.max_turns, timeout=ch.timeout)
+                if res.get("unscored"):
+                    # the test suite never ran (collection/dep failure) — that's an environment
+                    # problem, not a wrong patch: record a documented skip, never a 0.0 (R10)
+                    print(f"{label}  SKIP unscored: {res.get('error')}")
+                    skip_reasons[ch.id] = f"unscored: {res.get('error')}"
+                    continue
                 results.append({
                     "model": model, "challenge": ch.id, "language": ch.language,
                     "difficulty": ch.difficulty, "category": ch.category, "type": ch.ctype,

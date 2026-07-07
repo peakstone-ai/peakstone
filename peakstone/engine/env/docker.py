@@ -104,6 +104,15 @@ class DockerEnvironment(Environment):
         self._ips: dict[str, str] = {}
         self._record_topology(spec)
         self._applied_net = self._apply_network(spec.requirements)
+        # A declared network condition that failed to apply must ABORT, not degrade: running the
+        # challenge anyway would score the model on a different (easier) environment than the one
+        # the row claims — e.g. a partition-recovery task with no partition (review R11).
+        failed = [f"{kind} {e.get('src')}->{e.get('dst')}"
+                  for kind in ("shaping", "firewall")
+                  for e in self._applied_net.get(kind, []) if not e.get("ok")]
+        if failed:
+            self.teardown()
+            raise RuntimeError(f"network conditions failed to apply: {', '.join(failed)}")
 
     def _peer_env(self, n: NodeSpec) -> dict[str, str]:
         env = {}

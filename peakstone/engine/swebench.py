@@ -399,7 +399,8 @@ def run_repo_patch_task(inst: dict, *, client=None, model="", run_cfg=None, refe
         with RepoSandbox(image, network=network, prune=prune) as sb:
             digest = sb.digest()
             if not _setup(sb, inst, log, mode):
-                return _fail("repo setup failed", log, image, digest, f2p, t0)
+                # setup fails before the model acts — an environment problem, never a 0.0 (R10)
+                return _fail("repo setup failed", log, image, digest, f2p, t0, unscored=True)
 
             # Produce the candidate fix (the one swappable step).
             head = ""
@@ -408,9 +409,7 @@ def run_repo_patch_task(inst: dict, *, client=None, model="", run_cfg=None, refe
                     return _fail("gold patch did not apply", log, image, digest, f2p, t0)
             elif agent:
                 head = _run_agent(sb, inst, client, model, run_cfg, max_turns, log)
-                # the agent must not tamper with the graded tests — revert its edits to those files
-                for fpath in patched_files(inst.get("test_patch", "")):
-                    sb.exec(f"git checkout -- {shlex.quote(fpath)} 2>/dev/null || true")
+                _revert_test_tampering(sb, inst, log)
             else:  # one-shot oracle
                 patch = _oracle_patch(sb, inst, client, model, run_cfg, log)
                 head = "PATCH:\n" + patch[:2000]
@@ -441,12 +440,13 @@ def run_repo_patch_task(inst: dict, *, client=None, model="", run_cfg=None, refe
             res_ok = resolved(results, f2p, p2p)
             n_f2p = sum(1 for t in f2p if results.get(t) == "passed")
             log.append(f"$ {cmd[:120]}\n{(r.stdout or '')[-1500:]}\n{(r.stderr or '')[-800:]}")
-            # no parseable test results => the suite never ran (collection/dep failure). In generic
-            # mode this usually means the repo's test deps aren't installed — prebuilt images fix it.
+            # no parseable test results => the suite never ran (collection/dep failure). That is
+            # NOT a wrong patch — scoring it 0.0 systematically understates models run without
+            # prebuilt images (review R10). `unscored` tells the caller to record a skip, not a row.
             err = None if results else ("no tests ran — generic setup likely missing this repo's test "
                                         "deps; use a prebuilt image (instance `image`)")
             return {
-                "resolved": res_ok, "final": 1.0 if res_ok else 0.0,
+                "resolved": res_ok, "final": 1.0 if res_ok else 0.0, "unscored": not results,
                 "passed": n_f2p, "total": len(f2p) or 1, "error": err,
                 "transcript": (head + "\n\nLOG:\n" + "\n".join(log))[-8000:],
                 "env": {"provider": "docker", "image": image, "image_digest": digest, "setup": mode,
@@ -457,8 +457,37 @@ def run_repo_patch_task(inst: dict, *, client=None, model="", run_cfg=None, refe
         return _fail(f"{type(e).__name__}: {e}", log, image, "?", f2p, t0)
 
 
-def _fail(msg, log, image, digest, f2p, t0, transcript="") -> dict:
+# pytest collection/config machinery the agent must not control: editing (or creating) any of
+# these can force green without touching a graded test file — skip/xfail via conftest, addopts
+# via the .ini/.cfg/.toml files, import-time stubbing via sitecustomize.
+_TEST_INFRA = {"conftest.py", "pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml",
+               "sitecustomize.py", "usercustomize.py"}
+
+
+def _revert_test_tampering(sb, inst, log: list) -> None:
+    """After the agent loop: revert edits to the graded test files AND any test-infra files, and
+    delete infra files the agent CREATED (git checkout can't remove untracked files) — review R9.
+    A legitimate fix landing in one of these is essentially unheard of in SWE-bench; when it
+    happens the revert under-scores (conservative), never over-scores."""
+    for fpath in patched_files(inst.get("test_patch", "")):
+        sb.exec(f"git checkout -- {shlex.quote(fpath)} 2>/dev/null || true")
+    changed = (sb.exec("git diff --name-only HEAD").stdout or "").splitlines()
+    created = (sb.exec("git ls-files --others --exclude-standard").stdout or "").splitlines()
+    for f in (x.strip() for x in changed):
+        if f and f.rsplit("/", 1)[-1] in _TEST_INFRA:
+            log.append(f"reverted test-infra edit: {f}")
+            sb.exec(f"git checkout -- {shlex.quote(f)} 2>/dev/null || true")
+    for f in (x.strip() for x in created):
+        if f and f.rsplit("/", 1)[-1] in _TEST_INFRA:
+            log.append(f"removed created test-infra file: {f}")
+            sb.exec(f"rm -f {shlex.quote(f)}")
+
+
+def _fail(msg, log, image, digest, f2p, t0, transcript="", unscored=False) -> dict:
+    """A failed task. `unscored=True` marks failures that happened BEFORE the model could act
+    (environment problems, not wrong patches) — the caller records a skip instead of a 0.0 row."""
     return {"resolved": False, "final": 0.0, "passed": 0, "total": len(f2p) or 1, "error": msg,
+            "unscored": unscored,
             "transcript": (transcript + "\n" + "\n".join(log))[-8000:],
             "env": {"provider": "docker", "image": image, "image_digest": digest,
                     "error": msg, "duration_s": round(time.time() - t0, 1)}}
