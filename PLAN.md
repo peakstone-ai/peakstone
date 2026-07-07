@@ -406,15 +406,20 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
    pid-ns 4ebb1be + RLIMIT 6957d8a hardening.)*
 
 **B. Funnel + web (cheap, high-visibility)**
-7. ☐ **Fix /submit**: public API base URL (split from the internal one) + current `peakstone` CLI
+7. ✅ **Fix /submit**: public API base URL (split from the internal one) + current `peakstone` CLI
    commands — the submission funnel is unusable as rendered. [R26, R33]
+   *(25281d6: new `peakstone submit` verb; /submit rewritten around jobs-add + judge-chaining;
+   NEXT_PUBLIC_API_PUBLIC_URL split — internal url never renders; ApiDown genericized.)*
 8. ✅ **`peakstone check`** — the CI regression gate (vision §7 Idea 1, the ignition play): compare
    against the user's own previous bundle, exit non-zero on regression; GH Action wrapper.
    *(725d8ff, in README with a GH Actions example.)*
-9. ☐ Web hygiene: discriminated fetch result + real 404s, single filter-param list, `revalidate`
+9. ◐ Web hygiene: discriminated fetch result + real 404s, single filter-param list, `revalidate`
    instead of `force-dynamic`, fetch timeouts, rate limiting at the proxy, leaderboard aggregation
    moved into SQL. Explain seed tiers + tier migration on /challenges; show which suite the board
-   is scoped to. [R15, R23–R25, R27, R32–R33]
+   is scoped to. [R15, R23–R25, R27, R32–R33] *(R15 done, 70b6dd8: app-level rate limit + per-key
+   quota + 30s response cache; web fetches revalidate 30s + 5s timeout — SQL aggregation deferred,
+   the cache removes the per-view cost. R16 done too (account trim, timestamped admin sigs,
+   capped transcripts). Remaining: R23–R25/R27 web errors/types/dedup + R32–R33 naming/content.)*
 
 **C. Engine/daemon refactors**
 10. ☐ `runner.main()` → per-scoring-mode handlers returning a typed result row (the 750-line
