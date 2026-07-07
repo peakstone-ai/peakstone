@@ -423,27 +423,32 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
    capped transcripts). Remaining: R23–R25/R27 web errors/types/dedup + R32–R33 naming/content.)*
 
 **C. Engine/daemon refactors**
-10. ◐ `runner.main()` → per-scoring-mode handlers returning a typed result row (the 750-line
+10. ✅ `runner.main()` → per-scoring-mode handlers returning a typed result row (the 750-line
     god-function; fixes several attribution bugs on the way). [R20] *(27daf0c: the R20 attribution
-    bugs are fixed in place — all-branch loop streaks, first-attempt loop labels, _PipeSafe on
-    every entry point, docs truthed. The structural split into typed handlers remains.)*
+    bugs fixed in place — all-branch loop streaks, first-attempt loop labels, _PipeSafe on every
+    entry point. 16ccf62: the structural split — engine/handlers.py, one handler per scoring mode
+    returning a typed RowResult; main() is a thin loop owning streak/skip bookkeeping; verified
+    behavior-preserving by diffing a reference run row-for-row against HEAD.)*
 11. ✅ Daemon lifecycle: shutdown kills the in-flight runner; drain deadline + proxy read timeout;
     `interrupted` jobs re-queueable; orphan llama-server reconciliation at startup. [R17–R19]
     *(7cb83fe: aclose kills the runner first; 60s drain deadline + 600s proxy read timeout;
     running jobs re-queue on startup; /props identity check refuses foreign servers. Bonus:
     `peakstone serve --stop|--restart`, POST /admin/shutdown, and a `d` restart binding on the
     TUI queue screen — verified live on this box.)*
-12. ◐ Shared runner↔TUI stream-protocol module (JSON lines, not `" | "` parsing); split
+12. ✅ Shared runner↔TUI stream-protocol module (JSON lines, not `" | "` parsing); split
     `dashboard/app.py`; remove the disconnected preflight free-GPU path. [R21]
     *(75f80ea: engine/streamproto.py is the one GEN_* declaration; SSE tail emits whole lines only;
     GET /jobs/{id}/bundle + client fetch (remote-daemon safe); preflight kill lever removed.
-    Remaining: the dashboard/app.py file split — cosmetic, fold into the C10 session.)*
-13. ◐ Unify `EnvChallenge` with `Challenge` (one base + `kind`; content-hash env challenge dirs so
+    e4d5f37: app.py split — dashboard/ui.py (shared presentation vocabulary) + dashboard/screens/
+    one module per screen family; app.py keeps the shell at ~950 lines, re-exports preserved.)*
+13. ✅ Unify `EnvChallenge` with `Challenge` (one base + `kind`; content-hash env challenge dirs so
     agentic rows can be verified and held-out-dated) and wire `resolve_env` into
-    `--level standard` — the planned env-in-standard work. [R7, R28] *(FUNCTIONAL halves all done
-    and verified on the re-seeded bundles: wiring 7b70e8f/99a47a5, env content-hash e14c3e0, and
-    env rows carry published_at (all 8 env metas dated) → agentic held-out computes. Remaining:
-    the structural one-Challenge-base merge — same surgery class as C10, do them together.)*
+    `--level standard` — the planned env-in-standard work. [R7, R28] *(FUNCTIONAL halves verified
+    on the re-seeded bundles: wiring 7b70e8f/99a47a5, env content-hash e14c3e0, env rows dated →
+    agentic held-out computes. 6ef1d36: the structural merge — Challenge.kind ("code"|"env"),
+    EnvChallenge subclasses Challenge, one corpus walk in challenges.load_challenges with
+    load_env_challenges as the kind="env" alias; resolve/resolve_env selection semantics
+    deliberately untouched (suite hashes pin them) — standard-level selection verified unchanged.)*
 14. ✅ `importers/_common.py` (fetch/slug/meta/stdin-shim dedupe); one axis-taxonomy module shared by
     report/bundle/API; config overlay honored uniformly; env-provider cleanup leaks. [R22, R29–R31]
     *(27daf0c R22 leak sweep; 05ff865 R29 one-taxonomy + R31 overlay/locked-caches/merge-identity;
