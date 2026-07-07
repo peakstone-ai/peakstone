@@ -30,29 +30,19 @@ import datetime as dt
 import json
 import shutil
 import sys
-import urllib.request
 from pathlib import Path
 
 from .. import paths
+from ._common import hf_rows, meta_toml, stdin_test, toml_escape
 from .humaneval import _load_records, _slug
 
 HF_DATASET = "open-r1/codeforces"
-ROWS_API = "https://datasets-server.huggingface.co/rows"
 
 
 def _fetch_rows(config: str = "verifiable", splits=("train", "test")) -> list[dict]:
     rows: list[dict] = []
     for split in splits:
-        off = 0
-        while True:
-            u = (f"{ROWS_API}?dataset={HF_DATASET}&config={config}&split={split}"
-                 f"&offset={off}&length=100")
-            with urllib.request.urlopen(u, timeout=60) as r:  # noqa: S310 (trusted host)
-                batch = [x["row"] for x in json.load(r)["rows"]]
-            rows += batch
-            if len(batch) < 100:
-                break
-            off += 100
+        rows += hf_rows(HF_DATASET, config, split)
     return rows
 
 
@@ -100,25 +90,13 @@ def _difficulty(rating) -> int:
     return 2 if rating <= 1000 else 3 if rating <= 1400 else 4 if rating <= 1900 else 5
 
 
-def _toml_str(s: str) -> str:
-    """Escape a value for a TOML basic string (Codeforces titles can contain quotes/backslashes)."""
-    return str(s).replace("\\", "\\\\").replace('"', '\\"')
+# Codeforces titles can contain quotes/backslashes; kept under the old name for callers/tests.
+_toml_str = toml_escape
 
 
 def _meta(cid, title, difficulty, published_at, timeout) -> str:
-    return (
-        f'id            = "{cid}"\n'
-        f'title         = "{_toml_str(title)}"\n'
-        f'language      = "python"\n'
-        f"difficulty    = {difficulty}\n"
-        f'category      = "code-correctness"\n'
-        f'type          = "algorithms"\n'
-        f'scoring       = "tests"\n'
-        f'solution_file = "solution.py"\n'
-        f"timeout       = {timeout}\n"
-        f'published_at  = "{published_at}"\n'
-        f'published_at_source = "upstream"\n'
-    )
+    return meta_toml(cid, _toml_str(title), "python", difficulty, "code-correctness",
+                     "algorithms", "tests", "solution.py", timeout, published_at)
 
 
 def _spec(r: dict, n_cases: int, dropped: int) -> str:
@@ -140,28 +118,7 @@ def _spec(r: dict, n_cases: int, dropped: int) -> str:
 
 
 def _stdin_test(ident: str, task_id: str) -> str:
-    return f'''# Auto-generated from open-r1/codeforces {task_id}. Do not edit by hand.
-# stdin/stdout problem: run solution.py as a subprocess, compare stdout per case.
-import json, pathlib, subprocess, sys
-import pytest
-
-_D = pathlib.Path(__file__).parent
-_CASES = json.loads((_D / "cases.json").read_text())["cases"]
-
-
-def _norm(s: str) -> str:
-    return "\\n".join(line.rstrip() for line in s.strip("\\n").split("\\n")).rstrip()
-
-
-@pytest.mark.parametrize("i", range(len(_CASES)))
-def test_{ident}(i):
-    c = _CASES[i]
-    p = subprocess.run([sys.executable, str(_D / "solution.py")],
-                       input=c["input"], capture_output=True, text=True, timeout=15)
-    assert p.returncode == 0, f"runtime error: {{p.stderr[-800:]}}"
-    assert _norm(p.stdout) == _norm(c["output"]), (
-        f"input={{c['input']!r}} expected={{c['output']!r}} got={{p.stdout!r}}")
-'''
+    return stdin_test(ident, HF_DATASET, task_id)
 
 
 def import_suite(records, out_root, suite, start_date, end_date, max_cases, timeout, limit):

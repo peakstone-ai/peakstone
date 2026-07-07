@@ -45,6 +45,7 @@ import urllib.request
 from pathlib import Path
 
 from .. import paths
+from ._common import meta_toml
 
 # OpenAI's canonical HumanEval data, MIT-licensed, pinned to the released file.
 DEFAULT_SOURCE = "https://github.com/openai/human-eval/raw/master/data/HumanEval.jsonl.gz"
@@ -99,19 +100,8 @@ PUBLISHED_AT = "2021-07-07"
 
 
 def _meta(cid: str, title: str, difficulty: int, ctype: str, timeout: int) -> str:
-    return (
-        f'id            = "{cid}"\n'
-        f'title         = "{title}"\n'
-        f'language      = "python"\n'
-        f"difficulty    = {difficulty}\n"
-        f'category      = "code-correctness"\n'
-        f'type          = "{ctype}"\n'
-        f'scoring       = "tests"\n'
-        f'solution_file = "solution.py"\n'
-        f"timeout       = {timeout}\n"
-        f'published_at  = "{PUBLISHED_AT}"\n'
-        f'published_at_source = "upstream"\n'
-    )
+    return meta_toml(cid, title, "python", difficulty, "code-correctness", ctype,
+                     "tests", "solution.py", timeout, PUBLISHED_AT)
 
 
 def _spec(prompt: str, source_name: str, task_id: str) -> str:

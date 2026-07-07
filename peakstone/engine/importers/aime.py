@@ -22,17 +22,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import shutil
 import sys
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
 from .. import paths
+from ._common import hf_rows, meta_toml
 from .humaneval import _slug
-
-ROWS_API = "https://datasets-server.huggingface.co/rows"
 
 
 @dataclass
@@ -54,17 +51,7 @@ DEFAULT_SOURCES = [
 
 
 def _fetch(src: Source) -> list[dict]:
-    rows: list[dict] = []
-    off = 0
-    while True:
-        u = (f"{ROWS_API}?dataset={src.dataset}&config={src.config}&split={src.split}"
-             f"&offset={off}&length=100")
-        with urllib.request.urlopen(u, timeout=60) as r:  # noqa: S310 (trusted host)
-            batch = [x["row"] for x in json.load(r)["rows"]]
-        rows += batch
-        if len(batch) < 100:
-            return rows
-        off += 100
+    return hf_rows(src.dataset, src.config, src.split)
 
 
 def _difficulty(i: int) -> int:
@@ -74,20 +61,8 @@ def _difficulty(i: int) -> int:
 
 
 def _meta(cid, title, difficulty, answer, published_at, timeout) -> str:
-    return (
-        f'id            = "{cid}"\n'
-        f'title         = "{title}"\n'
-        f'language      = "text"\n'
-        f"difficulty    = {difficulty}\n"
-        f'category      = "math"\n'
-        f'type          = "math"\n'
-        f'scoring       = "answer-match"\n'
-        f'expect        = "{answer}"\n'        # the gold integer answer
-        f'solution_file = ""\n'
-        f"timeout       = {timeout}\n"
-        f'published_at  = "{published_at}"\n'
-        f'published_at_source = "upstream"\n'
-    )
+    return meta_toml(cid, title, "text", difficulty, "math", "math", "answer-match",
+                     "", timeout, published_at, expect=answer)   # expect: the gold integer answer
 
 
 def _spec(problem: str, src: Source, idx: int) -> str:

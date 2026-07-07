@@ -42,14 +42,13 @@ import importlib.util
 import json
 import shutil
 import sys
-import urllib.request
 from pathlib import Path
 
 from .. import paths
+from ._common import hf_rows, meta_toml
 from .humaneval import _load_records, _slug
 
 HF_DATASET = "bigcode/bigcodebench"
-ROWS_API = "https://datasets-server.huggingface.co/rows"
 
 # libs entries whose import name differs from the dependency name would go here;
 # BigCodeBench already lists import-style names (PIL, bs4, cv2, sklearn, ...).
@@ -74,17 +73,7 @@ def _importable(name: str) -> bool:
 
 def _fetch_hf_rows(version: str) -> list[dict]:
     """Page the datasets-server rows API for the whole split (100 rows/call)."""
-    rows: list[dict] = []
-    off = 0
-    while True:
-        u = (f"{ROWS_API}?dataset={HF_DATASET}&config=default&split={version}"
-             f"&offset={off}&length=100")
-        with urllib.request.urlopen(u, timeout=60) as r:  # noqa: S310 (trusted host)
-            batch = [x["row"] for x in json.load(r)["rows"]]
-        rows += batch
-        if len(batch) < 100:
-            return rows
-        off += 100
+    return hf_rows(HF_DATASET, "default", version)
 
 
 def _num(task_id: str) -> str:
@@ -114,20 +103,9 @@ DEFAULT_PUBLISHED_AT = "2024-06-01"
 
 def _meta(cid: str, title: str, difficulty: int, libs: list[str], timeout: int,
           published_at: str) -> str:
-    return (
-        f"# requires: {', '.join(libs) or 'stdlib only'}\n"
-        f'id            = "{cid}"\n'
-        f'title         = "{title}"\n'
-        f'language      = "python"\n'
-        f"difficulty    = {difficulty}\n"
-        f'category      = "library-fluency"\n'
-        f'type          = "lib-knowledge"\n'
-        f'scoring       = "tests"\n'
-        f'solution_file = "solution.py"\n'
-        f"timeout       = {timeout}\n"
-        f'published_at  = "{published_at}"\n'
-        f'published_at_source = "upstream"\n'
-    )
+    return meta_toml(cid, title, "python", difficulty, "library-fluency", "lib-knowledge",
+                     "tests", "solution.py", timeout, published_at,
+                     header=f"# requires: {', '.join(libs) or 'stdlib only'}\n")
 
 
 def _spec(complete_prompt: str, libs: list[str], task_id: str) -> str:

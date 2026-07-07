@@ -22,14 +22,13 @@ import argparse
 import json
 import shutil
 import sys
-import urllib.request
 from pathlib import Path
 
 from .. import paths
+from ._common import hf_rows, meta_toml, toml_escape
 from .humaneval import _slug
 
 HF_DATASET = "SWE-bench-Live/SWE-bench-Live"
-ROWS_API = "https://datasets-server.huggingface.co/rows"
 
 # fields the harness needs; we copy these verbatim into instance.json
 _KEEP = ("instance_id", "repo", "base_commit", "patch", "test_patch", "problem_statement",
@@ -37,16 +36,7 @@ _KEEP = ("instance_id", "repo", "base_commit", "patch", "test_patch", "problem_s
 
 
 def _fetch(split: str) -> list[dict]:
-    rows: list[dict] = []
-    off = 0
-    while True:
-        u = f"{ROWS_API}?dataset={HF_DATASET}&config=default&split={split}&offset={off}&length=100"
-        with urllib.request.urlopen(u, timeout=60) as r:  # noqa: S310 (trusted host)
-            batch = [x["row"] for x in json.load(r)["rows"]]
-        rows += batch
-        if len(batch) < 100:
-            return rows
-        off += 100
+    return hf_rows(HF_DATASET, "default", split)
 
 
 def image_name(instance_id: str, namespace: str = "starryzhang") -> str:
@@ -73,20 +63,8 @@ def _difficulty(inst: dict) -> int:
 
 
 def _meta(cid, title, difficulty, published_at, timeout) -> str:
-    safe = str(title).replace("\\", "\\\\").replace('"', '\\"')[:80]
-    return (
-        f'id            = "{cid}"\n'
-        f'title         = "{safe}"\n'
-        f'language      = "python"\n'
-        f"difficulty    = {difficulty}\n"
-        f'category      = "swe"\n'
-        f'type          = "repo-patch"\n'
-        f'scoring       = "repo-patch"\n'
-        f'solution_file = ""\n'
-        f"timeout       = {timeout}\n"
-        f'published_at  = "{published_at}"\n'
-        f'published_at_source = "upstream"\n'
-    )
+    return meta_toml(cid, toml_escape(title)[:80], "python", difficulty, "swe",
+                     "repo-patch", "repo-patch", "", timeout, published_at)
 
 
 def import_suite(records, out_root, suite, start_date, end_date, timeout, limit, namespace="starryzhang"):

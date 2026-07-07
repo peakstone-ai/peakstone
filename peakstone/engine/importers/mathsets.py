@@ -37,17 +37,14 @@ stored verbatim regardless, so re-scoring costs nothing.
 from __future__ import annotations
 
 import argparse
-import json
 import shutil
 import sys
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
 from .. import paths
+from ._common import meta_toml, toml_escape_multiline
 from .humaneval import _slug
-
-ROWS_API = "https://datasets-server.huggingface.co/rows"
 
 
 @dataclass
@@ -138,28 +135,14 @@ def _difficulty(src: Source, row: dict) -> int:
     return 3
 
 
-def _toml_escape(s: str) -> str:
-    """Escape a value for a basic (double-quoted) TOML string — MATH answers carry backslashes,
-    quotes and the occasional newline."""
-    return (s.replace("\\", "\\\\").replace('"', '\\"')
-             .replace("\n", "\\n").replace("\t", "\\t").replace("\r", ""))
+# MATH answers carry backslashes, quotes and the occasional newline; kept under the old name.
+_toml_escape = toml_escape_multiline
 
 
 def _meta(cid, title, difficulty, answer, published_at, timeout) -> str:
-    return (
-        f'id            = "{cid}"\n'
-        f'title         = "{title}"\n'
-        f'language      = "text"\n'
-        f"difficulty    = {difficulty}\n"
-        f'category      = "math"\n'
-        f'type          = "math"\n'
-        f'scoring       = "answer-match"\n'
-        f'expect        = "{_toml_escape(answer)}"\n'    # the gold final answer, verbatim
-        f'solution_file = ""\n'
-        f"timeout       = {timeout}\n"
-        f'published_at  = "{published_at}"\n'
-        f'published_at_source = "upstream"\n'
-    )
+    return meta_toml(cid, title, "text", difficulty, "math", "math", "answer-match",
+                     "", timeout, published_at,
+                     expect=_toml_escape(answer))   # expect: the gold final answer, verbatim
 
 
 def _spec(problem: str, src: Source, idx: int) -> str:

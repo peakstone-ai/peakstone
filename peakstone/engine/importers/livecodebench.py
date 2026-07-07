@@ -40,6 +40,7 @@ import zlib
 from pathlib import Path
 
 from .. import paths
+from ._common import meta_toml, stdin_test
 from .humaneval import _slug
 
 HF_DATASET = "livecodebench/code_generation_lite"
@@ -93,21 +94,11 @@ def _difficulty(d: str) -> int:
 
 def _meta(cid: str, title: str, difficulty: int, platform: str, mode: str, timeout: int,
           published_at: str) -> str:
-    return (
-        f"# {platform} / {mode}\n"
-        f'id            = "{cid}"\n'
-        f'title         = "{title}"\n'
-        f'language      = "python"\n'
-        f"difficulty    = {difficulty}\n"
-        f'category      = "code-correctness"\n'
-        f'type          = "algorithms"\n'
-        f'scoring       = "tests"\n'
-        f'solution_file = "solution.py"\n'
-        f"timeout       = {timeout}\n"
-        # the real contest date — LiveCodeBench's whole point: the per-problem contamination boundary
-        f'published_at  = "{published_at}"\n'
-        f'published_at_source = "upstream"\n'
-    )
+    # published_at is the real contest date — LiveCodeBench's whole point: the
+    # per-problem contamination boundary.
+    return meta_toml(cid, title, "python", difficulty, "code-correctness", "algorithms",
+                     "tests", "solution.py", timeout, published_at,
+                     header=f"# {platform} / {mode}\n")
 
 
 def _spec(rec: dict, mode: str, n_cases: int, dropped: int) -> str:
@@ -127,28 +118,7 @@ def _spec(rec: dict, mode: str, n_cases: int, dropped: int) -> str:
 
 
 def _stdin_test(ident: str, question_id: str) -> str:
-    return f'''# Auto-generated from LiveCodeBench {question_id}. Do not edit by hand.
-# stdin/stdout problem: run solution.py as a subprocess, compare stdout per case.
-import json, pathlib, subprocess, sys
-import pytest
-
-_D = pathlib.Path(__file__).parent
-_CASES = json.loads((_D / "cases.json").read_text())["cases"]
-
-
-def _norm(s: str) -> str:
-    return "\\n".join(line.rstrip() for line in s.strip("\\n").split("\\n")).rstrip()
-
-
-@pytest.mark.parametrize("i", range(len(_CASES)))
-def test_{ident}(i):
-    c = _CASES[i]
-    p = subprocess.run([sys.executable, str(_D / "solution.py")],
-                       input=c["input"], capture_output=True, text=True, timeout=15)
-    assert p.returncode == 0, f"runtime error: {{p.stderr[-800:]}}"
-    assert _norm(p.stdout) == _norm(c["output"]), (
-        f"input={{c['input']!r}} expected={{c['output']!r}} got={{p.stdout!r}}")
-'''
+    return stdin_test(ident, "LiveCodeBench", question_id)
 
 
 def _functional_test(ident: str, question_id: str, fn: str, preamble: str) -> str:
