@@ -1,9 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getRun } from "@/lib/api";
-import { ApiDown, ScoreBar, Trust } from "@/components/ui";
+import { ApiDown, DataTable, ScoreBar, Trust } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
+
+export async function generateMetadata({ params }: { params: Promise<{ hash: string }> }) {
+  const { hash } = await params;
+  return { title: `Run ${decodeURIComponent(hash).slice(0, 12)} — Peakstone` };
+}
 
 export default async function RunPage({
   params,
@@ -50,18 +55,8 @@ export default async function RunPage({
 
       <p className="mt-4 text-sm text-stone-500">Select a challenge to see the model’s proposed solution.</p>
       <div className="mt-2 overflow-x-auto">
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr className="text-left text-stone-500">
-              <th className="py-2 pr-4 font-medium">Challenge</th>
-              <th className="py-2 pr-4 font-medium">Category</th>
-              <th className="py-2 pr-4 font-medium">Score</th>
-              <th className="py-2 pr-4 font-medium">Tests</th>
-              <th className="py-2 pr-4 font-medium">Note</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.results.map((r) => (
+        <DataTable head={["Challenge", "Category", "Score", "Tests", "Note"]}>
+          {data.results.map((r) => (
               <tr key={r.challenge} className="border-t border-stone-800 hover:bg-stone-900/40">
                 <td className="py-2 pr-4">
                   <Link
@@ -80,9 +75,8 @@ export default async function RunPage({
                 </td>
                 <td className="py-2 pr-4 text-xs text-amber-400/80">{r.error ?? ""}</td>
               </tr>
-            ))}
-          </tbody>
-        </table>
+          ))}
+        </DataTable>
       </div>
     </main>
   );

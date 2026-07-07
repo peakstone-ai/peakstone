@@ -1,15 +1,11 @@
 import { getProposals } from "@/lib/api";
-import { ApiDown } from "@/components/ui";
+import { ApiDown, CodeBlock, DataTable } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Challenge proposals — Peakstone" };
 
 function Code({ children }: { children: string }) {
-  return (
-    <pre className="my-2 overflow-x-auto rounded-lg border border-stone-800 bg-stone-900 p-3 text-sm text-stone-200">
-      <code>{children}</code>
-    </pre>
-  );
+  return <CodeBlock text={children} className="my-2 text-sm" />;
 }
 
 function StatusBadge({ s }: { s: string }) {
@@ -50,19 +46,8 @@ curl -X POST $PEAKSTONE_API/proposals -H 'content-type: application/json' --data
         <p className="mt-2 text-sm text-stone-400">No proposals yet.</p>
       ) : (
         <div className="mt-3 overflow-x-auto">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="text-left text-stone-500">
-                <th className="py-2 pr-4 font-medium">Slug</th>
-                <th className="py-2 pr-4 font-medium">Lang</th>
-                <th className="py-2 pr-4 font-medium">Difficulty</th>
-                <th className="py-2 pr-4 font-medium">Reference</th>
-                <th className="py-2 pr-4 font-medium">Status</th>
-                <th className="py-2 pr-4 font-medium">Submitted</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.proposals.map((p) => (
+          <DataTable head={["Slug", "Lang", "Difficulty", "Reference", "Status", "Submitted"]}>
+            {data.proposals.map((p) => (
                 <tr key={p.id} className="border-t border-stone-800">
                   <td className="py-2 pr-4 text-stone-100">{p.slug}</td>
                   <td className="py-2 pr-4 text-stone-400">{p.language ?? "—"}</td>
@@ -82,8 +67,7 @@ curl -X POST $PEAKSTONE_API/proposals -H 'content-type: application/json' --data
                   <td className="py-2 pr-4 text-stone-500">{p.created_at.slice(0, 10)}</td>
                 </tr>
               ))}
-            </tbody>
-          </table>
+          </DataTable>
           <p className="mt-3 text-xs text-stone-600">{data.count} proposals.</p>
         </div>
       )}

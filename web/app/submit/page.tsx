@@ -1,13 +1,10 @@
 import { PUBLIC_API } from "@/lib/api";
+import { CodeBlock } from "@/components/ui";
 
 export const metadata = { title: "Submit a run — Peakstone" };
 
 function Code({ children }: { children: string }) {
-  return (
-    <pre className="my-3 overflow-x-auto rounded-lg border border-stone-800 bg-stone-900 p-3 text-sm text-stone-200">
-      <code>{children}</code>
-    </pre>
-  );
+  return <CodeBlock text={children} className="my-3 text-sm" />;
 }
 
 export default function SubmitPage() {

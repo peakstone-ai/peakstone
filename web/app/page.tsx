@@ -59,7 +59,7 @@ export default async function Home() {
         {!apiUp ? (
           <ApiDown />
         ) : (
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <Stat label="Models ranked" value={nRanked} />
             <Stat label="Challenges" value={challenges.count} />
             <Stat label="Scored results" value={nResults} />

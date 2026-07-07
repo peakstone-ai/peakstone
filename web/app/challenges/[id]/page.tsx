@@ -1,9 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getChallenge } from "@/lib/api";
-import { ApiDown, ScoreBar, Trust } from "@/components/ui";
+import { ApiDown, DataTable, ScoreBar, Trust } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
+
+export async function generateMetadata({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  return { title: `${decodeURIComponent(id)} — Peakstone` };
+}
 
 export default async function ChallengePage({
   params,
@@ -39,18 +44,8 @@ export default async function ChallengePage({
         <p className="mt-2 text-sm text-stone-400">No runs have attempted this challenge yet.</p>
       ) : (
         <div className="mt-3 overflow-x-auto">
-          <table className="w-full border-collapse text-sm">
-            <thead>
-              <tr className="text-left text-stone-500">
-                <th className="py-2 pr-2 font-medium">#</th>
-                <th className="py-2 pr-4 font-medium">Model</th>
-                <th className="py-2 pr-4 font-medium">Score</th>
-                <th className="py-2 pr-4 font-medium">Tests</th>
-                <th className="py-2 pr-4 font-medium">Run</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.results.map((r, i) => (
+          <DataTable head={["#", "Model", "Score", "Tests", "Run"]}>
+            {data.results.map((r, i) => (
                 <tr key={r.family} className="border-t border-stone-800">
                   <td className="py-2 pr-2 tabular-nums text-stone-500">{i + 1}</td>
                   <td className="py-2 pr-4">
@@ -71,9 +66,8 @@ export default async function ChallengePage({
                     {r.run.artifact} · {r.run.vram_gb ?? "?"} GB · <Trust t={r.run.trust_tier} />
                   </td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+            ))}
+          </DataTable>
           <p className="mt-3 text-xs text-stone-600">{data.n_families} models attempted.</p>
         </div>
       )}

@@ -1,9 +1,14 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getModel } from "@/lib/api";
-import { ApiDown, ScoreBar, Trust } from "@/components/ui";
+import { ApiDown, DataTable, ScoreBar, Trust } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
+
+export async function generateMetadata({ params }: { params: Promise<{ family: string }> }) {
+  const { family } = await params;
+  return { title: `${decodeURIComponent(family)} — Peakstone` };
+}
 
 export default async function ModelPage({
   params,
@@ -36,22 +41,14 @@ export default async function ModelPage({
       </p>
 
       <div className="mt-5 overflow-x-auto">
-        <table className="w-full border-collapse text-sm">
-          <thead>
-            <tr className="text-left text-stone-500">
-              <th className="py-2 pr-4 font-medium">Quant</th>
-              <th className="py-2 pr-4 font-medium">Ctx</th>
-              <th className="py-2 pr-4 font-medium">VRAM</th>
-              <th className="py-2 pr-4 font-medium">Code score</th>
-              <th className="py-2 pr-4 font-medium">Safety</th>
-              <th className="py-2 pr-4 font-medium">Efficiency</th>
-              <th className="py-2 pr-4 font-medium">Engine</th>
-              <th className="py-2 pr-4 font-medium">Trust</th>
-              <th className="py-2 pr-4 font-medium">Suite</th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.runs.map((r) => (
+        <DataTable
+          head={[
+            { label: "Artifact", title: "the exact model file benchmarked (quant build)" },
+            "Ctx", "VRAM", "Code score", "Safety", "Efficiency", "Engine", "Trust",
+            { label: "Suite", title: "the level (versioned challenge selection) the run executed" },
+          ]}
+        >
+          {data.runs.map((r) => (
               <tr key={r.run.bundle_hash} className="border-t border-stone-800">
                 <td className="py-2 pr-4">
                   <Link
@@ -89,9 +86,8 @@ export default async function ModelPage({
                 </td>
                 <td className="py-2 pr-4 text-stone-500">{r.suite}</td>
               </tr>
-            ))}
-          </tbody>
-        </table>
+          ))}
+        </DataTable>
       </div>
     </main>
   );

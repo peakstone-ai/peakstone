@@ -1,16 +1,21 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { getRunChallenge, getChallengeSource } from "@/lib/api";
-import { ApiDown, ScoreBar } from "@/components/ui";
+import { ApiDown, CodeBlock, ScoreBar } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
+export async function generateMetadata({
+  params,
+}: {
+  params: Promise<{ hash: string; challenge: string }>;
+}) {
+  const { hash, challenge } = await params;
+  return { title: `${decodeURIComponent(challenge)} · run ${decodeURIComponent(hash).slice(0, 12)} — Peakstone` };
+}
+
 function Code({ text }: { text: string }) {
-  return (
-    <pre className="mt-1 overflow-x-auto whitespace-pre-wrap rounded bg-stone-900 p-3 text-xs leading-relaxed text-stone-200">
-      {text}
-    </pre>
-  );
+  return <CodeBlock text={text} className="mt-1 whitespace-pre-wrap text-xs leading-relaxed" />;
 }
 
 // A plain section (always open) or a collapsible one for long/secondary content.
