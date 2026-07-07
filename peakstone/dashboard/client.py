@@ -96,6 +96,13 @@ def get_run_challenge(base_url: str, bundle_hash: str, challenge_id: str, *, tim
                 f"/challenge/{urllib.parse.quote(challenge_id, safe='')}", {}, timeout)
 
 
+def get_reproduce(base_url: str, bundle_hash: str, *, timeout: float = 30) -> dict:
+    """Everything `peakstone reproduce` needs: {"bundle": <verbatim signed bundle>, "trust_tier",
+    "reproductions"}. The bundle MUST be re-verified client-side (engine.repro.verify_bundle)
+    before it defines a run."""
+    return _get(base_url, f"/reproduce/{urllib.parse.quote(bundle_hash, safe='')}", {}, timeout)
+
+
 def submit_bundle(base_url: str, bundle: dict, *, timeout: float = 30) -> tuple[int, str]:
     """POST a signed result bundle. Returns (http_status, detail); 201 ok, 409 already submitted,
     400 rejected. Raises APIError only if the server is unreachable."""

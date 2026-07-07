@@ -921,6 +921,9 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "submit":
         from peakstone.dashboard.submit import submit_main   # POST a signed bundle to the board
         sys.exit(submit_main(sys.argv[2:]))
+    if len(sys.argv) > 1 and sys.argv[1] == "reproduce":
+        from peakstone.dashboard.reproduce import reproduce_main   # verify a published run locally
+        sys.exit(reproduce_main(sys.argv[2:]))
 
     ap = argparse.ArgumentParser(prog="peakstone", description="Peakstone hardware dashboard")
     ap.add_argument("--version", action="version", version=f"peakstone {eng_versions.pkg_version()}")
