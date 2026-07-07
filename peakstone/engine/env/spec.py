@@ -15,19 +15,19 @@ import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from ..challenges import Challenge, load_challenges
 from .base import EnvSpec, NodeSpec
 from .capabilities import Link, NodeNet, Requirements
 
 
 @dataclass
-class EnvChallenge:
-    id: str
-    title: str
-    difficulty: int
-    category: str
-    dir: Path
-    spec: str
-    env: EnvSpec
+class EnvChallenge(Challenge):
+    """A goal-state-env challenge: Challenge with kind="env" (one base + kind — review R28) plus
+    the multi-machine bits — the node topology, the agent turn budget, and a deterministic
+    verifier. NOTE the per-node file layout: fixtures()/reference_files() return
+    {node: {path: content}}, one level deeper than a coding challenge's flat {path: content}."""
+    kind: str = "env"
+    env: EnvSpec | None = None
     max_turns: int = 12
     verify_path: Path = field(default=None)  # type: ignore[assignment]
 
@@ -87,20 +87,19 @@ def load_env_challenge(d: Path) -> EnvChallenge:
     m = tomllib.loads((d / "meta.toml").read_text())
     timeout = int(m.get("timeout", 20))
     return EnvChallenge(
-        id=m["id"], title=m.get("title", m["id"]), difficulty=int(m.get("difficulty", 3)),
-        category=m.get("category", "multi-machine"), dir=d,
+        id=m["id"], title=m.get("title", m["id"]), language="multi",
+        difficulty=int(m.get("difficulty", 3)),
+        category=m.get("category", "multi-machine"), scoring="goal-state",
+        solution_file="", timeout=timeout, dir=d,
         spec=(d / "spec.md").read_text() if (d / "spec.md").exists() else "",
+        ctype=m.get("type", "goal-state-env"),
+        published_at=str(m.get("published_at", "")),
+        published_at_source=m.get("published_at_source", ""),
         env=load_env_spec(d / "env.toml", m["id"], timeout),
         max_turns=int(m.get("max_turns", 12)), verify_path=d / "verify.py",
     )
 
 
 def load_env_challenges(root: Path) -> list[EnvChallenge]:
-    out = []
-    for meta in sorted(root.rglob("meta.toml")):
-        d = meta.parent
-        if any(part[:1] in ("_", ".") for part in d.relative_to(root).parts):
-            continue
-        if (d / "env.toml").exists() and (d / "verify.py").exists():
-            out.append(load_env_challenge(d))
-    return out
+    """The goal-state-env corpus — the kind="env" slice of the one challenge walk."""
+    return load_challenges(root, kind="env")

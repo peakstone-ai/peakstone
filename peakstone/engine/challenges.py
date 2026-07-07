@@ -51,6 +51,8 @@ class Challenge:
     timeout: int
     dir: Path
     spec: str
+    kind: str = "code"        # "code" | "env" — one base type, discriminated (review R28);
+    #                           goal-state-env challenges are env.spec.EnvChallenge (kind="env")
     ctype: str = "other"
     expect: str = ""          # for refusal challenges: "answer" | "refuse"
     min_ctx: int = 0          # long-context: minimum served context window to attempt (0 = no requirement)
@@ -78,19 +80,33 @@ class Challenge:
         return out
 
 
-def load_challenges(root: Path) -> list[Challenge]:
-    out: list[Challenge] = []
+def _active_dirs(root: Path):
+    """Every active challenge dir under root (a meta.toml parent), skipping disabled/archived
+    trees: any path component starting with "_" or "." (e.g. challenges/_archived/) is excluded
+    from the active suite."""
     for meta in sorted(root.rglob("meta.toml")):
         d = meta.parent
-        # skip disabled/archived trees: any path component starting with "_" or "." (e.g.
-        # challenges/_archived/) is excluded from the active suite.
         if any(part[:1] in ("_", ".") for part in d.relative_to(root).parts):
             continue
-        # goal-state-env (multi-machine) challenges are loaded by engine.env.spec, not here — they
-        # have an env.toml + no `language` and would otherwise break this loader.
+        yield d
+
+
+def load_challenges(root: Path, kind: str = "code") -> list[Challenge]:
+    """Load the corpus — ONE walk + skip rule for both challenge kinds (review R28). `kind`
+    selects which: "code" (default — same corpus existing consumers always saw) or "env",
+    the goal-state-env (multi-machine) challenges, discriminated on disk by an env.toml
+    topology + verify.py and constructed by engine.env.spec as EnvChallenge (a Challenge
+    subclass). env.load_env_challenges is the public alias for kind="env"."""
+    out: list[Challenge] = []
+    for d in _active_dirs(root):
         if (d / "env.toml").exists():
+            if kind == "env" and (d / "verify.py").exists():
+                from .env.spec import load_env_challenge   # lazy — env.spec subclasses Challenge
+                out.append(load_env_challenge(d))
             continue
-        m = tomllib.loads(meta.read_text())
+        if kind != "code":
+            continue
+        m = tomllib.loads((d / "meta.toml").read_text())
         spec = (d / "spec.md").read_text() if (d / "spec.md").exists() else ""
         j = m.get("judge", {})
         cat = m.get("category", "")

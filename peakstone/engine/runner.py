@@ -463,12 +463,12 @@ def main(argv=None):
         ordered = resolve_level(level, all_ch)   # manifest axis order (cheap/fast axes first)
         by_id = {c.id: c for c in all_ch}
         chs = [by_id[i] for i in ordered if i in by_id]   # run in manifest order, not filesystem order
-        # Env (goal-state) challenges live outside the coding corpus (own env.toml loader), so the
-        # level's `family = "env"` axes resolve separately; they run through the agent loop after the
+        # Env (goal-state) challenges are the kind="env" slice of the same corpus walk (one base +
+        # kind, review R28); the level's `family = "env"` axes still resolve separately (resolve_env:
+        # ids + id-ordered caps — pinned selection semantics), run through the agent loop after the
         # coding axes and land in the same results list → one bundle scores coding + agentic together.
         if any(sel.get("family") == "env" for sel in level.select) and not args.reference:
-            from .env import load_env_challenges
-            env_by_id = {c.id: c for c in load_env_challenges(Path(args.challenges_dir))}
+            env_by_id = {c.id: c for c in load_challenges(Path(args.challenges_dir), kind="env")}
             env_chs = [env_by_id[i] for i in resolve_env(level, env_by_id.values())
                        if i in env_by_id]
         # apply level settings — explicit CLI flags still win (they only ever turn things ON here).
@@ -723,7 +723,7 @@ def run_planner(args, chs, host, ports, run_cfg):
 def run_env_agent(args, host, ports, run_cfg):
     """Agentic run mode: the model drives a multi-node environment (tool loop) until the goal-state
     verifier passes. Emits goal-state-env result rows that flow to the leaderboard like coding runs."""
-    from .env import env_result_row, load_env_challenges
+    from .env import env_result_row
     from .env.agent import run_env_task
     from .env.firecracker import UnsupportedHost
 
@@ -731,7 +731,7 @@ def run_env_agent(args, host, ports, run_cfg):
     if not models:
         print("--env needs --models <model>", file=sys.stderr)
         return 1
-    chs = load_env_challenges(Path(args.challenges_dir))
+    chs = load_challenges(Path(args.challenges_dir), kind="env")
     if args.ids:
         wanted = set(_csv(args.ids))
         chs = [c for c in chs if c.id in wanted]
