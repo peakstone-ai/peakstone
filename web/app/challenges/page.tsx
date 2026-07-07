@@ -20,9 +20,16 @@ export default async function ChallengesPage() {
     <main className="mx-auto max-w-5xl px-4 py-8">
       <h1 className="text-2xl font-semibold">Challenges</h1>
       <p className="mt-1 max-w-2xl text-sm text-stone-400">
-        The verifiable corpus. <em>Pass-rate</em> is the empirical difficulty — the share of runs that
-        fully solved it. As models improve, a challenge&apos;s pass-rate climbs and it drifts down the
-        difficulty tiers; that drift is the capability story.
+        The verifiable corpus: native challenges authored for Peakstone plus imported public
+        benchmarks, each dated by when its content first became public (that date powers the
+        held-out board). The official leaderboard runs a pinned, versioned selection of these —
+        a <em>level</em> — so scores stay comparable.
+      </p>
+      <p className="mt-2 max-w-2xl text-sm text-stone-400">
+        <em>Seed tier</em> is the author&apos;s difficulty guess (1–5) when the challenge entered
+        the corpus. <em>Pass-rate</em> is the empirical difficulty — the share of runs that fully
+        solved it. As models improve, a challenge&apos;s pass-rate climbs and it migrates down the
+        tiers; that drift, challenge by challenge, is the capability story this page tells.
       </p>
 
       {data.challenges.length === 0 ? (

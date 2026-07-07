@@ -22,10 +22,13 @@ export default function SubmitPage() {
 peakstone corpus sync
 peakstone login    # optional: attributes runs to your GitHub handle`}</Code>
 
-      <h2 className="mt-6 text-lg font-medium">2. Run the official suite on your own hardware</h2>
+      <h2 className="mt-6 text-lg font-medium">2. Run the official level on your own hardware</h2>
       <p className="text-sm text-stone-400">
-        The easiest path is the local daemon — it serves your model, runs the suite, and chains the
-        judge pass automatically:
+        A <em>level</em> is a versioned, pinned challenge selection —{" "}
+        <code className="rounded bg-stone-800 px-1 text-stone-200">standard</code> is the official
+        one the leaderboard is scoped to, so your run is directly comparable. The easiest path is
+        the local daemon — it serves your model, runs the level, and chains the judge pass
+        automatically:
       </p>
       <Code>{`peakstone serve --detach
 peakstone jobs add <model-name> --level standard

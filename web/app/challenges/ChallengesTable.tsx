@@ -14,12 +14,14 @@ type SortKey =
   | "avg_score"
   | "n_runs";
 
-const COLUMNS: { key: SortKey; label: string }[] = [
+const COLUMNS: { key: SortKey; label: string; title?: string }[] = [
   { key: "id", label: "Challenge" },
   { key: "category", label: "Category" },
   { key: "verification", label: "Verification" },
-  { key: "seed_difficulty", label: "Seed tier" },
-  { key: "pass_rate", label: "Pass-rate" },
+  { key: "seed_difficulty", label: "Seed tier",
+    title: "the author's 1–5 difficulty guess when the challenge entered the corpus" },
+  { key: "pass_rate", label: "Pass-rate",
+    title: "empirical difficulty: the share of runs that fully solved it — climbs as models improve" },
   { key: "avg_score", label: "Avg score" },
   { key: "n_runs", label: "Runs" },
 ];
@@ -68,7 +70,7 @@ export default function ChallengesTable({ challenges }: { challenges: ChallengeR
         <thead>
           <tr className="text-left text-stone-500">
             {COLUMNS.map((c) => (
-              <th key={c.key} className="py-2 pr-4 font-medium">
+              <th key={c.key} className="py-2 pr-4 font-medium" title={c.title}>
                 <button
                   onClick={() => onSort(c.key)}
                   className={`hover:text-stone-200 ${c.key === sortKey ? "text-stone-200" : ""}`}

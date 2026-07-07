@@ -17,6 +17,58 @@ const VRAM_PRESETS: [string, string][] = [
   ["≤48 GB", "48"],
 ];
 
+// The board is silently scoped to the official suite unless ?suite= says otherwise — say so
+// (review R32): which versioned level the rows ran, with a toggle to span every suite.
+function SuiteScope({
+  filters,
+  sp,
+}: {
+  filters: Record<string, unknown>;
+  sp: Record<string, string | undefined>;
+}) {
+  const suite = typeof filters.suite === "string" ? filters.suite : null;
+  const version = typeof filters.version === "string" ? filters.version : null;
+  const others = new URLSearchParams();
+  for (const k of LEADERBOARD_PARAMS) {
+    if (k !== "suite" && k !== "version" && sp[k]) others.set(k, sp[k] as string);
+  }
+  const withSuite = (v: string | null) => {
+    const q = new URLSearchParams(others);
+    if (v) q.set("suite", v);
+    const s = q.toString();
+    return s ? `/leaderboard?${s}` : "/leaderboard";
+  };
+  if (!suite || suite === "all") {
+    return (
+      <p className="mt-2 text-center text-xs text-stone-500">
+        Spanning <strong className="text-stone-400">all suites</strong> — scores from different
+        challenge selections are not directly comparable.
+        {suite === "all" ? ( // only when an official scope exists to go back to
+          <>
+            {" "}
+            <Link href={withSuite(null)} className="text-emerald-400 hover:underline">
+              Back to the official suite
+            </Link>
+          </>
+        ) : null}
+      </p>
+    );
+  }
+  return (
+    <p className="mt-2 text-center text-xs text-stone-500">
+      Every row ran the official level{" "}
+      <code className="rounded bg-stone-900 px-1 text-stone-400">
+        {suite}
+        {version ? `@${version}` : ""}
+      </code>{" "}
+      — a versioned, pinned challenge selection, so scores are apples-to-apples.{" "}
+      <Link href={withSuite("all")} className="text-emerald-400 hover:underline">
+        Span all suites
+      </Link>
+    </p>
+  );
+}
+
 export default async function LeaderboardPage({
   searchParams,
 }: {
@@ -71,6 +123,7 @@ export default async function LeaderboardPage({
           </>
         )}
       </p>
+      {data ? <SuiteScope filters={data.filters} sp={sp} /> : null}
 
       <div className="my-5 flex flex-wrap items-center justify-center gap-2">
         <span className="text-sm text-stone-500">Fits my hardware:</span>
@@ -103,7 +156,7 @@ export default async function LeaderboardPage({
       {facets && (
         <div className="mb-5 flex flex-wrap items-center justify-center gap-4">
           {facets.quants.length > 0 && (
-            <SelectFilter param="quant" label="Quant" options={facets.quants} />
+            <SelectFilter param="quant" label="Artifact (quant)" options={facets.quants} />
           )}
           {facets.trust_tiers.length > 1 && (
             <SelectFilter param="trust" label="Trust" options={facets.trust_tiers} allLabel="Any" />
