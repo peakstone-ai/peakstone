@@ -19,6 +19,7 @@ thread (`asyncio.to_thread`) so they never block the loop; they're injectable so
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from contextlib import asynccontextmanager
 
@@ -122,11 +123,24 @@ class ModelManager:
 
     # --- load / swap ----------------------------------------------------------------------------
 
+    # One wedged stream (a client that never reads, an upstream that never finishes) must not
+    # freeze every subsequent swap/pin/unload — and with them the whole job queue (review R18).
+    DRAIN_DEADLINE_S = float(os.environ.get("PEAKSTONE_DRAIN_DEADLINE_S", "60"))
+
     async def _wait_drained(self) -> None:
-        """Block until no requests are using the current model (so it's safe to tear down)."""
+        """Block until no requests are using the current model (so it's safe to tear down) — but
+        only up to DRAIN_DEADLINE_S. Past it we proceed anyway: the old server is being stopped,
+        which terminates the stragglers mid-stream (they were wedged, not progressing)."""
+        deadline = self._clock() + self.DRAIN_DEADLINE_S
         while self._inflight > 0:
+            remaining = deadline - self._clock()
+            if remaining <= 0:
+                return
             self._drained.clear()
-            await self._drained.wait()
+            try:
+                await asyncio.wait_for(self._drained.wait(), timeout=remaining)
+            except (asyncio.TimeoutError, TimeoutError):
+                return
 
     async def _ensure_locked(self, name: str) -> ServeModel:
         """Bring `name` up as the loaded model. Caller MUST hold `self._lock`."""
@@ -142,7 +156,8 @@ class ModelManager:
             await asyncio.to_thread(self._stop, self.proc)
         prev, self.current, self.proc = self.current, None, None
         proc = await asyncio.to_thread(self._serve, name)
-        healthy = await asyncio.to_thread(self._wait, m.port, proc=proc)
+        # expected_file: never adopt a 200 from a foreign/orphan server on the port (review R19)
+        healthy = await asyncio.to_thread(self._wait, m.port, proc=proc, expected_file=m.file)
         if not healthy:
             await asyncio.to_thread(self._stop, proc)
             raise ServeFailed(name, self._log_tail(name))

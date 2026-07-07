@@ -28,7 +28,23 @@ def main(argv: list[str] | None = None) -> int:
                          "token (trusted networks only)")
     ap.add_argument("--detach", action="store_true",
                     help="start the daemon in the background and return to the shell")
+    ap.add_argument("--stop", action="store_true",
+                    help="gracefully stop a running daemon (kills any in-flight runner; interrupted "
+                         "jobs re-queue on the next start) and exit")
+    ap.add_argument("--restart", action="store_true",
+                    help="stop a running daemon, then start a fresh detached one — picks up edited "
+                         "daemon code (jobs.py/app.py need this; engine edits don't)")
     args = ap.parse_args(argv)
+    if args.stop or args.restart:
+        from .launch import base_url, restart_daemon, stop_daemon
+        if args.stop:
+            ok = stop_daemon(args.host, args.port)
+            print(">>> daemon stopped" if ok else "!! daemon did not stop (still answering)")
+            return 0 if ok else 1
+        ok = restart_daemon(args.host, args.port, args.idle_timeout, open_access=args.open_access)
+        print(f">>> daemon restarted on {base_url(args.host, args.port)}/v1" if ok
+              else "!! restart failed (see results/gateway.log)")
+        return 0 if ok else 1
     if args.detach:
         from .launch import base_url, spawn_detached
         proc = spawn_detached(args.host, args.port, args.idle_timeout, open_access=args.open_access)

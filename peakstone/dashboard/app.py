@@ -1634,16 +1634,35 @@ class QueueScreen(ModalScreen):
     #q-note { height: auto; padding-top: 1; }
     """
     BINDINGS = [("escape", "dismiss", "Close"), ("enter", "view", "View running"),
-                ("p", "pause", "Pause/resume"), ("x", "cancel", "Cancel"), ("c", "clear", "Clear queued")]
+                ("p", "pause", "Pause/resume"), ("x", "cancel", "Cancel"), ("c", "clear", "Clear queued"),
+                ("d", "restart_daemon", "Restart daemon")]
 
     _MARK = {"running": "▶", "queued": "·", "paused": "⏸", "done": "✓", "failed": "✗",
              "cancelled": "∅", "interrupted": "⚠"}
 
     def compose(self) -> ComposeResult:
         with Vertical(id="queue"):
-            yield Static("[b]Daemon queues[/b]  ·  ⏎ view  ·  p pause/resume  ·  x cancel  ·  c clear  ·  Esc close")
+            yield Static("[b]Daemon queues[/b]  ·  ⏎ view  ·  p pause/resume  ·  x cancel  ·  c clear"
+                         "  ·  d restart daemon  ·  Esc close")
             yield DataTable(id="q-tbl", cursor_type="row", zebra_stripes=True)
             yield Static("", id="q-note")
+
+    def action_restart_daemon(self) -> None:
+        """Graceful stop + fresh detached start. The daemon-owned queue survives: an interrupted
+        running job re-queues on start (R19), so this is the safe lever after daemon-code updates
+        or a wedged gateway — no more pkill + hand-restart."""
+        self.notify("restarting the daemon…")
+
+        def work() -> None:
+            from peakstone.gateway import launch
+            ok = launch.restart_daemon()
+            self.app.call_from_thread(
+                self.notify,
+                "daemon restarted — queue resumes" if ok
+                else "daemon restart FAILED (see results/gateway.log)",
+                severity="information" if ok else "error")
+
+        self.run_worker(work, thread=True)
 
     def on_mount(self) -> None:
         self.query_one("#q-tbl", DataTable).add_columns("Queue", "Status", "Model", "Scope", "Time")

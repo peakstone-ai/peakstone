@@ -77,9 +77,16 @@ def serve(name: str, *, popen=subprocess.Popen, ctx: int | None = None,
                      stderr=subprocess.STDOUT, start_new_session=True, env=env)
 
 
-def wait_healthy(port: int, *, timeout: float = 180, opener=urllib.request.urlopen, proc=None) -> bool:
+def wait_healthy(port: int, *, timeout: float = 180, opener=urllib.request.urlopen, proc=None,
+                 expected_file: str | None = None) -> bool:
     """Poll /health until the server answers. Fails fast if the serve process exits first (a crashed
-    llama-server otherwise leaves us polling a dead port for the whole timeout)."""
+    llama-server otherwise leaves us polling a dead port for the whole timeout).
+
+    `expected_file`: identity check — a 200 on the port is NOT necessarily our server. An orphan
+    llama-server from a previous daemon life (crash/restart) answers /health too, and silently
+    adopting it serves the WRONG MODEL under the requested name (review R19). When llama-server's
+    /props reports a model path, its basename must match; engines without /props are accepted
+    (best-effort, the old behavior)."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if proc is not None and getattr(proc, "poll", lambda: None)() is not None:
@@ -87,11 +94,30 @@ def wait_healthy(port: int, *, timeout: float = 180, opener=urllib.request.urlop
         try:
             with opener(f"http://localhost:{port}/health", timeout=3) as r:
                 if getattr(r, "status", 200) == 200:
+                    if expected_file and not _serves_file(port, expected_file, opener):
+                        print(f"!! port {port} answers but serves a DIFFERENT model than "
+                              f"{os.path.basename(expected_file)} — refusing to adopt it "
+                              f"(orphan llama-server from a previous run?)", file=sys.stderr)
+                        return False
                     return True
         except Exception:  # noqa: BLE001
             pass
         time.sleep(2)
     return False
+
+
+def _serves_file(port: int, expected_file: str, opener=urllib.request.urlopen) -> bool:
+    """Best-effort identity probe via llama-server's /props (reports the loaded model path).
+    No /props / unparseable / no path reported → accept (other engines)."""
+    try:
+        with opener(f"http://localhost:{port}/props", timeout=3) as r:
+            data = json.loads(r.read())
+    except Exception:  # noqa: BLE001
+        return True
+    served = data.get("model_path") or (data.get("default_generation_settings") or {}).get("model") or ""
+    if not served:
+        return True
+    return os.path.basename(str(served)) == os.path.basename(expected_file)
 
 
 def _kill(proc) -> None:
@@ -321,6 +347,7 @@ def stream_runner(cmd: list[str], *, out: Path, timeout: float, env_extra: dict 
     if on_proc:
         on_proc(proc)          # register so a cancel can kill the run mid-flight
     killer = threading.Timer(timeout, lambda: _kill(proc))   # hard cap even if the child goes silent
+    killer.daemon = True     # a pending (multi-day) cap must never block process exit (review R17)
     killer.start()
     stall = float(os.environ.get("PEAKSTONE_STALL_SECONDS", "900"))
     last = [time.monotonic()]

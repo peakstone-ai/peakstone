@@ -479,12 +479,15 @@ def test_summarize_bundle():
     assert s["passed"] == 3 and s["total"] == 4 and s["code_score"] == 0.75 and s["your_tps"] == 50.0
 
 
-def test_store_reaps_interrupted():
+def test_store_requeues_interrupted():
+    """A job left 'running' by a crash/restart goes back to 'queued' (review R19) — the old
+    'interrupted' state was a dead end nothing could resume."""
     store = JobStore()
     jid = store.enqueue({"model": "model-a"}, now=1.0)
     store.update(jid, status="running", started=2.0)
-    assert store.reap_interrupted() == 1
-    assert store.get(jid)["status"] == "interrupted"
+    assert store.reap_interrupted() >= 1     # >=: the shared default db may hold other strays
+    assert store.get(jid)["status"] == "queued"
+    store.update(jid, status="cancelled")    # don't leave a phantom queued job behind
 
 
 # --- swap/drain invariant (direct, async) ----------------------------------------------------

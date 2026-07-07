@@ -103,9 +103,12 @@ class JobStore:
             c.execute(f"UPDATE jobs SET {cols} WHERE id=?", (*fields.values(), jid))
 
     def reap_interrupted(self) -> int:
-        """On daemon startup, any job left 'running' was orphaned by a crash/restart — mark it so."""
+        """On daemon startup, any job left 'running' was orphaned by a crash/restart — RE-QUEUE it
+        so the queue picks up where it left off (a benchmark simply re-runs). Previously these were
+        marked 'interrupted', which nothing could resume, and a crash mid-download left its
+        dependent runs failing as 'not downloaded and no download queued' (review R19)."""
         with self._conn() as c:
-            cur = c.execute("UPDATE jobs SET status='interrupted' WHERE status='running'")
+            cur = c.execute("UPDATE jobs SET status='queued', started=NULL WHERE status='running'")
             return cur.rowcount
 
 
@@ -173,13 +176,20 @@ class JobManager:
         self._stop = True
         self._run_wake.set()
         self._dl_wake.set()
+        # Kill the in-flight runner BEFORE cancelling workers: cancellation runs the cancelled
+        # _run_job's `finally`, which nulls self._current — so checking it only afterwards always
+        # saw None, the runner survived shutdown as an orphan (own session, up to the 14-day cap)
+        # and its blocked stdout-reader thread kept the daemon from exiting (review R17).
+        cur = self._current
+        if cur and cur.get("proc"):
+            serving.stop(cur["proc"])
         for t in self._tasks:
             t.cancel()
             try:
                 await t
             except asyncio.CancelledError:
                 pass
-        if self._current and self._current.get("proc"):
+        if self._current and self._current.get("proc"):   # belt-and-braces for a late starter
             serving.stop(self._current["proc"])
 
     # --- client-facing API ----------------------------------------------------------------------
@@ -239,9 +249,10 @@ class JobManager:
         return False
 
     def resume(self, jid: str) -> bool:
-        """Resume a paused job → back to 'queued' (it runs when its turn comes; its model loads then)."""
+        """Resume a paused (or legacy 'interrupted') job → back to 'queued' (it runs when its turn
+        comes; its model loads then)."""
         job = self.store.get(jid)
-        if job is None or job["status"] != "paused":
+        if job is None or job["status"] not in ("paused", "interrupted"):
             return False
         self.store.update(jid, status="queued")
         self._run_wake.set()

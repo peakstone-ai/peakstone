@@ -78,6 +78,36 @@ def gateway_log_path() -> Path:
     return paths.repo_root() / "results" / "gateway.log"
 
 
+def stop_daemon(host: str | None = None, port: int | None = None, *, wait: float = 20.0) -> bool:
+    """Ask a running gateway to shut down gracefully (POST /admin/shutdown — loopback needs no
+    token) and wait until the port stops answering. True when it's down (or nothing was running).
+    Graceful means: in-flight runner killed, llama-server stopped, interrupted jobs re-queue on
+    the next start — so stop→start is a safe way to pick up new daemon code."""
+    host, port = _resolve(host, port)
+    if not is_running(host, port):
+        return True
+    try:
+        req = urllib.request.Request(f"{base_url(host, port)}/admin/shutdown", method="POST")
+        urllib.request.urlopen(req, timeout=5)
+    except Exception:  # noqa: BLE001
+        return False   # daemon up but not accepting the shutdown (auth? not ours?) — don't spin
+    deadline = time.monotonic() + wait
+    while time.monotonic() < deadline:
+        if not is_running(host, port, timeout=1.0):
+            return True
+        time.sleep(0.5)
+    return False
+
+
+def restart_daemon(host: str | None = None, port: int | None = None, idle_timeout: float = 0.0,
+                   *, wait: float = 20.0, open_access: bool | None = None) -> bool:
+    """Stop a running gateway (graceful) and start a fresh detached one — the way to pick up
+    edited daemon code (`jobs.py`/`app.py` changes need a restart; runner edits don't)."""
+    if not stop_daemon(host, port, wait=wait):
+        return False
+    return ensure_running(host, port, idle_timeout, wait=wait, open_access=open_access)
+
+
 def spawn_detached(host: str | None = None, port: int | None = None, idle_timeout: float = 0.0,
                    *, open_access: bool = False, popen=subprocess.Popen) -> subprocess.Popen:
     """Start `python -m peakstone.gateway` in its own session (survives the parent), logging to

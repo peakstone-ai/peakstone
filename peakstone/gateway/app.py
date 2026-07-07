@@ -87,8 +87,11 @@ def build_app(*, manager: ModelManager | None = None, idle_timeout: float = 0.0,
         app.state.token = gw_auth.load_or_create_token() if token is None else token
         app.state.manager = manager or ModelManager(idle_timeout=idle_timeout)
         owns_client = client is None
+        # read=600 (matches [run].request_timeout): an upstream that stops producing must
+        # eventually error the ONE stuck stream instead of holding an in-flight slot forever —
+        # unbounded reads + the swap drain made one wedged SSE freeze the whole daemon (review R18)
         app.state.client = client or httpx.AsyncClient(
-            timeout=httpx.Timeout(connect=10.0, read=None, write=None, pool=None))
+            timeout=httpx.Timeout(connect=10.0, read=600.0, write=600.0, pool=None))
         url = self_url or f"http://127.0.0.1:{load_gateway_config()['port']}"
         app.state.jobs = JobManager(store or JobStore(), app.state.manager, gateway_url=url,
                                     submit=submit, present=present)
@@ -132,6 +135,17 @@ def build_app(*, manager: ModelManager | None = None, idle_timeout: float = 0.0,
         if not WEBCHAT_HTML.exists():            # defensive: the UI ships in-package, but don't 500
             raise HTTPException(status_code=404, detail="chat UI not installed")
         return FileResponse(WEBCHAT_HTML, media_type="text/html")
+
+    @app.post("/admin/shutdown", dependencies=auth_dep)
+    async def admin_shutdown():
+        """Graceful daemon shutdown (the TUI/CLI restart control). Respond first, then SIGTERM
+        ourselves — uvicorn runs the lifespan teardown: jobs.aclose() kills any in-flight runner
+        (R17) and the manager stops its llama-server. Interrupted queue entries re-queue on the
+        next start (R19), so a restart resumes work where it left off."""
+        import signal
+        asyncio.get_running_loop().call_later(
+            0.3, lambda: os.kill(os.getpid(), signal.SIGTERM))
+        return {"status": "shutting-down"}
 
     @app.get("/status", dependencies=auth_dep)
     def status():
