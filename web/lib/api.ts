@@ -36,6 +36,8 @@ export type Run = {
   abandoned_categories?: string[] | null; // categories skipped after a repetition-loop streak
   submitted_at: string | null;
   submitter: string | null;
+  reproductions: number;                 // distinct accounts that independently re-ran this exact
+  //                                        deterministic vector (`peakstone reproduce <hash>`)
   bundle_hash: string;
 };
 

@@ -344,6 +344,9 @@ def _run_info(db, sub: models.Submission, art: models.ModelArtifact) -> dict:
             "run_status": (sub.raw or {}).get("run_status"),
             "abandoned_categories": (sub.raw or {}).get("abandoned_categories"),
             "submitter": _submitter_handle(db, sub),
+            # distinct identities that independently reproduced this exact deterministic vector —
+            # the "verified ×N" board column (peakstone reproduce <hash> is how one becomes it)
+            "reproductions": _n_reproductions(db, sub),
             "bundle_hash": sub.bundle_hash}
 
 
@@ -491,6 +494,66 @@ def run_results(bundle_hash: str, db: Session = Depends(get_session)):
             "family": fam.name if fam else None, "artifact": art.artifact if art else None,
             "context": sub.context, "trust_tier": sub.trust_tier,
             "suite": f"{sub.suite_name}@{sub.suite_version}"}
+
+
+def _repro_group(db, sub: models.Submission) -> list[models.Submission]:
+    """Every OTHER stored submission with the same deterministic result vector over the same
+    artifact + suite — the reproduction group ingest promotes community-verified from."""
+    if not sub.repro_sig:
+        return []
+    return db.scalars(select(models.Submission).where(
+        models.Submission.artifact_id == sub.artifact_id,
+        models.Submission.suite_name == sub.suite_name,
+        models.Submission.suite_version == sub.suite_version,
+        models.Submission.repro_sig == sub.repro_sig,
+        models.Submission.id != sub.id,
+    ).order_by(models.Submission.submitted_at)).all()
+
+
+def _n_reproductions(db, sub: models.Submission) -> int:
+    """Distinct identities (other than the run's own submitter) that reproduced this run's
+    deterministic vector — the board's "verified ×N" number. Counted by the SAME rule promotion
+    uses (account-bound + past the age bar), so the badge never claims more than the trust tier
+    is built on; unbound-key reproductions still show in /runs/{hash}/reproductions."""
+    own = ingest._identity_of(db, sub)
+    return len({i for i in (ingest._identity_of(db, s) for s in _repro_group(db, sub))
+                if i != own and i.startswith("user:") and ingest._seasoned(db, i)})
+
+
+@app.get("/reproduce/{bundle_hash}")
+def reproduce_bundle(bundle_hash: str, db: Session = Depends(get_session)):
+    """Everything `peakstone reproduce` needs, in one fetch: the stored bundle VERBATIM — still
+    signed and content-addressed, so the client re-verifies the whole trust chain before letting
+    it define a run — plus where its reproduction group stands today."""
+    sub = db.scalar(select(models.Submission).where(models.Submission.bundle_hash == bundle_hash))
+    if not sub or not sub.raw:
+        raise HTTPException(404, "unknown run")
+    return {"bundle": sub.raw, "trust_tier": sub.trust_tier,
+            "reproductions": _n_reproductions(db, sub)}
+
+
+@app.get("/runs/{bundle_hash}/reproductions")
+def run_reproductions(bundle_hash: str, db: Session = Depends(get_session)):
+    """The run's reproduction record: who independently re-ran this exact deterministic vector,
+    on what hardware, when — the proof artifact behind the trust-tier badge."""
+    sub = db.scalar(select(models.Submission).where(models.Submission.bundle_hash == bundle_hash))
+    if not sub:
+        raise HTTPException(404, "unknown run")
+    own = ingest._identity_of(db, sub)
+    rows, identities = [], set()
+    for s in _repro_group(db, sub):
+        ident = ingest._identity_of(db, s)
+        if ident != own:
+            identities.add(ident)
+        env = s.env or {}
+        rows.append({"bundle_hash": s.bundle_hash, "submitter": _submitter_handle(db, s),
+                     "trust_tier": s.trust_tier,
+                     "submitted_at": str(s.submitted_at) if s.submitted_at else None,
+                     "gpu": env.get("gpu"), "vram_gb": s.vram_gb,
+                     # a run's own submitter re-running it is transparency, not verification
+                     "independent": ident != own})
+    return {"bundle_hash": bundle_hash, "n": len(rows),
+            "distinct_identities": len(identities), "reproductions": rows}
 
 
 @app.get("/runs/{bundle_hash}/challenge/{challenge_id}")
