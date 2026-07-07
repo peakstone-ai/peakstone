@@ -69,7 +69,13 @@ def _model_cfg(model: str, models_toml: Path | None = None) -> dict:
 
 def effective_capabilities(model: str, *, models_toml: Path | None = None,
                            cache_path: Path | None = None) -> set[str]:
-    """Resolve a model's true capabilities: inferred (ctx) -> cache (known true/false) -> declared."""
+    """Resolve a model's gating capabilities: inferred (ctx) -> cache (known true/false) -> declared.
+
+    Honest framing (review R20): the DEFAULTS are optimistic, not measured — `tools` is assumed
+    True and `agentic` is assumed True when ctx is unknown, so gating is attempt-by-default and
+    only EXCLUDES on evidence (a declared false, a cached probe/observation, or a ctx that's
+    provably too small). Measurement refines the picture (observe/classify feed the cache); it
+    does not produce the initial one."""
     cfg = _model_cfg(model, models_toml)
     ctx = cfg.get("ctx")
     known: dict[str, bool] = {"tools": True}

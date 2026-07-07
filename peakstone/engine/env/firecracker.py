@@ -359,8 +359,12 @@ class FirecrackerEnvironment(Environment):
         return False
 
     def reset(self) -> None:
+        # kill -9 -1 = every process EXCEPT init (our ps-agent is PID 1) and the issuing shell —
+        # a complete sweep. The old `pkill -f '[s]h -c'` missed servers whose sh wrapper had
+        # already exited (`python server.py &` reparents with a bare cmdline), so they leaked
+        # across leases (review R22).
         for n in self.spec.nodes:
-            self.nodes[n.name].run("pkill -9 -f '[s]h -c' 2>/dev/null; true")
+            self.nodes[n.name].run("kill -9 -1 2>/dev/null; true")
 
     def teardown(self) -> None:
         for p in self._procs:

@@ -74,6 +74,10 @@ def env_result_row(challenge, result: dict, *, model: str, turns_to_green=None,
         "model": model, "challenge": challenge.id, "language": "multi",
         "type": "goal-state-env", "category": challenge.category, "difficulty": challenge.difficulty,
         "scoring": "goal-state", "verification": "goal-state-env",
+        # Goal reached = 1.0; otherwise PARTIAL CREDIT — the fraction of goal checks satisfied.
+        # Deliberate (review R20 flagged the doc mismatch, not the behavior): it distinguishes
+        # "stood the service up but missed replication" from "did nothing". The BINARY thing is
+        # the pass verdict (`passed` = every check green), which run_passed_any/prints key off.
         "final_score": 1.0 if result.get("passed") else round(n_pass / total, 4),
         "passed": n_pass, "total": total, "response": transcript, "stdout": "",
         "env": {"provider": prov.get("provider"), "image_digests": prov.get("image_digests", {}),

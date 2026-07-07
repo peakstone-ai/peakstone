@@ -138,6 +138,10 @@ def get_pool() -> FcPool:
     with _POOL_LOCK:
         if _POOL is None:
             _POOL = FcPool(size=int(os.environ.get("PEAKSTONE_FC_POOL", "1")))
+            # a normal interpreter exit must tear the warm VMs down — without this, every run
+            # leaked its pool microVMs (firecracker processes + tmpdirs) until reboot (review R22)
+            import atexit
+            atexit.register(shutdown)
         return _POOL
 
 

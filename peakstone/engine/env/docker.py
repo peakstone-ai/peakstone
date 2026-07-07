@@ -165,10 +165,18 @@ class DockerEnvironment(Environment):
         cid = self._cids.get(node)
         if not cid:
             return False
-        r = subprocess.run(["docker", "run", "--rm", "--network", f"container:{cid}",
-                            "--cap-add", "NET_ADMIN", NETSHAPE_IMAGE, "sh", "-c", sh],
-                           capture_output=True, text=True, timeout=120)
-        return r.returncode == 0
+        # Named so a client-side timeout can force-remove it: killing the `docker run` CLIENT
+        # detaches but leaves the privileged (NET_ADMIN) container running (review R22).
+        name = f"{self.project}-netshape-{node}-{os.getpid()}"
+        try:
+            r = subprocess.run(["docker", "run", "--rm", "--name", name,
+                                "--network", f"container:{cid}",
+                                "--cap-add", "NET_ADMIN", NETSHAPE_IMAGE, "sh", "-c", sh],
+                               capture_output=True, text=True, timeout=120)
+            return r.returncode == 0
+        except subprocess.TimeoutExpired:
+            subprocess.run(["docker", "rm", "-f", name], capture_output=True, timeout=30)
+            return False
 
     def _apply_network(self, req) -> dict:
         """Apply [[links]] conditions: per-source netem shaping (multiple dsts via tc filters) +
@@ -245,9 +253,27 @@ class DockerEnvironment(Environment):
                 time.sleep(1)
             else:
                 import sys
-                print(f"[docker] teardown of project {self.project!r} failed: "
-                      f"{(r.stderr or '')[-300:]}", file=sys.stderr)
+                print(f"[docker] compose down of {self.project!r} failed: "
+                      f"{(r.stderr or '')[-300:]} — force-removing by label", file=sys.stderr)
+                self._force_teardown()   # never GIVE UP with containers running (review R22)
         shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _force_teardown(self) -> None:
+        """Last resort when compose down fails twice: remove this project's containers + networks
+        directly by compose-project label, so a wedged compose can't leak them until reboot."""
+        try:
+            flt = f"label=com.docker.compose.project={self.project}"
+            ids = subprocess.run(["docker", "ps", "-aq", "--filter", flt],
+                                 capture_output=True, text=True, timeout=30).stdout.split()
+            if ids:
+                subprocess.run(["docker", "rm", "-f", *ids], capture_output=True, timeout=60)
+            nets = subprocess.run(["docker", "network", "ls", "-q", "--filter", flt],
+                                  capture_output=True, text=True, timeout=30).stdout.split()
+            if nets:
+                subprocess.run(["docker", "network", "rm", *nets], capture_output=True, timeout=30)
+        except Exception as e:  # noqa: BLE001
+            import sys
+            print(f"[docker] force teardown of {self.project!r} also failed: {e}", file=sys.stderr)
 
     def provenance(self) -> dict:
         return {"provider": "docker", "image_digests": self._digests,

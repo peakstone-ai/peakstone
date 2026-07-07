@@ -79,7 +79,13 @@ class RepoSandbox:
         if r.returncode != 0:
             raise RuntimeError(f"docker run {image} failed: {r.stderr[-300:]}")
         self.cid = r.stdout.strip()
-        _docker("exec", self.cid, "mkdir", "-p", WORK)   # so `-w WORK` execs are valid from the start
+        try:
+            _docker("exec", self.cid, "mkdir", "-p", WORK)   # so `-w WORK` execs are valid from the start
+        except BaseException:
+            # __init__ failing AFTER `docker run` must not leak the container — `--rm` only fires
+            # on container exit, and `sleep infinity` never exits on its own (review R22)
+            _docker("rm", "-f", self.cid, timeout=60)
+            raise
 
     def exec(self, cmd: str, *, timeout=300, workdir=WORK):
         return _docker("exec", "-w", workdir, self.cid, "bash", "-lc", cmd, timeout=timeout)
@@ -99,8 +105,10 @@ class RepoSandbox:
 
     def teardown(self):
         _docker("rm", "-f", self.cid, timeout=60)
-        if self.prune:
-            _docker("rmi", "-f", self.image, timeout=120)   # keep peak disk to ~one image
+        # keep peak disk to ~one image — but never prune the SHARED generic base: every
+        # generic-mode task uses python:3.12, and removing it forces a full re-pull per task (R22)
+        if self.prune and self.image != GENERIC_IMAGE:
+            _docker("rmi", "-f", self.image, timeout=120)
 
     def __enter__(self):
         return self

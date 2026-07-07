@@ -268,6 +268,7 @@ def _host_load():
 
 def main(argv=None):
     from . import versions
+    _install_pipe_safety()   # every entry point (module, console script, daemon subprocess)
     ap = argparse.ArgumentParser(description="Local coding-LLM eval harness")
     ap.add_argument("--version", action="version", version=f"peakstone {versions.pkg_version()}")
     ap.add_argument("--update", action="store_true",
@@ -614,6 +615,18 @@ def main(argv=None):
         fam_loop_streak: dict[str, int] = {}   # consecutive repetition-loop fails in each category
         fam_passed: set[str] = set()           # categories that produced at least one pass
         abandoned: set[str] = set()            # categories skipped this model (repetition loops)
+
+        def note_streak(label: str, ch, *, won: bool, looped: bool) -> None:
+            """EVERY scoring branch feeds the repetition-loop giveup policy — not just the tests
+            path (review R20): a model looping out on math or safety rows burned the same
+            wall-clock, and the negative-data verdict should see it."""
+            if update_loop_streak(ch.family, won=won, looped=looped, streaks=fam_loop_streak,
+                                  passed=fam_passed, abandoned=abandoned,
+                                  threshold=loop_skip_streak):
+                if ch.family not in run_abandoned:
+                    run_abandoned.append(ch.family)
+                print(f"{label}  ✗ abandoning category '{ch.family}' "
+                      f"({loop_skip_streak} consecutive repetition loops) — skipping the rest")
         for ch in chs:
             label = f"{model:>18} | {ch.id:<28}"
             if ch.family in abandoned:         # category given up on after a repetition-loop streak
@@ -765,6 +778,9 @@ def main(argv=None):
                     print(f"{label}  {'ok ' if sec >= 0.999 else '   '} secure {passed}/{total}"
                           + (f" (insecure: {', '.join(bad)})" if bad else ""))
                 results.append(row)
+                if (row.get("final_score") or 0) > 0:
+                    run_passed_any = True
+                note_streak(label, ch, won=(row.get("final_score") or 0) > 0, looped=looped)
                 continue
 
             if ch.scoring == "answer-match":
@@ -801,6 +817,9 @@ def main(argv=None):
                     **({"error": "repetition-loop"} if res.aborted else {})})
                 print(f"{label}  {'ok ' if ok else '!! '} answer expect={ch.expect} got={got}"
                       + (f"  ✂truncated ({res.truncated_phase})" if res.truncated else ""))
+                if ok:
+                    run_passed_any = True
+                note_streak(label, ch, won=ok, looped=res.aborted)
                 continue
 
             if ch.scoring == "repo-patch":
@@ -878,7 +897,10 @@ def main(argv=None):
                 continue
 
             attempts, passed_on = 0, None
-            looped, rtoks = False, None   # set per-attempt in the generate path; defaulted for --reference
+            # `looped` describes the SCORED (first) attempt — the headline is single-shot, so its
+            # error label must be too; `any_looped` ORs across retries and feeds only the giveup
+            # policy (a model looping on ANY attempt burned the wall-clock) — review R20.
+            looped, any_looped, rtoks = False, False, None   # defaulted for --reference
             first_reasoning = None        # the scored (first) attempt's chain-of-thought, for the bundle
             attempt_log: list = []        # per-attempt record (answer/reasoning/test_error) for --retries
             pre_conf = self_correct = None   # calibration probes (only with --calibration)
@@ -903,7 +925,7 @@ def main(argv=None):
                 run = None
                 first_run = first_response = first_files = None
                 response, tps, lat, ptoks, ctoks = None, None, None, 0, 0
-                files, looped = {}, False
+                files = {}
                 # calibration (pre-hoc): how confident is the model BEFORE it attempts the task?
                 if args.calibration and _calibratable(ch):
                     pre_conf = _ask_confidence(client, model, ch, run_cfg)
@@ -923,7 +945,7 @@ def main(argv=None):
                                                 response=res.error, vram=model_vram))
                         break
                     attempts = attempt
-                    looped = looped or res.aborted   # generation hit a degenerate repetition loop
+                    any_looped = any_looped or res.aborted   # any attempt looping → giveup policy
                     response, tps, lat = res.text, res.tok_per_s, res.latency_s
                     ptoks, ctoks, rtoks = res.prompt_tokens, res.completion_tokens, res.reasoning_tokens
                     files = extract_files(res.text, ch.solution_file, ch.language)
@@ -937,6 +959,7 @@ def main(argv=None):
                         first_reasoning = res.reasoning   # the scored attempt's CoT (capped into the bundle)
                         first_truncated = res.truncated   # headline scores attempt 1, so judge IT
                         first_trunc_phase = res.truncated_phase   # mid-thinking vs mid-answer
+                        looped = res.aborted              # …and its loop label is attempt 1's too (R20)
                         # calibration (post-hoc): ask about the FIRST solution NOW — before the model
                         # sees the test outcome via the retry feedback (else it would have insider info).
                         if args.calibration and _calibratable(ch) and files:
@@ -1016,12 +1039,7 @@ def main(argv=None):
             won = run.ok or (sc.get("final_score") or 0) > 0
             if won:
                 run_passed_any = True
-            if update_loop_streak(ch.family, won=won, looped=looped, streaks=fam_loop_streak,
-                                  passed=fam_passed, abandoned=abandoned, threshold=loop_skip_streak):
-                if ch.family not in run_abandoned:
-                    run_abandoned.append(ch.family)
-                print(f"{label}  ✗ abandoning category '{ch.family}' "
-                      f"({loop_skip_streak} consecutive repetition loops) — skipping the rest")
+            note_streak(label, ch, won=won, looped=any_looped or looped)
 
         # Agentic axis: the level's goal-state-env challenges, run last (slowest — a multi-turn agent
         # loop per challenge). Rows land in the SAME results list, so one bundle carries coding +
@@ -1723,8 +1741,15 @@ def _row(model, ch, run, sc, judge_res, response="", tps=None, lat=None, ptoks=0
     return base
 
 
+def _install_pipe_safety() -> None:
+    """A crashed/killed viewer (the TUI) breaking our stdout pipe must NOT lose the run. Installed
+    at the top of main() so EVERY entry point gets it — the `peakstone bench` console script used
+    to bypass the __main__-only wrap and die on the first broken-pipe write (review R20)."""
+    if not isinstance(sys.stdout, _PipeSafe):
+        sys.stdout = _PipeSafe(sys.stdout)
+    if not isinstance(sys.stderr, _PipeSafe):
+        sys.stderr = _PipeSafe(sys.stderr)
+
+
 if __name__ == "__main__":
-    # A crashed/killed viewer (the TUI) breaking our stdout pipe must NOT lose the run — keep going.
-    sys.stdout = _PipeSafe(sys.stdout)
-    sys.stderr = _PipeSafe(sys.stderr)
     raise SystemExit(main())
