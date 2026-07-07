@@ -319,6 +319,10 @@ def main(argv=None):
                     help="metacognition probes: ask the model its confidence BEFORE solving and "
                          "whether its own solution is correct AFTER (the calibration axis). Cheap; "
                          "run on a small probe subset, e.g. --level calibration.")
+    ap.add_argument("--also", action="append", default=[], metavar="RESULTS_JSON",
+                    help="(with --judge-only --bundle) extra results file(s) to merge into the "
+                         "re-emitted bundle unfiltered-by-model (e.g. an agentic env-results.json "
+                         "— a different axis, appended, never overlaid)")
     ap.add_argument("--judge-only", metavar="PATH",
                     help="re-judge solutions already stored in a prior run's results.json (a "
                          "file, a results dir, or a combined/ dir). Only the judge model needs "
@@ -1345,6 +1349,30 @@ def run_judge_only(args, judge_model, judge_client) -> int:
     ids = _csv(args.ids)
     only_models = _csv(args.models)
 
+    # --level: re-stamp to the CURRENT level selection (repack-style, honest subset — challenges
+    # the run never did just stay absent and are documented as skipped). Filtering happens BEFORE
+    # judging so the judge only grades rows that will ship, and the re-emitted bundle carries the
+    # level's selected_ids → the selected-set suite hash, comparable across models (R4).
+    level_ids: list[str] | None = None
+    level_version = None
+    if args.level:
+        from .env import load_env_challenges
+        from .levels import load_levels, resolve, resolve_env
+        level_version, levels = load_levels()
+        if args.level not in levels:
+            print(f"!! unknown level '{args.level}'", file=sys.stderr)
+            return 1
+        lv = levels[args.level]
+        code_ids = list(resolve(lv, chmap.values()))
+        env_ids = [i for i in resolve_env(lv, load_env_challenges(Path(args.challenges_dir)))
+                   if i not in set(code_ids)]
+        level_ids = code_ids + env_ids
+        keep = set(level_ids)
+        before = len(rows)
+        rows = [r for r in rows if r.get("challenge") in keep]
+        print(f"Level {args.level}@{level_version}: kept {len(rows)}/{before} stored rows "
+              f"in the current selection ({len(level_ids)} ids)")
+
     print(f"Judge-only: judging up to {len(rows)} solution(s) with '{judge_model}'.")
     judged = 0
     for r in rows:
@@ -1413,13 +1441,30 @@ def run_judge_only(args, judge_model, judge_client) -> int:
             print("!! --bundle: no meta found in the source run (results.json) — bundle not "
                   "written (report above is still valid)", file=sys.stderr)
             return 1
-        if len({r["model"] for r in rows}) > 1:
-            print("!! --bundle: the source run contains multiple models; a bundle is signed for "
+        brows = list(rows)
+        # --also: merge extra results (e.g. the model's agentic env-results.json — a different
+        # axis) by APPEND only, never replacing a base row; --level's selection filter applies.
+        for extra in (args.also or []):
+            ed = json.loads(Path(extra).read_text())
+            erows = ed["results"] if isinstance(ed, dict) else ed
+            have = {r.get("challenge") for r in brows}
+            fresh = [r for r in erows if r.get("challenge") not in have
+                     and (level_ids is None or r.get("challenge") in set(level_ids))]
+            brows += fresh
+            print(f"  + {len(fresh)} row(s) merged from {extra}")
+        if len({r["model"] for r in brows}) > 1:
+            print("!! --bundle: the merged rows span multiple models; a bundle is signed for "
                   "ONE model — judge each run dir separately", file=sys.stderr)
             return 1
         bmeta = {**orig_meta, "judge": judge_model, "judged": judged,
                  "judge_params": {"temperature": JUDGE_TEMPERATURE, "max_tokens": JUDGE_MAX_TOKENS}}
-        _emit_bundle(bmeta, rows, outdir)
+        if args.level:
+            # re-stamp to the current manifest + record the selection, so the bundle carries the
+            # model-independent selected-set suite hash and documents what wasn't run (R4)
+            bmeta.update(suite_id=f"level-{args.level}", suite_version=level_version,
+                         selected_ids=level_ids)
+            bmeta.pop("skip_reasons", None)   # the original run's reasons predate this selection
+        _emit_bundle(bmeta, brows, outdir)
     return 0
 
 
