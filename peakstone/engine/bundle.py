@@ -371,7 +371,8 @@ def _token_metrics(row: dict, served_ctx: int | None) -> dict:
 
 
 def _result(row: dict, chash: dict, judge_model: str | None, cpub: dict | None = None,
-            served_ctx: int | None = None, cpriv: dict | None = None) -> dict:
+            served_ctx: int | None = None, cpriv: dict | None = None,
+            jparams: dict | None = None) -> dict:
     score: dict = {"final": round(float(row.get("final_score", 0.0)), 4)}
     if row.get("total"):
         score["passed"] = row.get("passed", 0)
@@ -447,6 +448,8 @@ def _result(row: dict, chash: dict, judge_model: str | None, cpub: dict | None =
     jd = row.get("judge_detail") or {}
     if jd.get("scores"):
         r["judge"] = {"model": judge_model or "unknown", "scores": jd["scores"]}
+        if jparams:
+            r["judge"].update(jparams)   # judge sampling (temperature/max_tokens) — run identity
     return r
 
 
@@ -478,7 +481,8 @@ def produce_bundle(meta: dict, results: list[dict], *, harness_version: str | No
                                         (r.get("reasoning_tokens") for r in results))
     served_ctx = model.get("context")              # the window each result is judged for ctx-truncation against
 
-    bundle_results = [_result(r, chash, meta.get("judge"), cpub, served_ctx, cpriv) for r in results]
+    bundle_results = [_result(r, chash, meta.get("judge"), cpub, served_ctx, cpriv,
+                              meta.get("judge_params")) for r in results]
     # hash the sorted list as canonical JSON (self-delimiting) — bare concatenation is ambiguous
     # (["ab","c"] and ["a","bc"] would collide) for a value that pins the exact challenge set.
     # Private rows pin by their salted commitment (their challenge_hash is a "(private)" sentinel).

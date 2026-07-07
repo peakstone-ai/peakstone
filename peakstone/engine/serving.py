@@ -243,6 +243,44 @@ def resolve_ctx(model: ServeModel, *, vram_gib: float | None = None,
 # and stall-detection are identical. `gateway` (a base URL) routes generation through `peakstone
 # serve` instead of per-model llama-server ports — used by the daemon, which owns serving.
 
+def judge_model_name() -> str | None:
+    """The configured local judge ([judge] in engine/config.toml): its registry name when judging
+    is enabled, else None (no judge pass is chained)."""
+    try:
+        jcfg = tomllib.loads(paths.config_path().read_text()).get("judge", {})
+    except Exception:  # noqa: BLE001
+        return None
+    if not jcfg.get("enabled", True):
+        return None
+    return jcfg.get("model") or None
+
+
+def level_needs_judge(level: str | None) -> bool:
+    """Does this level's definition declare judge=true? (The daemon runs generation-only and
+    grades in a separate judge-LAST pass — one GPU can't hold the bench model and the judge.)"""
+    if not level:
+        return False
+    try:
+        from .levels import load_levels
+        _, levels = load_levels()
+        lv = levels.get(level)
+        return bool(lv and lv.judge)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def build_judge_cmd(src: Path, judge_model: str, *, out: Path,
+                    gateway: str | None = None) -> tuple[list[str], float]:
+    """Build the judge-LAST pass over a finished generation run: `runner --judge-only <src>`
+    grades the judge/both rows with `judge_model` (riding the gateway, which swaps the judge in
+    ONCE) and --bundle re-emits the run's signed bundle with judge model + params recorded."""
+    cmd = ["python", "-u", "-m", "peakstone.engine.runner", "--judge-only", str(src),
+           "--judge-model", judge_model, "--bundle", "--out", str(out)]
+    if gateway:
+        cmd += ["--gateway", gateway]
+    return cmd, 24 * 3600.0   # grading a full level is many small judge calls; generous cap
+
+
 def build_runner_cmd(name: str, ids: list[str] | None = None, *, level: str | None = None,
                      out: Path, max_tokens: int | None = None,
                      gateway: str | None = None) -> tuple[list[str], float]:

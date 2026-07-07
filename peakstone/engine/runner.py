@@ -1313,6 +1313,18 @@ def _load_results(path: Path) -> list[dict]:
     return rows
 
 
+def _load_run_meta(path: Path) -> dict:
+    """The ORIGINAL run's meta (suite id/version, budget, gpu, selected set …) from its
+    results.json — the judged re-emitted bundle must describe the GENERATION run's identity,
+    with only the judge fields layered on top."""
+    if path.is_file():
+        return json.loads(path.read_text()).get("meta") or {}
+    for c in (path / "results.json", path / "combined" / "results.json"):
+        if c.exists():
+            return json.loads(c.read_text()).get("meta") or {}
+    return {}
+
+
 def run_judge_only(args, judge_model, judge_client) -> int:
     """Re-judge already-generated solutions stored in a prior run, loading only the judge."""
     if judge_client is None:
@@ -1388,6 +1400,26 @@ def run_judge_only(args, judge_model, judge_client) -> int:
     }
     write_report(rows, outdir, meta)
     print(f"\nJudged {judged} solutions. Report: {outdir / 'leaderboard.md'}")
+
+    if args.bundle:
+        # Judge-LAST bundling: re-emit the run's signed bundle with the judge scores folded in.
+        # The bundle keeps the GENERATION run's identity (its meta: suite, budget, gpu, selected
+        # set) — only the judge fields are layered on: meta.judge names the grader, and every
+        # judged row carries {model, scores, temperature, max_tokens} so how the board was graded
+        # is part of the record. This is what the daemon submits for judge=true levels.
+        from .judge import JUDGE_MAX_TOKENS, JUDGE_TEMPERATURE
+        orig_meta = _load_run_meta(src)
+        if not orig_meta:
+            print("!! --bundle: no meta found in the source run (results.json) — bundle not "
+                  "written (report above is still valid)", file=sys.stderr)
+            return 1
+        if len({r["model"] for r in rows}) > 1:
+            print("!! --bundle: the source run contains multiple models; a bundle is signed for "
+                  "ONE model — judge each run dir separately", file=sys.stderr)
+            return 1
+        bmeta = {**orig_meta, "judge": judge_model, "judged": judged,
+                 "judge_params": {"temperature": JUDGE_TEMPERATURE, "max_tokens": JUDGE_MAX_TOKENS}}
+        _emit_bundle(bmeta, rows, outdir)
     return 0
 
 

@@ -54,14 +54,14 @@ def main() -> int:
     if missing:
         print(f"  not run by this model ({len(missing)}): {sorted(missing)}")
 
-    # overlay: REPLACE base rows with newer ones for the same challenge (self-repair retry of failures)
-    for ov in args.overlay:
-        od = json.load(open(ov))
-        orows = od["results"] if isinstance(od, dict) else od
-        om = {r.get("challenge"): r for r in orows}
-        n_rep = sum(1 for r in kept if r.get("challenge") in om)
-        kept = [om.get(r.get("challenge"), r) for r in kept]
-        print(f"  overlaid {len(om)} rows from {ov} (replaced {n_rep} in the base)")
+    # RETIRED (review R8): --overlay replaced first-attempt rows with retry rows and re-signed —
+    # a composite indistinguishable from an honest single run. The headline is FIRST-TRY by
+    # definition; recovered-by-retry is its own axis (recovery_rate), never an overwrite. Retries
+    # belong in the run itself (--retries records attempts_log honestly), and judge scores come
+    # from the judge-LAST pass (`runner --judge-only <run> --bundle`), not stitching.
+    if args.overlay:
+        sys.exit("--overlay is retired: it forged composites indistinguishable from honest runs "
+                 "(review R8). Re-run with --retries, or use the judge-last pass for grading.")
 
     # append extra runs (e.g. agentic) unfiltered — they're a different axis, not part of the level set
     have = {r.get("challenge") for r in kept}

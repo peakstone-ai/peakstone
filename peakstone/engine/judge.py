@@ -35,6 +35,12 @@ Return JSON exactly like:
 """
 
 
+# The judge's sampling conditions — part of the run identity of any judged score, recorded in the
+# bundle (rows' judge block + meta.judge_params) so a judged board documents how it was graded.
+JUDGE_TEMPERATURE = 0.0
+JUDGE_MAX_TOKENS = 800
+
+
 def judge_solution(
     client: LLMClient, model: str, challenge, solution_text: str, test_summary: str,
     timeout: int = 300,
@@ -48,7 +54,7 @@ def judge_solution(
     res = client.chat(
         model,
         [{"role": "system", "content": _SYSTEM}, {"role": "user", "content": prompt}],
-        temperature=0.0, max_tokens=800, timeout=timeout,
+        temperature=JUDGE_TEMPERATURE, max_tokens=JUDGE_MAX_TOKENS, timeout=timeout,
     )
     if res.error:
         return {"error": res.error, "scores": {}, "normalized": 0.0}

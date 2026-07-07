@@ -356,9 +356,16 @@ class JobManager:
 
         bundle = None
         try:
-            cmd, timeout = serving.build_runner_cmd(model, spec.get("ids"), level=spec.get("level"),
-                                                    out=out, max_tokens=spec.get("budget"),
-                                                    gateway=self.gateway_url)
+            if spec.get("judge_src"):
+                # judge-LAST pass: `model` here is the JUDGE (pinned above); grade the finished
+                # generation run at judge_src and re-emit its signed, judge-recorded bundle.
+                cmd, timeout = serving.build_judge_cmd(Path(spec["judge_src"]), model,
+                                                       out=out, gateway=self.gateway_url)
+            else:
+                cmd, timeout = serving.build_runner_cmd(model, spec.get("ids"),
+                                                        level=spec.get("level"),
+                                                        out=out, max_tokens=spec.get("budget"),
+                                                        gateway=self.gateway_url)
             env_extra = {}
             if spec.get("ctx"):
                 env_extra["PEAKSTONE_CTX"] = str(spec["ctx"])
@@ -386,6 +393,19 @@ class JobManager:
             return
 
         summary = summarize_bundle(bundle)
+        # Judge-LAST chaining (R8): a judge=true level run is graded as a follow-up job — one GPU
+        # can't hold the bench model and the judge together. The gen-only bundle is NOT submitted
+        # (it wouldn't satisfy its own level definition); the judge job re-emits and submits the
+        # judged bundle, with judge model + params recorded in it.
+        jmodel = serving.judge_model_name() if (
+            not spec.get("judge_src") and serving.level_needs_judge(spec.get("level"))) else None
+        if jmodel:
+            fid = self.enqueue({"model": jmodel, "judge_src": str(out),
+                                "level": spec.get("level"), "judge_of": jid})
+            summary["judge_job"] = fid
+            summary["submitted"] = False   # deferred: the judged bundle is what gets submitted
+            self.store.update(jid, status="done", finished=self._clock(), summary=summary)
+            return
         if self._submit:
             try:
                 status, _ = self._submit(bundle)
