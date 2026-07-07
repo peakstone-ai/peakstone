@@ -10,9 +10,13 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY . .
-# baked into the server bundle at build time (Next inlines NEXT_PUBLIC_* at build)
+# baked into the server bundle at build time (Next inlines NEXT_PUBLIC_* at build).
+# API_URL = server-side fetches (internal, never rendered); API_PUBLIC_URL = the address shown to
+# visitors in curl examples etc. (compose derives it from PEAKSTONE_DOMAIN).
 ARG NEXT_PUBLIC_API_URL=http://api:8000
+ARG NEXT_PUBLIC_API_PUBLIC_URL=https://peakstone.ai/api
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+ENV NEXT_PUBLIC_API_PUBLIC_URL=${NEXT_PUBLIC_API_PUBLIC_URL}
 RUN npm run build
 
 # --- run --------------------------------------------------------------------------------------

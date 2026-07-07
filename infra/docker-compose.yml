@@ -48,8 +48,10 @@ services:
       context: ../web
       dockerfile: Dockerfile
       args:
-        # the site fetches the API server-side, so it uses the API container's internal address
+        # the site fetches the API server-side, so it uses the API container's internal address —
+        # which must never render into a page; browser-visible strings use the PUBLIC url below
         NEXT_PUBLIC_API_URL: http://api:8000
+        NEXT_PUBLIC_API_PUBLIC_URL: https://${PEAKSTONE_DOMAIN:-localhost}/api
     depends_on: [api]
     restart: unless-stopped
 

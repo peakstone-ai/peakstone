@@ -1,5 +1,3 @@
-import { API } from "@/lib/api";
-
 export function ScoreBar({ v }: { v: number | null }) {
   const pct = Math.round((v ?? 0) * 100);
   return (
@@ -23,11 +21,11 @@ export function Trust({ t }: { t: string }) {
 }
 
 export function ApiDown() {
+  // No internal endpoint or operator instructions here — this renders to the public (review R16).
   return (
     <div className="rounded-lg border border-amber-800 bg-amber-950/40 p-4 text-sm text-amber-200">
-      Can&apos;t reach the Peakstone API at <code className="text-amber-100">{API}</code>. Start it
-      with <code className="text-amber-100">uvicorn api.main:app</code> (set{" "}
-      <code>NEXT_PUBLIC_API_URL</code> to point elsewhere).
+      The Peakstone API is unreachable right now — live data will be back shortly. Refresh in a
+      minute; if you run this site, check the API service logs.
     </div>
   );
 }

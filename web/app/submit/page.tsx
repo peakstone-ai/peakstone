@@ -1,4 +1,4 @@
-import { API } from "@/lib/api";
+import { PUBLIC_API } from "@/lib/api";
 
 export const metadata = { title: "Submit a run — Peakstone" };
 
@@ -20,18 +20,31 @@ export default function SubmitPage() {
         trustworthy without us hosting any GPUs.
       </p>
 
-      <h2 className="mt-6 text-lg font-medium">1. Serve a model</h2>
-      <p className="text-sm text-stone-400">Any OpenAI-compatible endpoint works. For local GGUFs:</p>
-      <Code>{`./serve/serve.sh <model-name>`}</Code>
+      <h2 className="mt-6 text-lg font-medium">1. Install the client + fetch the challenge corpus</h2>
+      <Code>{`pipx install peakstone
+peakstone corpus sync
+peakstone login    # optional: attributes runs to your GitHub handle`}</Code>
 
-      <h2 className="mt-6 text-lg font-medium">2. Run the suite and produce a bundle</h2>
-      <Code>{`python -m engine.runner --models <model-name> --bundle
-# -> results/<stamp>/bundle.json  (schema-valid, content-addressed, ed25519-signed)`}</Code>
+      <h2 className="mt-6 text-lg font-medium">2. Run the official suite on your own hardware</h2>
+      <p className="text-sm text-stone-400">
+        The easiest path is the local daemon — it serves your model, runs the suite, and chains the
+        judge pass automatically:
+      </p>
+      <Code>{`peakstone serve --detach
+peakstone jobs add <model-name> --level standard
+# -> results/job-<id>/bundle.json  (schema-valid, content-addressed, ed25519-signed)`}</Code>
 
-      <h2 className="mt-6 text-lg font-medium">3. Submit it</h2>
-      <Code>{`curl -X POST ${API}/submissions \\
+      <h2 className="mt-6 text-lg font-medium">3. Submit the signed bundle</h2>
+      <Code>{`peakstone submit results/job-<id>/bundle.json`}</Code>
+      <p className="text-sm text-stone-400">
+        Or let the daemon publish finished runs itself (opt-in:{" "}
+        <code className="rounded bg-stone-800 px-1 text-stone-200">auto_submit = true</code> under{" "}
+        <code className="rounded bg-stone-800 px-1 text-stone-200">[gateway]</code>). Raw HTTP works
+        too — plain or xz-compressed JSON:
+      </p>
+      <Code>{`curl -X POST ${PUBLIC_API}/submissions \\
   -H 'content-type: application/json' \\
-  --data @results/<stamp>/bundle.json`}</Code>
+  --data @results/job-<id>/bundle.json`}</Code>
 
       <h2 className="mt-6 text-lg font-medium">What gets recorded</h2>
       <ul className="mt-2 list-disc space-y-1 pl-5 text-sm text-stone-400">

@@ -128,7 +128,7 @@ jobs:
 ```
 
 Every check run produces a signed, submittable bundle — when you're happy with a checkpoint,
-`--submit` it to the public board (see peakstone.ai/submit).
+publish it with `peakstone submit runs/new/bundle.json` (see peakstone.ai/submit).
 
 ### Offline test sandbox (Linux)
 

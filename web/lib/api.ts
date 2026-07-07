@@ -2,6 +2,12 @@
 // a graceful "API unreachable" state (and the build never depends on a live backend).
 export const API = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
+// The PUBLIC API base — what a visitor's own tools can reach (Caddy serves it at /api on the site
+// domain). NEVER `API`: that may be the container-internal address (http://api:8000), which must
+// not leak into rendered pages (curl examples, error cards).
+export const PUBLIC_API =
+  process.env.NEXT_PUBLIC_API_PUBLIC_URL ?? "https://peakstone.ai/api";
+
 export type Run = {
   artifact: string;
   vram_gb: number | null;
@@ -76,7 +82,13 @@ export type ModelPage = {
 
 async function getJSON<T>(path: string): Promise<T | null> {
   try {
-    const r = await fetch(`${API}${path}`, { cache: "no-store" });
+    const r = await fetch(`${API}${path}`, {
+      // Pages stay dynamic, but the DATA is served from the fetch cache for 30s — the API is hit
+      // at most twice a minute per endpoint instead of once per page view (review R15).
+      next: { revalidate: 30 },
+      // A wedged API must fail one render fast, not hang every request behind it.
+      signal: AbortSignal.timeout(5000),
+    });
     if (!r.ok) return null;
     return (await r.json()) as T;
   } catch {
