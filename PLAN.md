@@ -465,7 +465,16 @@ trimmed to the reusable local model-serving helpers, lab cruft + `results/` clea
     optional commitment) — see §9 P5 and vision.md §7 Idea 10. *(commit-and-reveal slices 1–3
     landed + deployed — c75c64f, e699b85: salted commitments, sealed ingest, /reveals,
     `peakstone reveal`; authoring modifier + local gates remain.)*
-16. ☐ Flywheel accelerants (vision §7): "reproduce this run" one-liner per board row; static
+16. ◐ Flywheel accelerants (vision §7): "reproduce this run" one-liner per board row; static
     best-model-per-VRAM-class pages with winning serve flags; weekly auto-generated frontier
-    report (tier migrations, first-solves) with RSS. *(design sketch for the reproduce verb +
-    verification column: local `scratchpad/reproduce-verification-design.md`.)*
+    report (tier migrations, first-solves) with RSS. *(REPRODUCE VERB + VERIFICATION SURFACING
+    DONE (design: local scratchpad/reproduce-verification-design.md): 654594c engine/repro.py —
+    ONE deterministic-vector declaration (ingest delegates, parity-tested), client-side trust
+    chain, plan pinned to bundle content, MATCH/COMPATIBLE/MISMATCH verdict; 1d99d54 GET
+    /reproduce/{hash} (verbatim signed bundle) + /runs/{hash}/reproductions +
+    run.reproductions counted by the promotion rule; de221d3 `peakstone reproduce <hash>
+    [--submit]` — verified end-to-end on real GPU: a qwen3.5-4b run reproduced bit-identically
+    (incl. a repetition loop; seeded), MATCH, server listed it self-marked; a489f0b web: Verified
+    board column, run-page Reproductions + command box, homepage reproductions tile. Remaining:
+    VRAM-class pages, weekly frontier report/RSS; phase-3 nudges (per-account verification
+    counts).)*
