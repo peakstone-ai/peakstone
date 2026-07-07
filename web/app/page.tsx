@@ -49,6 +49,9 @@ export default async function Home() {
   const nRanked =
     board?.leaderboard.filter((r) => r.held_out_status === "ranked").length ?? 0;
   const nResults = challenges?.challenges.reduce((n, ch) => n + ch.n_runs, 0) ?? 0;
+  // the number no other leaderboard can even display: independent re-runs of exact result vectors
+  const nReproductions =
+    board?.leaderboard.reduce((n, r) => n + (r.run.reproductions || 0), 0) ?? 0;
   const apiUp = board !== null && challenges !== null;
 
   return (
@@ -59,10 +62,11 @@ export default async function Home() {
         {!apiUp ? (
           <ApiDown />
         ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
             <Stat label="Models ranked" value={nRanked} />
             <Stat label="Challenges" value={challenges.count} />
             <Stat label="Scored results" value={nResults} />
+            <Stat label="Independent reproductions" value={nReproductions} />
           </div>
         )}
       </section>

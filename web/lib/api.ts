@@ -193,6 +193,26 @@ export function getRunChallenge(hash: string, id: string) {
   );
 }
 
+// The run's reproduction record: who independently re-ran this exact deterministic vector.
+export type ReproductionRow = {
+  bundle_hash: string;
+  submitter: string | null;
+  trust_tier: string;
+  submitted_at: string | null;
+  gpu: string | null;
+  vram_gb: number | null;
+  independent: boolean;   // false = the run's own submitter re-ran it (transparency, not verification)
+};
+export type RunReproductions = {
+  bundle_hash: string;
+  n: number;
+  distinct_identities: number;
+  reproductions: ReproductionRow[];
+};
+export function getRunReproductions(hash: string) {
+  return getJSON<RunReproductions>(`/runs/${encodeURIComponent(hash)}/reproductions`);
+}
+
 export type Facets = {
   quants: string[];
   suites: { name: string; version: string }[];

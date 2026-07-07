@@ -44,6 +44,7 @@ export default function BoardTable({
             <th className="py-2 pr-2 font-medium">#</th>
             <th className="py-2 pr-4 font-medium">Model</th>
             <th className="py-2 pr-4 font-medium">Held-out</th>
+            <th className="py-2 pr-4 font-medium" title="distinct accounts that independently re-ran this exact result vector (peakstone reproduce <hash>)">Verified</th>
             <th className="py-2 pr-4 font-medium">All-corpus</th>
             <th className="py-2 pr-4 font-medium">Math</th>
             <th className="py-2 pr-4 font-medium">Agentic</th>
@@ -68,7 +69,7 @@ export default function BoardTable({
                 {showDivider && (
                   <tr>
                     <td
-                      colSpan={14}
+                      colSpan={15}
                       className="border-t border-stone-700 pt-3 pb-1 text-xs text-stone-500"
                     >
                       Provisional — not enough held-out challenges yet (newest first; claimed
@@ -98,6 +99,25 @@ export default function BoardTable({
                           {r.held_out.n_clean} clean · {Math.round(r.held_out.coverage * 100)}% dated
                         </span>
                       </div>
+                    )}
+                  </td>
+                  <td className="py-2 pr-4">
+                    {r.run.reproductions > 0 ? (
+                      <Link
+                        href={`/runs/${encodeURIComponent(r.run.bundle_hash)}`}
+                        className="rounded bg-emerald-700/60 px-1.5 py-0.5 text-xs text-emerald-200 hover:bg-emerald-700"
+                        title={`independently reproduced by ${r.run.reproductions} distinct account${r.run.reproductions === 1 ? "" : "s"}`}
+                      >
+                        ✓ ×{r.run.reproductions}
+                      </Link>
+                    ) : (
+                      <Link
+                        href={`/runs/${encodeURIComponent(r.run.bundle_hash)}`}
+                        className="text-xs text-stone-600 hover:text-emerald-400"
+                        title={`no independent reproduction yet — be the first: peakstone reproduce ${r.run.bundle_hash.slice(0, 12)}…`}
+                      >
+                        unverified
+                      </Link>
                     )}
                   </td>
                   <td className="py-2 pr-4">

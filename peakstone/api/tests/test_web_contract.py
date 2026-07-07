@@ -111,6 +111,12 @@ def test_endpoints_match_web_types(client):
     _assert_declared(rr, ts, "RunResults", "/runs/{hash}")
     _assert_declared(rr["results"][0], ts, "RunChallengeRow", "/runs/{hash} results[]")
 
+    rp = client.get(f"/runs/{bundle_hash}/reproductions").json()
+    _assert_declared(rp, ts, "RunReproductions", "/runs/{hash}/reproductions")
+    if rp["reproductions"]:
+        _assert_declared(rp["reproductions"][0], ts, "ReproductionRow",
+                         "/runs/{hash}/reproductions rows")
+
     rc = client.get(f"/runs/{bundle_hash}/challenge/contract-c0").json()
     _assert_declared(rc, ts, "RunChallenge", "/runs/{hash}/challenge/{id}")
     if rc.get("transcript"):

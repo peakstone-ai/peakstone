@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { getRun } from "@/lib/api";
-import { ApiDown, DataTable, ScoreBar, Trust } from "@/components/ui";
+import { getRun, getRunReproductions, type RunReproductions } from "@/lib/api";
+import { ApiDown, CodeBlock, DataTable, ScoreBar, Trust } from "@/components/ui";
 
 export const dynamic = "force-dynamic";
 
@@ -10,13 +10,84 @@ export async function generateMetadata({ params }: { params: Promise<{ hash: str
   return { title: `Run ${decodeURIComponent(hash).slice(0, 12)} — Peakstone` };
 }
 
+// The proof artifact: who independently re-ran this exact deterministic result vector — and the
+// one-liner for becoming the next verifier. This section is the page to link when someone says
+// "benchmarks are all contaminated anyway".
+function Reproductions({ r, hash }: { r: RunReproductions; hash: string }) {
+  return (
+    <section className="mt-6 rounded-lg border border-stone-800 bg-stone-900/40 p-4">
+      <h2 className="text-lg font-medium">
+        Reproductions
+        {r.distinct_identities > 0 ? (
+          <span className="ml-2 rounded bg-emerald-700/60 px-1.5 py-0.5 text-xs text-emerald-200">
+            ✓ ×{r.distinct_identities} independent
+          </span>
+        ) : (
+          <span className="ml-2 rounded bg-stone-800 px-1.5 py-0.5 text-xs text-stone-400">
+            unverified
+          </span>
+        )}
+      </h2>
+      {r.n === 0 ? (
+        <p className="mt-2 text-sm text-stone-400">
+          Nobody has independently re-run this result yet.{" "}
+          <strong className="text-stone-200">Be the first to verify it</strong> — one command
+          re-runs its deterministic challenges on your own GPU and compares, bit for bit:
+        </p>
+      ) : (
+        <>
+          <div className="mt-3 overflow-x-auto">
+            <DataTable head={["Who", "Hardware", "When", "Run"]}>
+              {r.reproductions.map((p) => (
+                <tr key={p.bundle_hash} className="border-t border-stone-800">
+                  <td className="py-2 pr-4 text-stone-300">
+                    {p.submitter ? `@${p.submitter}` : "anonymous key"}
+                    {p.independent ? null : (
+                      <span className="ml-1 text-xs text-stone-500" title="the run's own submitter re-ran it — transparency, not verification">
+                        (self)
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-2 pr-4 text-stone-400">
+                    {p.gpu ?? "—"}{p.vram_gb ? ` · ${p.vram_gb} GB` : ""}
+                  </td>
+                  <td className="py-2 pr-4 text-stone-500">
+                    {p.submitted_at ? p.submitted_at.slice(0, 10) : "—"}
+                  </td>
+                  <td className="py-2 pr-4">
+                    <Link
+                      href={`/runs/${encodeURIComponent(p.bundle_hash)}`}
+                      className="text-xs text-stone-500 hover:text-emerald-400"
+                    >
+                      {p.bundle_hash.slice(0, 12)}
+                    </Link>
+                  </td>
+                </tr>
+              ))}
+            </DataTable>
+          </div>
+          <p className="mt-3 text-sm text-stone-400">Add your own confirmation:</p>
+        </>
+      )}
+      <CodeBlock text={`pipx install peakstone\npeakstone reproduce ${hash} --submit`} className="mt-2 text-sm" />
+      <p className="mt-2 text-xs text-stone-500">
+        A matching reproduction from enough distinct GitHub-bound accounts promotes the run to the
+        community-verified (ranked) tier.
+      </p>
+    </section>
+  );
+}
+
 export default async function RunPage({
   params,
 }: {
   params: Promise<{ hash: string }>;
 }) {
   const { hash } = await params;
-  const res = await getRun(decodeURIComponent(hash));
+  const [res, reproRes] = await Promise.all([
+    getRun(decodeURIComponent(hash)),
+    getRunReproductions(decodeURIComponent(hash)),
+  ]);
   if (!res.ok) {
     if (res.notFound) notFound(); // unknown bundle hash → a real 404 (R23)
     return (
@@ -26,6 +97,7 @@ export default async function RunPage({
     );
   }
   const data = res.data;
+  const repro = reproRes.ok ? reproRes.data : null;
   const short = data.bundle_hash.slice(0, 12);
 
   return (
@@ -52,6 +124,8 @@ export default async function RunPage({
         <span>· <Trust t={data.trust_tier} /></span>
         <span className="text-stone-600">· {short}</span>
       </p>
+
+      {repro ? <Reproductions r={repro} hash={data.bundle_hash} /> : null}
 
       <p className="mt-4 text-sm text-stone-500">Select a challenge to see the model’s proposed solution.</p>
       <div className="mt-2 overflow-x-auto">
